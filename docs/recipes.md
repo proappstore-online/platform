@@ -4,8 +4,8 @@
 
 Pre-built code patterns for ProAppStore apps. Copy, paste, and adapt — each recipe uses the PAS SDK, the design system CSS classes, and pre-installed libraries (lucide-react, date-fns, react-i18next).
 
-Every recipe is a component for a screen *inside* `ProShell`. The app is wrapped
-in `<ProShell app={app} nav={…}>` first (see [Getting Started](./getting-started.md#build-your-app-inside-proshell)),
+Every recipe is a component for a screen *inside* `AppShell`. The app is wrapped
+in `<AppShell app={app} nav={…}>` first (see [Getting Started](./getting-started.md#build-your-app-inside-appshell)),
 so no recipe builds its own header, navbar, sign-in screen or top-level error
 boundary.
 
@@ -216,7 +216,7 @@ fallback and the offline banner.
 
 ```
 // web/src/App.tsx
-import { initPro, ProShell, PageHeader, useToast, type NavItem } from '@proappstore/sdk'
+import { initPro, AppShell, PageHeader, useToast, type NavItem } from '@proappstore/sdk'
 
 export const app = initPro({ appId: 'my-app', authMode: 'platform-cookie' })
 
@@ -227,9 +227,9 @@ const NAV: NavItem[] = [
 
 export default function App() {
   return (
-    <ProShell app={app} appName="My App" nav={NAV}>
+    <AppShell app={app} appName="My App" nav={NAV}>
       {window.location.pathname === '/settings' ? <Settings /> : <Items />}
-    </ProShell>
+    </AppShell>
   )
 }
 

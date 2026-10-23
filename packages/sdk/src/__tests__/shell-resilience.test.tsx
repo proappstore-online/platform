@@ -3,7 +3,7 @@ import { act, lazy, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProShell } from '../shell.js';
+import { AppShell } from '../shell.js';
 import { SHELL_CSS } from '../shell-css.js';
 import { PageHeader, useDocumentTitle } from '../page.js';
 import { useToast, type ToastApi } from '../shell-resilience.js';
@@ -11,7 +11,7 @@ import type { NavItem } from '../navbar.js';
 import type { ProAppStore } from '../index.js';
 
 /**
- * #236 — ProShell's resilience and feedback layer: error boundary, Suspense
+ * #236 — AppShell's resilience and feedback layer: error boundary, Suspense
  * fallback, toast region, offline banner, route titles, PageHeader, skip link,
  * and scroll + focus handling on client-side route changes.
  */
@@ -68,7 +68,7 @@ describe('error boundary', () => {
     quietConsoleErrors();
     const { app, capture } = fakeApp();
     function Boom(): ReactNode { throw new Error('kaboom'); }
-    await mount(<ProShell app={app} appName="Demo"><Boom /></ProShell>);
+    await mount(<AppShell app={app} appName="Demo"><Boom /></AppShell>);
 
     const alert = container.querySelector('main [role="alert"]');
     expect(alert?.querySelector('h1')?.textContent).toBe('Something went wrong');
@@ -89,7 +89,7 @@ describe('error boundary', () => {
       if (fail) throw new Error('once');
       return <p>recovered</p>;
     }
-    await mount(<ProShell app={fakeApp().app}><Flaky /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><Flaky /></AppShell>);
     fail = false;
     await act(async () => { (container.querySelector('[role="alert"] button') as HTMLButtonElement).click(); });
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -106,7 +106,7 @@ describe('error boundary', () => {
     const renderError = vi.fn(({ error, reset }: { error: Error; reset: () => void }) => (
       <button type="button" onClick={reset}>Oops: {error.message}</button>
     ));
-    await mount(<ProShell app={fakeApp().app} renderError={renderError}><Flaky /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} renderError={renderError}><Flaky /></AppShell>);
     const button = container.querySelector('main button') as HTMLButtonElement;
     expect(button.textContent).toBe('Oops: custom');
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -123,7 +123,7 @@ describe('error boundary', () => {
       return <p>fine at {path}</p>;
     }
     window.history.replaceState(null, '', '/broken');
-    await mount(<ProShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></AppShell>);
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
     await act(async () => { clickLink('/'); });
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -142,7 +142,7 @@ describe('Suspense fallback', () => {
 
   it('shows the shell spinner while a lazy screen loads, then the screen', async () => {
     const { Screen, load } = lazyScreen();
-    await mount(<ProShell app={fakeApp().app}><Screen /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><Screen /></AppShell>);
     const spinner = container.querySelector('main .pas-shell-loading [role="status"][aria-label="Loading"]');
     expect(spinner).not.toBeNull();
     await load();
@@ -152,7 +152,7 @@ describe('Suspense fallback', () => {
 
   it('renderLoading replaces the spinner', async () => {
     const { Screen } = lazyScreen();
-    await mount(<ProShell app={fakeApp().app} renderLoading={() => <p className="mine">Loading cases…</p>}><Screen /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} renderLoading={() => <p className="mine">Loading cases…</p>}><Screen /></AppShell>);
     expect(container.querySelector('main p.mine')?.textContent).toBe('Loading cases…');
     expect(container.querySelector('.pas-shell-loading')).toBeNull();
   });
@@ -170,7 +170,7 @@ describe('useToast', () => {
   const messages = () => [...container.querySelectorAll('.pas-toast-region .pas-toast span')].map((s) => s.textContent);
 
   it('mounts exactly one polite live region, present before any message, with no nested live regions', async () => {
-    await mount(<ProShell app={fakeApp().app}><Grab /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><Grab /></AppShell>);
     expect(region()).toHaveLength(1);
     expect(region()[0]!.getAttribute('role')).toBe('status');
     expect(region()[0]!.getAttribute('aria-live')).toBe('polite');
@@ -182,7 +182,7 @@ describe('useToast', () => {
   });
 
   it('queues: keeps the newest four, and a dismiss button removes one', async () => {
-    await mount(<ProShell app={fakeApp().app}><Grab /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><Grab /></AppShell>);
     act(() => { for (let i = 1; i <= 6; i++) toast.show(`m${i}`, { duration: 0 }); });
     expect(messages()).toEqual(['m3', 'm4', 'm5', 'm6']);
     act(() => { (container.querySelector('.pas-toast button[aria-label="Dismiss"]') as HTMLButtonElement).click(); });
@@ -190,7 +190,7 @@ describe('useToast', () => {
   });
 
   it('auto-dismisses after its duration; duration 0 stays; dismiss(id) removes by id', async () => {
-    await mount(<ProShell app={fakeApp().app}><Grab /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><Grab /></AppShell>);
     vi.useFakeTimers();
     let sticky = 0;
     act(() => { toast.show('brief'); sticky = toast.show('sticky', { duration: 0 }); toast.show('longer', { duration: 8000 }); });
@@ -202,9 +202,9 @@ describe('useToast', () => {
     expect(messages()).toEqual([]);
   });
 
-  it('throws a clear error outside ProShell', () => {
+  it('throws a clear error outside AppShell', () => {
     quietConsoleErrors();
-    expect(() => renderToStaticMarkup(<Grab />)).toThrow('useToast must be used inside <ProShell>');
+    expect(() => renderToStaticMarkup(<Grab />)).toThrow('useToast must be used inside <AppShell>');
   });
 });
 
@@ -224,7 +224,7 @@ describe('offline banner', () => {
   });
 
   it('appears in a polite live region when the connection drops and clears on reconnect', async () => {
-    await mount(<ProShell app={fakeApp().app}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><p /></AppShell>);
     expect(banner()).toBeNull();
     go(false);
     expect(banner()?.textContent).toContain("You're offline");
@@ -236,7 +236,7 @@ describe('offline banner', () => {
   });
 
   it('is dismissible, and shows again on the next drop', async () => {
-    await mount(<ProShell app={fakeApp().app}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><p /></AppShell>);
     go(false);
     act(() => { (container.querySelector('button[aria-label="Dismiss offline notice"]') as HTMLButtonElement).click(); });
     expect(banner()).toBeNull();
@@ -247,7 +247,7 @@ describe('offline banner', () => {
 
   it('starts shown when the app loads offline', async () => {
     online = false;
-    await mount(<ProShell app={fakeApp().app}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><p /></AppShell>);
     expect(banner()).not.toBeNull();
   });
 });
@@ -290,7 +290,7 @@ function historyGo(path: string) {
 describe('document title', () => {
   it("applies the current nav item's title and follows client-side navigation", async () => {
     window.history.replaceState(null, '', '/cases');
-    await mount(<ProShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><p /></AppShell>);
     expect(document.title).toBe('Cases — Demo');
     await act(async () => { clickLink('/'); });
     expect(document.title).toBe('Home — Demo');
@@ -304,15 +304,15 @@ describe('document title', () => {
       return null;
     }
     window.history.replaceState(null, '', '/cases');
-    await mount(<ProShell app={fakeApp().app} nav={NAV}><CaseScreen name="Case 42" /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV}><CaseScreen name="Case 42" /></AppShell>);
     expect(document.title).toBe('Case 42 — Cases');
-    await mount(<ProShell app={fakeApp().app} nav={NAV}><CaseScreen name="Case 43" /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV}><CaseScreen name="Case 43" /></AppShell>);
     expect(document.title).toBe('Case 43 — Cases');
   });
 
   it('leaves the title alone when no item declares one (unchanged from #235)', async () => {
     window.history.replaceState(null, '', '/about');
-    await mount(<ProShell app={fakeApp().app} nav={NAV}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV}><p /></AppShell>);
     expect(document.title).toBe('initial');
   });
 });
@@ -340,7 +340,7 @@ describe('PageHeader', () => {
 
 describe('skip link', () => {
   it('is the first focusable element and targets <main id="main">', async () => {
-    await mount(<ProShell app={fakeApp().app} appName="Demo" nav={NAV}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} appName="Demo" nav={NAV}><p /></AppShell>);
     const focusable = container.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
     const first = focusable[0] as HTMLAnchorElement;
     expect(first.className).toBe('pas-skip-link');
@@ -351,7 +351,7 @@ describe('skip link', () => {
   });
 
   it('activating it moves focus to main without a history navigation', async () => {
-    await mount(<ProShell app={fakeApp().app}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><p /></AppShell>);
     const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
     act(() => { container.querySelector('.pas-skip-link')!.dispatchEvent(click); });
     expect(click.defaultPrevented).toBe(true);
@@ -360,7 +360,7 @@ describe('skip link', () => {
   });
 
   it('is visually hidden until focused (injected shell CSS)', async () => {
-    await mount(<ProShell app={fakeApp().app}><p /></ProShell>);
+    await mount(<AppShell app={fakeApp().app}><p /></AppShell>);
     expect(document.getElementById('pas-shell-css')?.textContent).toBe(SHELL_CSS);
     expect(SHELL_CSS).toContain('.pas-skip-link:not(:focus){position:absolute;width:1px;height:1px');
     expect(SHELL_CSS).toContain('clip-path:inset(50%)');
@@ -390,7 +390,7 @@ describe('client-side route changes', () => {
   }
 
   it('forward navigation lands at the top; back and forward restore where each route was left', async () => {
-    await mount(<ProShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></AppShell>);
     expect(window.history.scrollRestoration).toBe('manual');
 
     scrollY = 500;                                   // read down the home screen
@@ -409,7 +409,7 @@ describe('client-side route changes', () => {
   });
 
   it("moves focus to the new screen's PageHeader h1, or to main when it has none", async () => {
-    await mount(<ProShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></AppShell>);
     const link = container.querySelector('header nav a[href="/cases"]') as HTMLAnchorElement;
     link.focus();
     await act(async () => { clickLink('/cases'); });
@@ -424,7 +424,7 @@ describe('client-side route changes', () => {
 
   it('does not scroll or move focus on the first render', async () => {
     window.history.replaceState(null, '', '/cases');
-    await mount(<ProShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV} onNavigate={routerNavigate}><Screens /></AppShell>);
     await nextFrame();
     expect(scrollTo).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(document.body);
@@ -432,7 +432,7 @@ describe('client-side route changes', () => {
 
   it('with plain links (no onNavigate) it leaves scrolling and history.scrollRestoration to the browser', async () => {
     window.history.scrollRestoration = 'auto';
-    await mount(<ProShell app={fakeApp().app} nav={NAV}><Screens /></ProShell>);
+    await mount(<AppShell app={fakeApp().app} nav={NAV}><Screens /></AppShell>);
     expect(window.history.scrollRestoration).toBe('auto');
     await act(async () => { historyGo('/cases'); });
     await nextFrame();
@@ -444,7 +444,7 @@ describe('client-side route changes', () => {
 
 describe('an app opting into none of it', () => {
   it('renders its content in main with the existing chrome and no visible extras', async () => {
-    await mount(<ProShell app={fakeApp().app} appName="Demo"><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp().app} appName="Demo"><p>content</p></AppShell>);
     expect(container.querySelector('main#main')?.textContent).toBe('content');
     expect(container.querySelector('header')).not.toBeNull();
     expect(container.querySelector('footer')).not.toBeNull();

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
@@ -7,12 +7,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeHref, NavBar, type NavItem } from '../navbar.js';
 import { NAVBAR_CSS } from '../navbar-css.js';
-import { ProShell } from '../shell.js';
+import { AppShell, ProShell } from '../shell.js';
+import type { AppShellProps, ProShellProps } from '../index.js';
 import { SHELL_CSS } from '../shell-css.js';
 import type { ProAppStore } from '../index.js';
 
 /**
- * #235: ProShell renders the app's main navigation from its `nav` prop — a
+ * #235: AppShell renders the app's main navigation from its `nav` prop — a
  * `<nav aria-label="Main">` landmark with the current route marked — and a
  * shell given no `nav` renders exactly as before.
  */
@@ -73,7 +74,7 @@ describe('NavBar markup', () => {
 
 // ── mounted in a DOM ─────────────────────────────────────────────
 
-/** An SDK instance that passes ProShell's gates: signed in, active subscription. */
+/** An SDK instance that passes AppShell's gates: signed in, active subscription. */
 function fakeApp(): ProAppStore {
   const user = { id: 'gh:1', name: 'Op', login: 'op', avatarUrl: null };
   return {
@@ -128,10 +129,34 @@ async function mount(node: React.ReactNode): Promise<void> {
   await act(async () => { await Promise.resolve(); });
 }
 
-describe('ProShell navigation (#235)', () => {
+describe('AppShell compatibility (#1288)', () => {
+  it('exports the same component and compatible props from the root and shell subpath', () => {
+    expect(ProShell).toBe(AppShell);
+    const oldProps: ProShellProps = { app: fakeApp(), children: <p>content</p> };
+    const newProps: AppShellProps = oldProps;
+    expect(newProps).toBe(oldProps);
+  });
+
+  it('keeps mounted child state when an app switches between names', async () => {
+    const app = fakeApp();
+    function Screen() {
+      const [count, setCount] = useState(0);
+      return <button onClick={() => setCount((value) => value + 1)}>{count}</button>;
+    }
+    await mount(<ProShell app={app}><Screen /></ProShell>);
+    const button = container.querySelector('main button')!;
+    await act(async () => { button.click(); });
+    expect(button.textContent).toBe('1');
+    await mount(<AppShell app={app}><Screen /></AppShell>);
+    expect(container.querySelector('main button')).toBe(button);
+    expect(button.textContent).toBe('1');
+  });
+});
+
+describe('AppShell navigation (#235)', () => {
   it('REGRESSION: the default shell renders a <nav aria-label="Main"> in its topbar when nav items are supplied', async () => {
     window.history.replaceState(null, '', '/cases/7');
-    await mount(<ProShell app={fakeApp()} appName="Demo" nav={ITEMS}><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Demo" nav={ITEMS}><p>content</p></AppShell>);
     expect(container.textContent).toContain('content');
     const nav = container.querySelector('header nav[aria-label="Main"]');
     expect(nav).not.toBeNull();
@@ -141,13 +166,13 @@ describe('ProShell navigation (#235)', () => {
   });
 
   it('without nav, the default topbar is unchanged: no <nav> at all', async () => {
-    await mount(<ProShell app={fakeApp()} appName="Demo"><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Demo"><p>content</p></AppShell>);
     expect(container.querySelector('header')).not.toBeNull();
     expect(container.querySelector('nav')).toBeNull();
   });
 
   it('REGRESSION: app-owned branding removes PAS advertising without removing navigation, profile, or text-size controls', async () => {
-    await mount(<ProShell app={fakeApp()} appName="Independent" branding="app" nav={ITEMS}><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Independent" branding="app" nav={ITEMS}><p>content</p></AppShell>);
     expect(container.textContent).toContain('Independent');
     expect(container.textContent).not.toContain('ProAppStore');
     expect(container.querySelector('[href="https://proappstore.online"]')).toBeNull();
@@ -164,7 +189,7 @@ describe('ProShell navigation (#235)', () => {
   });
 
   it('REGRESSION: app-owned branding keeps the signed-out gate neutral while preserving sign-in', async () => {
-    await mount(<ProShell app={signedOutApp()} appName="Independent" branding="app"><p>content</p></ProShell>);
+    await mount(<AppShell app={signedOutApp()} appName="Independent" branding="app"><p>content</p></AppShell>);
     expect(container.textContent).toContain('Independent');
     expect(container.textContent).toContain('Sign in to continue.');
     expect(container.textContent).not.toContain('ProAppStore');
@@ -174,7 +199,7 @@ describe('ProShell navigation (#235)', () => {
   });
 
   it('REGRESSION: app-owned branding hides automatic PRO badges for active subscribers but retains account controls', async () => {
-    await mount(<ProShell app={fakeApp()} appName="Independent" branding="app"><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Independent" branding="app"><p>content</p></AppShell>);
     expect(container.textContent).not.toMatch(/\bPRO\b/);
     const profile = container.querySelector('.pas-topbar__account > div > button') as HTMLButtonElement;
     act(() => profile.click());
@@ -185,22 +210,22 @@ describe('ProShell navigation (#235)', () => {
   });
 
   it('keeps platform attribution as an explicit, backwards-compatible opt-in', async () => {
-    await mount(<ProShell app={fakeApp()} appName="Demo" branding="platform"><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Demo" branding="platform"><p>content</p></AppShell>);
     expect(container.querySelector('[href="https://proappstore.online"]')?.textContent).toBe('Pro');
     expect(container.querySelector('footer.pas-footer')?.textContent).toContain('Part of');
   });
 
   it('hands the nav to a custom renderTopbar, and renderNav replaces the built-in NavBar', async () => {
     await mount(
-      <ProShell app={fakeApp()} nav={ITEMS} renderTopbar={({ nav }) => <header className="custom">{nav}</header>}>
+      <AppShell app={fakeApp()} nav={ITEMS} renderTopbar={({ nav }) => <header className="custom">{nav}</header>}>
         <p />
-      </ProShell>,
+      </AppShell>,
     );
     expect(container.querySelector('header.custom nav[aria-label="Main"]')).not.toBeNull();
 
     const onNavigate = vi.fn();
     await mount(
-      <ProShell
+      <AppShell
         app={fakeApp()}
         nav={ITEMS}
         onNavigate={onNavigate}
@@ -211,7 +236,7 @@ describe('ProShell navigation (#235)', () => {
         )}
       >
         <p />
-      </ProShell>,
+      </AppShell>,
     );
     const custom = container.querySelector('header nav[aria-label="Main"]')!;
     expect(custom.getAttribute('data-current')).toBe('/');
@@ -261,7 +286,7 @@ describe('NavBar behaviour', () => {
   });
 });
 
-describe('ProShell styling (#235): Tailwind + canonical tokens, no inline styles', () => {
+describe('AppShell styling (#235): Tailwind + canonical tokens, no inline styles', () => {
   const FRAME: Array<[selector: string, cls: string, tailwind: string]> = [
     ['div.pas-shell', 'pas-shell', 'min-h-dvh'],
     ['header.pas-topbar', 'pas-topbar', 'bg-[var(--panel)]'],
@@ -275,7 +300,7 @@ describe('ProShell styling (#235): Tailwind + canonical tokens, no inline styles
   ];
 
   it('REGRESSION: the frame carries pas-* classes with Tailwind token utilities, and no style attributes', async () => {
-    await mount(<ProShell app={fakeApp()} appName="Demo" nav={ITEMS}><p>content</p></ProShell>);
+    await mount(<AppShell app={fakeApp()} appName="Demo" nav={ITEMS}><p>content</p></AppShell>);
     for (const [selector, cls, tailwind] of FRAME) {
       const el = container.querySelector(selector);
       expect(el, selector).not.toBeNull();

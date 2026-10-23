@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from 'react';
 /**
  * Set the tab title for the current screen (#236, PAS-UI-003). Call it once in
  * each routed screen; the title follows the value while the screen is mounted.
- * Runs after ProShell applies a nav item's `title`, so the screen's own title
+ * Runs after AppShell applies a nav item's `title`, so the screen's own title
  * wins on the same route.
  *
  * ```tsx
@@ -27,7 +27,7 @@ export interface PageHeaderProps {
 
 /**
  * The screen's heading (#236): renders the page's one `<h1>` the same way on
- * every screen (PAS-UI-003). ProShell moves focus to it after a client-side
+ * every screen (PAS-UI-003). AppShell moves focus to it after a client-side
  * navigation, so keyboard and screen-reader users land on the new page.
  */
 export function PageHeader({ title, description, actions }: PageHeaderProps) {

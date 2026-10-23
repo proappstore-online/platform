@@ -172,17 +172,17 @@ Dropped from the original schema:
 
 GrassKarma today: Firebase Auth with Email/password + Google + Facebook, custom claims for admin role (`request.auth.token.role == 'admin'`), `usersPub` mirror docs for public profile.
 
-PAS: `@proappstore/sdk` GitHub OAuth via `ProShell`, role stored in our own `users` table.
+PAS: `@proappstore/sdk` GitHub OAuth via `AppShell`, role stored in our own `users` table.
 
 ### Sign-in flow
 
-`ProShell` owns the sign-in gate, the topbar and the app's navigation. Wrap
+`AppShell` owns the sign-in gate, the topbar and the app's navigation. Wrap
 the app in it rather than branching on `useProGate` at the root. (Updated for
-the current shell; see [Getting Started](./getting-started.md#build-your-app-inside-proshell).)
+the current shell; see [Getting Started](./getting-started.md#build-your-app-inside-appshell).)
 
 ```tsx
 // web/src/App.tsx
-import { initPro, ProShell, type NavItem } from '@proappstore/sdk'
+import { initPro, AppShell, type NavItem } from '@proappstore/sdk'
 
 const pas = initPro({ appId: 'grasskarma', authMode: 'platform-cookie' })
 
@@ -190,9 +190,9 @@ const NAV: NavItem[] = [{ label: 'Streets', href: '/' }, { label: 'Schedule', hr
 
 export default function App() {
   return (
-    <ProShell app={pas} appName="GrassKarma" nav={NAV}>
+    <AppShell app={pas} appName="GrassKarma" nav={NAV}>
       <Screens />
-    </ProShell>
+    </AppShell>
   )
 }
 ```

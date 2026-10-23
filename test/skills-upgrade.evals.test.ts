@@ -112,7 +112,7 @@ describe('proappstore-upgrade-app: no fabricated APIs', () => {
       expect(SDK_MODULES.has(mod), `app.${mod}`).toBe(true);
       expect(sdkHas(mod, member), `app.${n} is not on the SDK`).toBe(true);
     }
-    for (const n of new Set([...allText.matchAll(/`(useTheme|ThemeToggle|useProAuth|ProShell|initPro)`/g)].map((m) => m[1]!))) expect(UI_EXPORTS.has(n), n).toBe(true);
+    for (const n of new Set([...allText.matchAll(/`(useTheme|ThemeToggle|useProAuth|AppShell|initPro)`/g)].map((m) => m[1]!))) expect(UI_EXPORTS.has(n), n).toBe(true);
     for (const c of new Set([...allText.matchAll(/`pas ([a-z]+)/g)].map((m) => m[1]!))) expect(CLI.has(c), `pas ${c}`).toBe(true);
   });
 

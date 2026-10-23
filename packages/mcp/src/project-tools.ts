@@ -14,7 +14,7 @@ import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/b
 import { b64decode, deployPublishesMarketing, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
 import { createProvisioningWorkflow, type ProvisionOperationReceipt } from "./provisioning-workflow.js";
 import { gateMutation, dryRun } from "./safety.js";
-import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
+import { BUILD_WITH_APPSHELL } from "./sdk-reference.js";
 import { errText } from "./errors.js";
 import { text, type Text } from "./text-result.js";
 import { readCurrentDeployment } from "./deployment-health.js";
@@ -156,7 +156,7 @@ export function registerProjectTools(
           "- replace APPNAME placeholders in template files",
           "- call /v1/provision for R2 route + D1 database + data worker + app record",
           verify === false ? "- skip live verification" : "- verify repo, provision result, deploy status, and host response",
-          "- then: build the app on ProShell — <ProShell app={app} nav={[…]}> first, SDK components for the screens (full instructions come with the result; sdk_reference({ feature: 'shell' }))",
+          "- then: build the app on AppShell — <AppShell app={app} nav={[…]}> first, SDK components for the screens (full instructions come with the result; sdk_reference({ feature: 'shell' }))",
         ].join("\n"),
         { app_id, name, template: templateId, template_repo: templateRepoName },
       );
@@ -217,7 +217,7 @@ export function registerProjectTools(
         "",
         ...outcome.lines,
         "",
-        BUILD_WITH_PROSHELL,
+        BUILD_WITH_APPSHELL,
       ].join("\n"), !outcome.succeeded);
     },
   );
@@ -357,7 +357,7 @@ export function registerProjectTools(
         "",
         ...steps,
         "",
-        BUILD_WITH_PROSHELL,
+        BUILD_WITH_APPSHELL,
       ].join("\n"), !provResult.ok);
     },
   );

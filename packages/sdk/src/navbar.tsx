@@ -9,7 +9,7 @@ export interface NavItem {
   /** Optional icon, rendered before the label (mark it `aria-hidden`). */
   icon?: ReactNode;
   /**
-   * Tab title while this item's route is current (#236, PAS-UI-003). ProShell
+   * Tab title while this item's route is current (#236, PAS-UI-003). AppShell
    * applies it; a screen's own `useDocumentTitle` overrides it.
    */
   title?: string;
@@ -69,7 +69,7 @@ function useNavbarStyles(): void {
 }
 
 /**
- * NavBar (#235) — the app's main navigation, rendered by ProShell's topbar
+ * NavBar (#235) — the app's main navigation, rendered by AppShell's topbar
  * from its `nav` prop, and usable on its own in a custom topbar.
  *
  * `<nav aria-label="Main">` landmark (PAS-UI-003), `aria-current="page"` on the

@@ -104,7 +104,7 @@ const MAX_TOASTS = 4;
 const ToastContext = createContext<ToastApi | null>(null);
 
 /**
- * Raise a message from any screen inside ProShell (#236). Messages appear in
+ * Raise a message from any screen inside AppShell (#236). Messages appear in
  * the shell's single polite live region.
  *
  * ```tsx
@@ -114,7 +114,7 @@ const ToastContext = createContext<ToastApi | null>(null);
  */
 export function useToast(): ToastApi {
   const api = useContext(ToastContext);
-  if (!api) throw new Error('useToast must be used inside <ProShell>');
+  if (!api) throw new Error('useToast must be used inside <AppShell>');
   return api;
 }
 

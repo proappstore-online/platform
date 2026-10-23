@@ -159,8 +159,8 @@ own compliance rule. Either:
   of the storefront hostname, since that's a stronger signal that the
   app is a real PAS app.
 - Or pick a canonical data-worker URL that includes proappstore.online.
-- Or move the rule to "the app must render the ProShell-provided
-  storefront link," which is already true via ProShell.
+- Or move the rule to "the app must render the AppShell-provided
+  storefront link," which is already true via AppShell.
 
 ## 9. CI compliance check should live in pre-commit too (cost + DX)
 

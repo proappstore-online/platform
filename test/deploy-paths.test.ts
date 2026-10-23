@@ -70,7 +70,7 @@ describe('deploy path filters track workspace imports (#322)', () => {
       "import { type U } from '@proappstore/cli';",
       "export { b } from '../../compliance/src/x.js';",
       "export type { V } from '@proappstore/admin';",
-      "const doc = `import { ProShell } from '@proappstore/sdk'`;",
+      "const doc = `import { AppShell } from '@proappstore/sdk'`;",
       "const lazy = () => import('@proappstore/build-core');",
     ].join('\n');
     expect(runtimeImports('x.ts', src)).toEqual(['@proappstore/qa-spec', '../../compliance/src/x.js', '@proappstore/build-core']);

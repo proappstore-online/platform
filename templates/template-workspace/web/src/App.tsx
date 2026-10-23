@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { NavBar, ProShell, type NavItem } from '@proappstore/sdk'
+import { NavBar, AppShell, type NavItem } from '@proappstore/sdk'
 import { app } from './api'
 import { WorkspaceProvider, useWorkspace } from './workspace'
 import { Onboarding } from './pages/Onboarding'
@@ -61,7 +61,7 @@ function useRoute(): Route {
   return route
 }
 
-/** The app's screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+/** The app's screens. AppShell renders them as its main navigation (<nav aria-label="Main">). */
 const NAV: NavItem[] = [
   { label: 'Dashboard', href: '#/' }, { label: 'Records', href: '#/records' }, { label: 'Approvals', href: '#/approvals' },
   { label: 'Reports', href: '#/reports' }, { label: 'Team', href: '#/team' }, { label: 'Activity', href: '#/activity' },
@@ -70,7 +70,7 @@ const NAV: NavItem[] = [
 
 export default function App() {
   return (
-    <ProShell
+    <AppShell
       app={app}
       appName="APPNAME"
       branding="app"
@@ -81,7 +81,7 @@ export default function App() {
       <WorkspaceProvider>
         <div className="flex-1"><Routed /></div>
       </WorkspaceProvider>
-    </ProShell>
+    </AppShell>
   )
 }
 
@@ -104,7 +104,7 @@ function Routed() {
   }
 }
 
-/** A custom topbar only to add the workspace switcher; the navigation is ProShell's (`nav`), placed here. */
+/** A custom topbar only to add the workspace switcher; the navigation is AppShell's (`nav`), placed here. */
 function Header({ nav, right }: { nav: ReactNode; right: ReactNode }) {
   return (
     <header className="sticky top-0 z-10 border-b border-[var(--line)] bg-[var(--panel-strong)] backdrop-blur">
@@ -119,7 +119,7 @@ function Header({ nav, right }: { nav: ReactNode; right: ReactNode }) {
 }
 
 function WorkspaceSwitcher() {
-  // Rendered inside ProShell's topbar, which sits outside WorkspaceProvider — so it carries its own tiny state.
+  // Rendered inside AppShell's topbar, which sits outside WorkspaceProvider — so it carries its own tiny state.
   const [ws, setWs] = useState<{ id: string; name: string }[]>([])
   const [current, setCurrent] = useState('')
   useEffect(() => {
@@ -147,7 +147,7 @@ function WorkspaceSwitcher() {
   )
 }
 
-/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+/** AppShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
 function HashNav({ items }: { items: NavItem[] }) {
   const [hash, setHash] = useState(currentHash)
   useEffect(() => {

@@ -489,7 +489,7 @@ export class Auth {
    *   render();
    */
   init(): Promise<void> {
-    // Every useAuth and ProShell calls init(). The session check runs once per
+    // Every useAuth and AppShell calls init(). The session check runs once per
     // page (concurrent callers share it); later calls only act on a new auth
     // callback in the URL — so a component mounting mid-session never re-asks
     // /.pas/auth/me, and a transient failure there cannot sign the user out.

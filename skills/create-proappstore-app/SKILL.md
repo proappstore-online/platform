@@ -166,8 +166,8 @@ empty deviations list, report that it has no known deviation follow-ups and add
 zero remediation tasks. Never carry deviations from one template into another.
 
 Then hand off the build. The successful `provision_pas_app` result ends with a
-"Next — build the app on ProShell" block; carry it into **Next steps**:
-- wrap the whole app in `<ProShell app={app} nav={[…]}>` **first**, listing
+"Next — build the app on AppShell" block; carry it into **Next steps**:
+- wrap the whole app in `<AppShell app={app} nav={[…]}>` **first**, listing
   every screen in `nav`. The shell renders `<nav aria-label="Main">`, so there
   is no navigation on a page and no second navbar;
 - new apps use app-owned branding: pass `branding="app"`. Do not add a
@@ -179,7 +179,7 @@ Then hand off the build. The successful `provision_pas_app` result ends with a
 
 Point to `sdk_reference` with feature `shell` (a complete minimal app) and
 `components` (every component). Never hand off a plan for an app without
-ProShell or without `nav`.
+AppShell or without `nav`.
 
 ## Examples and negative cases
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { NavBar, ProShell, type NavItem } from '@proappstore/sdk'
+import { NavBar, AppShell, type NavItem } from '@proappstore/sdk'
 import { app, q, type Group } from './api'
 import { Landing } from './pages/Landing'
 import { Onboarding } from './pages/Onboarding'
@@ -52,7 +52,7 @@ function useRoute(): Route {
 
 export default function App() {
   return (
-    <ProShell
+    <AppShell
       app={app}
       appName="APPNAME"
       branding="app"
@@ -60,7 +60,7 @@ export default function App() {
       renderNav={({ items }) => <HashNav items={items} />}
     >
       <div className="flex-1"><Routed /></div>
-    </ProShell>
+    </AppShell>
   )
 }
 
@@ -98,14 +98,14 @@ function WithGroup({ id, children }: { id: string; children: (g: Group) => React
   return <>{children(group)}</>
 }
 
-/** The app's screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+/** The app's screens. AppShell renders them as its main navigation (<nav aria-label="Main">). */
 const NAV: NavItem[] = [
   { label: 'My groups', href: '#/' },
   { label: 'Create or join', href: '#/onboarding' },
   { label: 'Profile', href: '#/profile' },
 ]
 
-/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+/** AppShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
 function HashNav({ items }: { items: NavItem[] }) {
   const [hash, setHash] = useState(currentHash)
   useEffect(() => {

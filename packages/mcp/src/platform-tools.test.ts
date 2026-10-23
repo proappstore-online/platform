@@ -45,7 +45,7 @@ describe('list_templates', () => {
 });
 
 /**
- * #237: an AI with only MCP access learns to wrap the app in ProShell with
+ * #237: an AI with only MCP access learns to wrap the app in AppShell with
  * real nav items, where navigation comes from, and which UI components exist.
  */
 describe('sdk_reference — the app frame and the components (#237)', () => {
@@ -54,21 +54,21 @@ describe('sdk_reference — the app frame and the components (#237)', () => {
   it('leads the default (all) output with the shell, then the components, before any data API', async () => {
     const all = await ref();
     expect(all).toBe(await ref({ feature: 'all' }));
-    const shell = all.indexOf('## Start here: ProShell is the app frame');
+    const shell = all.indexOf('## Start here: AppShell is the app frame');
     const components = all.indexOf('## UI components — what exists');
     expect(shell).toBeGreaterThan(-1);
     expect(components).toBeGreaterThan(shell);
     expect(all.indexOf('## Auth')).toBeGreaterThan(components);
   });
 
-  it("'shell' is a complete minimal app whose first step is <ProShell app={app} nav={…}>", async () => {
+  it("'shell' is a complete minimal app whose first step is <AppShell app={app} nav={…}>", async () => {
     const shell = await ref({ feature: 'shell' });
-    expect(shell).toContain("import { initPro, ProShell, PageHeader, useDocumentTitle, Button, EmptyState, useToast } from '@proappstore/sdk'");
-    expect(shell).toContain('<ProShell app={app} appName="My App" nav={NAV}>');
+    expect(shell).toContain("import { initPro, AppShell, PageHeader, useDocumentTitle, Button, EmptyState, useToast } from '@proappstore/sdk'");
+    expect(shell).toContain('<AppShell app={app} appName="My App" nav={NAV}>');
     expect(shell).toMatch(/const NAV = \[\n  \{ label: 'Home', href: '\/'/);
     expect(shell).toContain('<PageHeader title="Cases"');
     // the app frame comes before any screen code
-    expect(shell.indexOf('<ProShell app={app}')).toBeLessThan(shell.indexOf('function Home()'));
+    expect(shell.indexOf('<AppShell app={app}')).toBeLessThan(shell.indexOf('function Home()'));
   });
 
   it("'shell' answers 'how do I add navigation?', including routers and custom chrome", async () => {
@@ -99,15 +99,15 @@ describe('sdk_reference — the app frame and the components (#237)', () => {
 });
 
 describe('platform_guide — current build guidance appended (#237)', () => {
-  it('appends ProShell-with-nav build instructions that supersede older guidance in skills.md', async () => {
-    const guide = vi.fn(async () => new Response('# skills.md\nUse the default ProShell for simple apps.', { status: 200 }));
+  it('appends AppShell-with-nav build instructions that supersede older guidance in skills.md', async () => {
+    const guide = vi.fn(async () => new Response('# skills.md\nUse the default AppShell for simple apps.', { status: 200 }));
     vi.stubGlobal('fetch', guide);
     try {
       const out = (await tools.get('platform_guide')!({})).content[0]!.text;
       expect(guide).toHaveBeenCalledWith('https://proappstore.online/skills.md');
-      const appended = out.slice(out.indexOf('supersedes any older ProShell'));
-      expect(appended).toContain('## Next — build the app on ProShell');
-      expect(appended).toMatch(/<ProShell app=\{app\}[^>]*\bnav=\{/);
+      const appended = out.slice(out.indexOf('supersedes any older AppShell'));
+      expect(appended).toContain('## Next — build the app on AppShell');
+      expect(appended).toMatch(/<AppShell app=\{app\}[^>]*\bnav=\{/);
       expect(appended).toContain('<nav aria-label="Main">');
       expect(appended).toContain("sdk_reference({ feature: 'components' })");
     } finally {

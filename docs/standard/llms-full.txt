@@ -274,7 +274,7 @@ Rationale: Every other platform primitive authorizes on the platform session: re
 
 *
 
-Recommended implementation: `app.auth.signIn()` (GitHub or Google), `app.auth.signInWithEmail()` for magic links, `app.auth.provisionChild()` / `signInWithCredentials()` for provisioned accounts (kids/students). Gate UI with `useProAuth()` / `useProGate()` or `ProShell`.
+Recommended implementation: `app.auth.signIn()` (GitHub or Google), `app.auth.signInWithEmail()` for magic links, `app.auth.provisionChild()` / `signInWithCredentials()` for provisioned accounts (kids/students). Gate UI with `useProAuth()` / `useProGate()` or `AppShell`.
 
 *
 
@@ -956,7 +956,7 @@ Rationale: One $5/month subscription unlocks every Pro app and creators are paid
 
 *
 
-Recommended implementation: `useProSubscription(app)` (`isPro`) / `useProGate(app)` or `<ProShell>`; `app.subscription.openCheckout(…)` only via the SDK components; `app.usage` stays on so payouts are attributed.
+Recommended implementation: `useProSubscription(app)` (`isPro`) / `useProGate(app)` or `<AppShell>`; `app.subscription.openCheckout(…)` only via the SDK components; `app.usage` stays on so payouts are attributed.
 
 *
 
@@ -1043,7 +1043,7 @@ Supporting links: [SDK overview — monitoring](../sdk-overview.md#monitoring), 
 URL: https://docs.proappstore.online/standard/stack/#pas-stack-022
 Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · Since: 1.1
 
-Rule: The app SHOULD build its shell with `@proappstore/sdk/ui` (`ProShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
+Rule: The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 *
 
@@ -1055,16 +1055,16 @@ Rationale: The shared design system and components provide accessible, well-test
 
 *
 
-Recommended implementation: Wrap the whole app in `<ProShell app={app} branding="app" nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
+Recommended implementation: Wrap the whole app in `<AppShell app={app} branding="app" nav={…}>…</AppShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
 
 *
 
 Conforming example: ```tsx
-import { ProShell } from '@proappstore/sdk'
+import { AppShell } from '@proappstore/sdk'
 export default () => (
-  <ProShell app={app} appName="Tasks" branding="app" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
+  <AppShell app={app} appName="Tasks" branding="app" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
     <Screens />
-  </ProShell>
+  </AppShell>
 )
 ```
 
@@ -1080,7 +1080,7 @@ Evidence: Source: `@proappstore/sdk/ui` imports; CSS overriding brand variables;
 
 *
 
-Remediation: Adopt `ProShell` or the composables; delete brand overrides; run `pas check` until the UI checks pass.
+Remediation: Adopt `AppShell` or the composables; delete brand overrides; run `pas check` until the UI checks pass.
 
 *
 
@@ -3275,7 +3275,7 @@ URL: https://docs.proappstore.online/standard/ui/
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-001
 Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*; platform CI design-system lint (`scripts/check-design-system.sh`) · Since: 1.4 · Kind: Quality
 
-Rule: The app SHOULD build its chrome with `ProShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
+Rule: The app SHOULD build its chrome with `AppShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 *
 
@@ -3287,7 +3287,7 @@ Rationale: One design system is what makes the store feel like one product and l
 
 *
 
-Recommended implementation: Wrap the whole app in `<ProShell app={app} nav={…}>`. It provides the topbar, the main navigation, the gates and the resilience layer. Build screens from `PageHeader`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `EmptyState` and `useToast`. For custom chrome, use ProShell's `renderTopbar` and compose `ProfileMenu`, `ThemeToggle` and `Avatar` in it. Use hooks inside screens, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
+Recommended implementation: Wrap the whole app in `<AppShell app={app} nav={…}>`. It provides the topbar, the main navigation, the gates and the resilience layer. Build screens from `PageHeader`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `EmptyState` and `useToast`. For custom chrome, use AppShell's `renderTopbar` and compose `ProfileMenu`, `ThemeToggle` and `Avatar` in it. Use hooks inside screens, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
 
 *
 
@@ -3381,18 +3381,18 @@ Applicability: All apps with a user interface.
 
 *
 
-Rationale: Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `ProShell` provides `<header>`, `<main id="main">`, the skip link and — when the app declares `nav` — the `<nav>` landmark; the single `h1` and the per-route title still come from the screen. Composable layouts provide none of these.
+Rationale: Screen-reader users navigate by landmark and heading; a page that is one `<div>` soup has no structure to navigate. `AppShell` provides `<header>`, `<main id="main">`, the skip link and — when the app declares `nav` — the `<nav>` landmark; the single `h1` and the per-route title still come from the screen. Composable layouts provide none of these.
 
 *
 
-Recommended implementation: Declare the app's screens with ProShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Give each screen its heading with `PageHeader` (the one `h1`) and its tab title with `useDocumentTitle` (or a `title` on its nav item). The shell's built-in skip link is the first focusable element and targets `<main id="main">`; an app outside ProShell adds its own `<a href="#main">`.
+Recommended implementation: Declare the app's screens with AppShell's `nav` prop: the shell renders them as a `<nav aria-label="Main">` in its topbar, with the current route marked `aria-current="page"`. Do not put navigation inside the shell's children. A custom `renderTopbar` places `ctx.nav`, and a `hideTopbar` app renders its own `<nav aria-label="Main">` (or the exported `NavBar`). Give each screen its heading with `PageHeader` (the one `h1`) and its tab title with `useDocumentTitle` (or a `title` on its nav item). The shell's built-in skip link is the first focusable element and targets `<main id="main">`; an app outside AppShell adds its own `<a href="#main">`.
 
 *
 
 Conforming example: ```tsx
-<ProShell app={app} nav={[{ label: 'Tasks', href: '/tasks', title: 'Tasks — My App' }]}>   {/* skip link, header, nav, main */}
+<AppShell app={app} nav={[{ label: 'Tasks', href: '/tasks', title: 'Tasks — My App' }]}>   {/* skip link, header, nav, main */}
   <TaskPage />
-</ProShell>
+</AppShell>
 
 // TaskPage
 useDocumentTitle(`${task.title} — My App`)
@@ -3419,7 +3419,7 @@ Tests: Browser: the accessibility tree shows banner/navigation/main on every rou
 
 *
 
-Supporting links: [UI — ProShell](../ui.md#proshell), [Recipes — UI patterns](../recipes.md#ui-patterns).
+Supporting links: [UI — AppShell](../ui.md#appshell), [Recipes — UI patterns](../recipes.md#ui-patterns).
 
 ### PAS-UI-004 — Every interactive element has an accessible name and every input a label
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-004
@@ -3771,7 +3771,7 @@ Rationale: A blank screen during a fetch reads as broken; an error rendered as "
 
 *
 
-Recommended implementation: Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable. ProShell's Suspense spinner and error boundary are the screen-level floor (a lazy screen loading, a render crash); they do not replace these per-query states.
+Recommended implementation: Model `{ kind: 'loading' | 'ok' | 'empty' | 'error' }` per query; render the SDK components; keep the error message actionable. AppShell's Suspense spinner and error boundary are the screen-level floor (a lazy screen loading, a render crash); they do not replace these per-query states.
 
 *
 
@@ -4154,7 +4154,7 @@ Rationale: The platform mandates installable PWAs; an installed app that white-s
 
 *
 
-Recommended implementation: Keep the template precache; ProShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
+Recommended implementation: Keep the template precache; AppShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
 
 *
 

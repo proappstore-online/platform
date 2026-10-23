@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * #238 — the published docs teach one way to build an app: wrap it in ProShell
+ * #238 — the published docs teach one way to build an app: wrap it in AppShell
  * and declare its screens with `nav`. A doc that shows an app root without the
  * shell, or frames navigation as optional, teaches a human or a crawling AI to
  * ship a nav-less app. These tests hold the docs to the shell as it ships.
@@ -37,16 +37,16 @@ function headingSlugs(md: string): Set<string> {
   ));
 }
 
-describe('docs: apps are built inside ProShell (#238)', () => {
-  it('every code example that defines the app root wraps it in <ProShell … nav>', () => {
+describe('docs: apps are built inside AppShell (#238)', () => {
+  it('every code example that defines the app root wraps it in <AppShell … nav>', () => {
     const roots = /export default function App\b|export default \(\) =>|^function App\s*\(/m;
     let seen = 0;
     for (const page of PAGES) {
       for (const block of codeBlocks(read(page))) {
         if (!roots.test(block)) continue;
         seen++;
-        expect(block, `${rel(page)}: app root without ProShell`).toMatch(/<ProShell\b/);
-        expect(block, `${rel(page)}: ProShell without nav`).toMatch(/<ProShell\b[^>]*\bnav=/);
+        expect(block, `${rel(page)}: app root without AppShell`).toMatch(/<AppShell\b/);
+        expect(block, `${rel(page)}: AppShell without nav`).toMatch(/<AppShell\b[^>]*\bnav=/);
       }
     }
     expect(seen).toBeGreaterThan(0);
@@ -59,10 +59,10 @@ describe('docs: apps are built inside ProShell (#238)', () => {
     }
   });
 
-  it('the standard no longer says ProShell lacks a nav landmark, skip link or route title', () => {
+  it('the standard no longer says AppShell lacks a nav landmark, skip link or route title', () => {
     for (const page of mdFiles(join(DOCS, 'standard'))) {
       if (page.endsWith('changelog.md')) continue; // history may quote what changed
-      expect(read(page), rel(page)).not.toMatch(/ProShell[^.]*\b(?:lacks|does not provide|doesn't provide|has no)\b[^.]*\b(?:nav|skip|title)/i);
+      expect(read(page), rel(page)).not.toMatch(/AppShell[^.]*\b(?:lacks|does not provide|doesn't provide|has no)\b[^.]*\b(?:nav|skip|title)/i);
     }
   });
 });
@@ -70,17 +70,17 @@ describe('docs: apps are built inside ProShell (#238)', () => {
 describe('docs: the canonical entry point leads with the shell (#238)', () => {
   const gettingStarted = read(join(DOCS, 'getting-started.md'));
 
-  it('Getting Started wraps the app in ProShell with nav before anything else is built', () => {
-    const shell = gettingStarted.indexOf('## Build your app inside ProShell');
+  it('Getting Started wraps the app in AppShell with nav before anything else is built', () => {
+    const shell = gettingStarted.indexOf('## Build your app inside AppShell');
     expect(shell).toBeGreaterThan(-1);
     expect(shell).toBeLessThan(gettingStarted.indexOf('## Tech stack'));
     expect(shell).toBeLessThan(gettingStarted.indexOf('## SDK'));
   });
 
   it('the home page and llms.txt send readers to it', () => {
-    expect(read(join(DOCS, 'index.md'))).toContain('./getting-started.md#build-your-app-inside-proshell');
+    expect(read(join(DOCS, 'index.md'))).toContain('./getting-started.md#build-your-app-inside-appshell');
     const llms = read(join(DOCS, 'llms.txt'));
-    expect(llms).toContain('getting-started/#build-your-app-inside-proshell');
+    expect(llms).toContain('getting-started/#build-your-app-inside-appshell');
     expect(llms.indexOf('## Build an app')).toBeLessThan(llms.indexOf('## Agent Skills'));
   });
 
@@ -96,7 +96,7 @@ describe('docs: the canonical entry point leads with the shell (#238)', () => {
         ...(self ? [...text.matchAll(/\]\(#([a-z0-9-]+)\)/g)].map((m) => [self, m[1]!]) : []),
       ];
       for (const [doc, anchor] of links) {
-        if (!/proshell|shell|navigation|routing|render|migrating|choose-your-level/.test(anchor!)) continue;
+        if (!/appshell|shell|navigation|routing|render|migrating|choose-your-level/.test(anchor!)) continue;
         checked++;
         expect(slugs[doc!]!.has(anchor!), `${rel(page)} → ${doc}#${anchor}`).toBe(true);
       }

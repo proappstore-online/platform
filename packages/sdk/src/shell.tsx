@@ -23,18 +23,18 @@ export interface MenuItem {
   onClick: () => void;
 }
 
-export interface ProShellRenderContext {
-  /** The SDK instance passed to ProShell. */
+export interface AppShellRenderContext {
+  /** The SDK instance passed to AppShell. */
   app: ProAppStore;
-  /** App name passed to ProShell, if any. */
+  /** App name passed to AppShell, if any. */
   appName: string | undefined;
-  /** Signed-in user. ProShell only calls render functions after auth gates pass. */
+  /** Signed-in user. AppShell only calls render functions after auth gates pass. */
   user: User;
   /** Current subscription result, or null if unavailable/free-gated. */
   subscription: Subscription | null;
   /** Text size control used by the default shell. */
   textSizeToggle: ReactNode;
-  /** Platform profile dropdown, including any menuItems passed to ProShell. */
+  /** Platform profile dropdown, including any menuItems passed to AppShell. */
   profileMenu: ReactNode;
   /** Subscription badge when the current subscription is active; otherwise null. */
   proBadge: ReactNode;
@@ -43,7 +43,10 @@ export interface ProShellRenderContext {
   nav: ReactNode;
 }
 
-export interface ProShellNavContext {
+/** @deprecated Use AppShellRenderContext. Retained for the next major version. */
+export type ProShellRenderContext = AppShellRenderContext;
+
+export interface AppShellNavContext {
   items: NavItem[];
   /** The path the shell considers current (`location.pathname`, following back/forward). */
   currentPath: string;
@@ -51,7 +54,10 @@ export interface ProShellNavContext {
   onNavigate: (href: string) => void;
 }
 
-export interface ProShellProps {
+/** @deprecated Use AppShellNavContext. Retained for the next major version. */
+export type ProShellNavContext = AppShellNavContext;
+
+export interface AppShellProps {
   /** The ProAppStore SDK instance from initPro(). */
   app: ProAppStore;
   /** Your app's content. Only rendered when user is signed in + subscribed. */
@@ -70,16 +76,16 @@ export interface ProShellProps {
   branding?: 'platform' | 'app';
   /**
    * The app's screens — the standard way to give an app navigation (#235).
-   * ProShell renders them as a `<nav aria-label="Main">` in its topbar, marks
+   * AppShell renders them as a `<nav aria-label="Main">` in its topbar, marks
    * the current route, and collapses to a menu button on small screens.
    *
    * ```tsx
-   * <ProShell app={app} appName="Cases" nav={[{ label: 'Home', href: '/' }, { label: 'Cases', href: '/cases' }]}>
+   * <AppShell app={app} appName="Cases" nav={[{ label: 'Home', href: '/' }, { label: 'Cases', href: '/cases' }]}>
    * ```
    */
   nav?: NavItem[];
   /** Replace the built-in NavBar (still placed in the topbar) with your own. */
-  renderNav?: (ctx: ProShellNavContext) => ReactNode;
+  renderNav?: (ctx: AppShellNavContext) => ReactNode;
   /**
    * Client-side navigation for nav clicks (e.g. your router's `navigate`).
    * Without it, nav items are ordinary links (full page load).
@@ -96,19 +102,19 @@ export interface ProShellProps {
   showThemeToggle?: boolean;
   /** Custom items added to the profile dropdown (above sign-out). */
   menuItems?: MenuItem[];
-  /** Hide the default ProShell topbar. Prefer `nav`; this also hides the navigation. */
+  /** Hide the default AppShell topbar. Prefer `nav`; this also hides the navigation. */
   hideTopbar?: boolean;
-  /** Hide the default ProShell footer. */
+  /** Hide the default AppShell footer. */
   hideFooter?: boolean;
   /**
-   * Replace the default topbar while keeping ProShell's auth/subscription gates.
+   * Replace the default topbar while keeping AppShell's auth/subscription gates.
    *
    * Use the provided `profileMenu`, `textSizeToggle`, and `proBadge` nodes to
    * keep platform account controls consistent in custom app navigation.
    */
-  renderTopbar?: (ctx: ProShellRenderContext) => ReactNode;
+  renderTopbar?: (ctx: AppShellRenderContext) => ReactNode;
   /** Replace the default footer. Return null to omit it. */
-  renderFooter?: (ctx: ProShellRenderContext) => ReactNode;
+  renderFooter?: (ctx: AppShellRenderContext) => ReactNode;
   /**
    * Replace the fallback shown when a screen throws while rendering (#236).
    * The error is already recorded via `app.logs`; call `reset` to retry.
@@ -118,10 +124,13 @@ export interface ProShellProps {
   renderLoading?: () => ReactNode;
 }
 
+/** @deprecated Use AppShellProps. Retained for the next major version. */
+export type ProShellProps = AppShellProps;
+
 type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
 
 /**
- * ProShell — platform-level Shell for all ProAppStore apps.
+ * AppShell — platform-level Shell for all ProAppStore apps.
  *
  * Handles:
  * - Auth initialization + sign-in gate
@@ -137,20 +146,20 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
  * Usage:
  * ```tsx
  * import { initPro } from '@proappstore/sdk'
- * import { ProShell } from '@proappstore/sdk/shell'
+ * import { AppShell } from '@proappstore/sdk/shell'
  *
  * const app = initPro({ appId: 'meetup' })
  *
  * export default function App() {
  *   return (
- *     <ProShell app={app} appName="Meetup" nav={[{ label: 'Events', href: '/' }, { label: 'Groups', href: '/groups' }]}>
+ *     <AppShell app={app} appName="Meetup" nav={[{ label: 'Events', href: '/' }, { label: 'Groups', href: '/groups' }]}>
  *       <MeetupApp />
- *     </ProShell>
+ *     </AppShell>
  *   )
  * }
  * ```
  */
-export function ProShell({
+export function AppShell({
   app,
   children,
   appName,
@@ -167,7 +176,7 @@ export function ProShell({
   renderFooter,
   renderError,
   renderLoading,
-}: ProShellProps) {
+}: AppShellProps) {
   const [user, setUser] = useState(app.auth.user);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
@@ -259,7 +268,7 @@ export function ProShell({
       ? <NavBar items={navItems} currentPath={currentPath} onNavigate={navigate} />
       : <NavBar items={navItems} />;
 
-  const shellContext: ProShellRenderContext = {
+  const shellContext: AppShellRenderContext = {
     app,
     appName,
     user,
@@ -321,3 +330,6 @@ export function ProShell({
     </ProProvider>
   );
 }
+
+/** @deprecated Use AppShell. This is the same component, so switching names preserves React state. */
+export const ProShell = AppShell;

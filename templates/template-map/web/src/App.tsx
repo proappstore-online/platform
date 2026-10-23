@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavBar, ProShell, type NavItem } from '@proappstore/sdk'
+import { NavBar, AppShell, type NavItem } from '@proappstore/sdk'
 import { app, RECORD } from './api'
 import { useRoles } from './hooks'
 import { MapPage } from './pages/MapPage'
@@ -53,7 +53,7 @@ function useRoute(): Route {
   return route
 }
 
-/** The app's screens. ProShell renders them as its main navigation (<nav aria-label="Main">). */
+/** The app's screens. AppShell renders them as its main navigation (<nav aria-label="Main">). */
 const NAV: NavItem[] = [
   { label: 'Map', href: '#/' },
   { label: 'List', href: '#/list' },
@@ -63,7 +63,7 @@ const NAV: NavItem[] = [
 
 export default function App() {
   return (
-    <ProShell
+    <AppShell
       app={app}
       appName="APPNAME"
       branding="app"
@@ -71,7 +71,7 @@ export default function App() {
       renderNav={({ items }) => <MainNav items={items} />}
     >
       <div className="flex flex-1 flex-col"><Routed /></div>
-    </ProShell>
+    </AppShell>
   )
 }
 
@@ -89,13 +89,13 @@ function Routed() {
   }
 }
 
-/** Managers also get Admin. Rendered inside ProShell, after sign-in, so the role lookup has a session. */
+/** Managers also get Admin. Rendered inside AppShell, after sign-in, so the role lookup has a session. */
 function MainNav({ items }: { items: NavItem[] }) {
   const { manager } = useRoles()
   return <HashNav items={manager ? [...items.slice(0, 3), { label: 'Admin', href: '#/admin' }, ...items.slice(3)] : items} />
 }
 
-/** ProShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
+/** AppShell's NavBar, marking the current screen: this app routes by hash, the NavBar by default by path. */
 function HashNav({ items }: { items: NavItem[] }) {
   const [hash, setHash] = useState(currentHash)
   useEffect(() => {

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Auth } from '../auth.js';
-import { ProShell } from '../shell.js';
+import { AppShell } from '../shell.js';
 import { useAuth, useGate } from '../hooks.js';
 import type { ProAppStore } from '../index.js';
 
@@ -39,7 +39,7 @@ function holdMe() {
   };
 }
 
-/** A ProShell-ready app around a real Auth. */
+/** A AppShell-ready app around a real Auth. */
 function appWith(auth: Auth): ProAppStore {
   return {
     appId: 'demo',
@@ -176,10 +176,10 @@ describe('Auth status (#241)', () => {
   });
 });
 
-describe('ProShell while auth resolves (#241)', () => {
+describe('AppShell while auth resolves (#241)', () => {
   it('REGRESSION: a signed-in refresh never shows the sign-in screen — neutral loading, then the page', async () => {
     const me = holdMe();
-    await render(<ProShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} appName="Demo"><p>the page</p></ProShell>);
+    await render(<AppShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} appName="Demo"><p>the page</p></AppShell>);
     expect(text()).toContain('Loading...');
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Loading...');
     expect(text()).not.toContain(SIGN_IN);
@@ -192,7 +192,7 @@ describe('ProShell while auth resolves (#241)', () => {
 
   it('a genuinely signed-out user reaches the sign-in screen as soon as auth resolves', async () => {
     const me = holdMe();
-    await render(<ProShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} appName="Demo"><p>the page</p></ProShell>);
+    await render(<AppShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} appName="Demo"><p>the page</p></AppShell>);
     expect(text()).not.toContain(SIGN_IN);
     await me.signedOut();
     expect(text()).toContain(SIGN_IN);
@@ -203,7 +203,7 @@ describe('ProShell while auth resolves (#241)', () => {
     localStorage.setItem('pas:session', JSON.stringify({ token: 't', user: USER }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
     const auth = new Auth('demo', 'https://api.test', 'legacy-bearer');
-    await render(<ProShell app={appWith(auth)} appName="Demo"><p>the page</p></ProShell>);
+    await render(<AppShell app={appWith(auth)} appName="Demo"><p>the page</p></AppShell>);
     await act(async () => { await Promise.resolve(); });
     expect(text()).toContain('the page');
     await act(async () => { auth.handleUnauthorized(); });
@@ -213,7 +213,7 @@ describe('ProShell while auth resolves (#241)', () => {
 
   it('renderLoading replaces the neutral state while auth is pending', async () => {
     holdMe();
-    await render(<ProShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} renderLoading={() => <p>skeleton</p>}><p>the page</p></ProShell>);
+    await render(<AppShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))} renderLoading={() => <p>skeleton</p>}><p>the page</p></AppShell>);
     expect(text()).toBe('skeleton');
   });
 
@@ -221,7 +221,7 @@ describe('ProShell while auth resolves (#241)', () => {
     window.history.replaceState(null, '', '/cases/42?tab=notes');
     const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     const me = holdMe();
-    await render(<ProShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))}><p>case {location.pathname}{location.search}</p></ProShell>);
+    await render(<AppShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))}><p>case {location.pathname}{location.search}</p></AppShell>);
     expect(location.pathname + location.search).toBe('/cases/42?tab=notes'); // nothing navigated away while pending
     expect(assign).not.toHaveBeenCalled();
     await me.signedOut();
@@ -233,7 +233,7 @@ describe('ProShell while auth resolves (#241)', () => {
     act(() => root.unmount());
     root = createRoot(container);
     const again = holdMe();
-    await render(<ProShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))}><p>case {location.pathname}{location.search}</p></ProShell>);
+    await render(<AppShell app={appWith(new Auth('demo', 'https://api.test', 'platform-cookie'))}><p>case {location.pathname}{location.search}</p></AppShell>);
     await again.signedIn();
     await act(async () => { await Promise.resolve(); });
     expect(text()).toContain('case /cases/42?tab=notes');

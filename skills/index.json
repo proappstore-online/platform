@@ -151,7 +151,7 @@
       ],
       "mutating": false,
       "bytes": 42324,
-      "digest": "07ab32690e4cedb524cec19159003c7a22dbb471d3eb3c7c2f83e5d954df146d",
+      "digest": "885d68ad1fa3362172487829770bef3ecece0243686696de1efdd032ff5f4e6d",
       "files": [
         {
           "path": "evals/cases.json",
@@ -176,7 +176,7 @@
         {
           "path": "references/decision-tables.md",
           "bytes": 10763,
-          "sha256": "a98bad2502678f9d0dc23a0a7b1bf3d82f79c7f595ef08075e76d839ccd9cd93"
+          "sha256": "23c1671955e33ccd48abffa2340daf969e6aa0e650a7314d6d91a0d49a04d27c"
         },
         {
           "path": "references/negative-cases.md",
@@ -264,12 +264,12 @@
       ],
       "mutating": true,
       "bytes": 31691,
-      "digest": "afb1b93ae8f3ecd190c5a0bd9a5fe3726a9c17b7d4ca3698859990897a2495c7",
+      "digest": "2a1ee0d7dc2ca760958c8c9647d8ca0b40b7f8527f346904217c172d4c780279",
       "files": [
         {
           "path": "evals/cases.json",
           "bytes": 7370,
-          "sha256": "d42f4aef1a24d5363ca533446490f03340b26c47167f26f3d0924ef03ed7d4d5"
+          "sha256": "3baae1caf284945b13ef33e72a4382c38dca6bde65bc87824060ec11487b8178"
         },
         {
           "path": "evals/contract.json",
@@ -294,7 +294,7 @@
         {
           "path": "references/output-template.md",
           "bytes": 1795,
-          "sha256": "72178b55ca7dc7a22640b8e4e79a42407d183f305c0bc52d69036bf529ca0c5e"
+          "sha256": "320f29d08f56a5d44518260ea8dfb7ff4e6e8bb7df5fe79b3aadfa3ffdcddd74"
         },
         {
           "path": "references/provisioning-tools.md",
@@ -309,7 +309,7 @@
         {
           "path": "SKILL.md",
           "bytes": 11049,
-          "sha256": "7e82ddc9c15e969ac23bed0ca1e024a5f8acc0576c0abb074fa5a8605e224fab"
+          "sha256": "d99bde621d5236942793f25041ea888d11ef80f0827276d006c3832f3610a337"
         }
       ],
       "evaluations": {
@@ -369,7 +369,7 @@
       ],
       "mutating": false,
       "bytes": 50750,
-      "digest": "1526700d5221a6cec8fa74eb3b0319a0f20336ccfec9c8a10df856b14380c1e4",
+      "digest": "0858b2d9944a336bb47c5e50a3c27f65cfbb0d0bd9e3b2ff755b80e2d384365b",
       "files": [
         {
           "path": "evals/cases.json",
@@ -399,7 +399,7 @@
         {
           "path": "references/decision-tables.md",
           "bytes": 8851,
-          "sha256": "9afc9930335761e564a69f28859d73d5a2491d34744b0136b877d4d200346f76"
+          "sha256": "c9f9ba757e6c9a387637dc2e1352b3c0f3ba4bef987fb5f6702e9f2c2df38ff9"
         },
         {
           "path": "references/negative-cases.md",
@@ -409,7 +409,7 @@
         {
           "path": "references/output-template.md",
           "bytes": 1714,
-          "sha256": "0059f8ebd0efa1f2aba2985531d081ae37aad411cf4ac3e15034963c0e73eb8d"
+          "sha256": "1deaf405252e48fbb28acebeecb55644f239d76035a7f29ea315a024c368b86b"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -419,7 +419,7 @@
         {
           "path": "references/worked-examples.md",
           "bytes": 7833,
-          "sha256": "9f5001055cbddef846f0de80b95de2d25a3dc69656a8d891f5b73a16f289515c"
+          "sha256": "9bc2cd3d8540f07128deed826b00ba1f18a571bd396c32cd32bc0bae6eaf8f44"
         },
         {
           "path": "SKILL.md",
@@ -711,7 +711,7 @@
       ],
       "mutating": false,
       "bytes": 56504,
-      "digest": "ca59c63d1e30c8f8488407406207a39961674062161a364e0aae5e826d24e52e",
+      "digest": "de9976d81c789733ce804869a0c7c7e01654e6ea3dd7c8122f384905d5771907",
       "files": [
         {
           "path": "evals/cases.json",
@@ -741,7 +741,7 @@
         {
           "path": "references/decision-tables.md",
           "bytes": 10884,
-          "sha256": "9db948143bc43f45275beac85a5cbc9bce44c7a29b466b99ac806c284c805042"
+          "sha256": "e1ac4ed33afcc6b57d39fb5052a489a92f7bd23a0879ed90d5c615fea3a7a1e7"
         },
         {
           "path": "references/negative-cases.md",

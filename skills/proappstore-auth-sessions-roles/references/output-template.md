@@ -10,7 +10,7 @@
 |---|---|---|
 | session mode | `initPro({ appId, authMode: 'platform-cookie' })` | PAS-AUTH-001 |
 | sign-in paths | <github / google / email / provisioned> | PAS-AUTH-004 |
-| hydration | `app.auth.init()` via `useProAuth` / `ProShell` | PAS-AUTH-005 |
+| hydration | `app.auth.init()` via `useProAuth` / `AppShell` | PAS-AUTH-005 |
 | sign-out & recovery | `app.auth.signOut()` + cache clear + `/.pas/auth/recover` | PAS-AUTH-007 |
 
 ### Findings (existing app only)

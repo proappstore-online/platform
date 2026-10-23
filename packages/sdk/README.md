@@ -18,7 +18,7 @@ import { initPro } from '@proappstore/sdk'
 const app = initPro({ appId: 'my-app' })
 ```
 
-Then wrap the whole app in `<ProShell app={app} appName="…" nav={[…]}>`, the standard app frame with the gates, topbar, main navigation and resilience layer. See [ProShell Component](#proshell-component).
+Then wrap the whole app in `<AppShell app={app} appName="…" nav={[…]}>`, the standard app frame with the gates, topbar, main navigation and resilience layer. See [AppShell Component](#appshell-component).
 
 Options:
 
@@ -581,7 +581,7 @@ const all = await app.roles.listAll()
 
 ## React Hooks
 
-Every app is wrapped in [`ProShell`](#proshell-component), which already runs the sign-in and subscription gates. Use these hooks inside its screens to read identity and subscription state, or to gate a single screen. Import from `@proappstore/sdk` or `@proappstore/sdk/hooks`.
+Every app is wrapped in [`AppShell`](#appshell-component), which already runs the sign-in and subscription gates. Use these hooks inside its screens to read identity and subscription state, or to gate a single screen. Import from `@proappstore/sdk` or `@proappstore/sdk/hooks`.
 
 ### Account deletion (per app)
 
@@ -613,7 +613,7 @@ import { useProAuth } from '@proappstore/sdk/hooks'
 
 const app = initPro({ appId: 'my-app' })
 
-// A screen inside <ProShell>: the shell has already signed the user in.
+// A screen inside <AppShell>: the shell has already signed the user in.
 function Welcome() {
   const { user, signOut } = useProAuth(app)
   return <p>Welcome, {user?.login}! <button onClick={signOut}>Sign out</button></p>
@@ -637,7 +637,7 @@ function Billing() {
 
 ### useProGate
 
-Combined auth + subscription gate. Returns a single `gate` state for easy conditional rendering. ProShell gates the whole app; use this for one Pro-only screen in an app that otherwise allows free users.
+Combined auth + subscription gate. Returns a single `gate` state for easy conditional rendering. AppShell gates the whole app; use this for one Pro-only screen in an app that otherwise allows free users.
 
 ```tsx
 import { initPro } from '@proappstore/sdk'
@@ -645,7 +645,7 @@ import { useProGate } from '@proappstore/sdk/hooks'
 
 const app = initPro({ appId: 'my-app' })
 
-// A screen inside <ProShell allowFree>: only this screen needs a subscription.
+// A screen inside <AppShell allowFree>: only this screen needs a subscription.
 function ReportsScreen() {
   const { gate, upgrade } = useProGate(app, { allowFree: false })
 
@@ -694,18 +694,24 @@ function Moderation() {
 
 A full sample is `templates/template-membership/web/src/pages/Moderation.tsx`.
 
-## ProShell Component
+## AppShell Component
 
 The app frame. It handles the auth gates, subscription checks, provider context, the topbar (app name, text size control, user menu), the footer, and the **main navigation**.
 
+`ProShell` remains a deprecated alias from the root and `/shell` entry points
+for at least one major version. Both names reference the same component, so
+switching names preserves mounted React state. Its props and context type
+aliases remain available as `ProShellProps`, `ProShellRenderContext`, and
+`ProShellNavContext`.
+
 ```tsx
-import { initPro, ProShell } from '@proappstore/sdk'
+import { initPro, AppShell } from '@proappstore/sdk'
 
 const app = initPro({ appId: 'meetup' })
 
 export default function App() {
   return (
-    <ProShell
+    <AppShell
       app={app}
       appName="Meetup"
       branding="app"
@@ -715,7 +721,7 @@ export default function App() {
       ]}
     >
       <MeetupApp />
-    </ProShell>
+    </AppShell>
   )
 }
 ```
@@ -741,7 +747,7 @@ Props:
 | `renderError` | `({ error, reset }) => ReactNode` | Replace the error-boundary fallback (errors are recorded via `app.logs`) |
 | `renderLoading` | `() => ReactNode` | Replace the spinner shown while a lazy screen loads |
 
-ProShell handles:
+AppShell handles:
 - Auth initialization and the sign-in gate
 - The subscription check and upgrade wall (unless `allowFree=true`)
 - The topbar with app name, text size toggle and user menu (sign out, manage billing, delete account; deletion is per app, see `app.account` below)
@@ -764,7 +770,7 @@ ProShell handles:
 Do not build navigation into a page, and do not stack a second navbar under the shell. A custom topbar keeps the gates and places the rendered `nav`:
 
 ```tsx
-<ProShell
+<AppShell
   app={app}
   appName="Chess Academy"
   nav={[{ label: 'Students', href: '/students' }, { label: 'Tournaments', href: '/tournaments' }]}
@@ -778,10 +784,10 @@ Do not build navigation into a page, and do not stack a second navbar under the 
   )}
 >
   <ChessAcademy />
-</ProShell>
+</AppShell>
 ```
 
-For a fully custom layout, use `<ProShell app={app} hideTopbar hideFooter>` and compose `NavBar`, `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
+For a fully custom layout, use `<AppShell app={app} hideTopbar hideFooter>` and compose `NavBar`, `ProfileMenu`, `SignInButton`, `GateScreen`, and hooks from `@proappstore/sdk/ui` and `@proappstore/sdk/hooks`.
 
 New templates explicitly use `branding="app"`; the SDK default remains
 `branding="platform"` so upgrading an existing app does not silently change
@@ -791,7 +797,7 @@ subscription and billing controls. Apps that intentionally want legacy
 platform attribution can omit the prop or pass `branding="platform"`;
 `renderTopbar` and `renderFooter` remain explicit customisation hooks.
 
-The children render only after the gates pass: signed-out visitors see the sign-in screen with no topbar or navigation, and `platform-cookie` apps show it briefly to returning users while the session hydrates. Routing caveats (routers, hash routing) and a step-by-step guide to replacing a hand-rolled header or navbar are in the [SDK overview](https://docs.proappstore.online/sdk-overview/#proshell-component).
+The children render only after the gates pass: signed-out visitors see the sign-in screen with no topbar or navigation, and `platform-cookie` apps show it briefly to returning users while the session hydrates. Routing caveats (routers, hash routing) and a step-by-step guide to replacing a hand-rolled header or navbar are in the [SDK overview](https://docs.proappstore.online/sdk-overview/#appshell-component).
 
 ## UI Components
 

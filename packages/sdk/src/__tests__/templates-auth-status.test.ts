@@ -43,9 +43,9 @@ describe('staged templates inherit the pending auth status (#241)', () => {
       expect(newer(locked!, AUTH_STATUS_SINCE), `locked ${locked}`).toBe(true);
     });
 
-    it(`${name}: gates on auth through ProShell, or waits for useAuth's loading/status before treating "no user" as signed out`, () => {
+    it(`${name}: gates on auth through AppShell, or waits for useAuth's loading/status before treating "no user" as signed out`, () => {
       const app = readFileSync(join(TEMPLATES, name, 'web/src/App.tsx'), 'utf8');
-      expect(app, 'renders through ProShell').toMatch(/<ProShell\b/);
+      expect(app, 'renders through AppShell').toMatch(/<AppShell\b/);
       if (/\buseAuth\(/.test(app)) {
         const gate = app.slice(app.indexOf('useAuth('));
         const waits = gate.search(/\bif \((loading|status === 'pending')\)/);

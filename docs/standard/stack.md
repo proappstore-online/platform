@@ -40,7 +40,7 @@ clause that says why.
 
 | The app needs to… | Use | Do not use | Clause |
 |---|---|---|---|
-| Know who the user is | `app.auth`, `useProAuth`, `ProShell` | Firebase/Auth0/Supabase/Clerk auth, own passwords or JWTs | [006](#pas-stack-006) |
+| Know who the user is | `app.auth`, `useProAuth`, `AppShell` | Firebase/Auth0/Supabase/Clerk auth, own passwords or JWTs | [006](#pas-stack-006) |
 | Read and write its own records | Registered actions (`mcp.json`, `app.actions.call`) | Firestore, Supabase, Mongo, raw `app.db.*` in user code | [007](#pas-stack-007), [011](#pas-stack-011) |
 | Define or change its schema | `migrations.json` (additive, applied on deploy) | Runtime `CREATE TABLE`, `DROP`, hand-run `wrangler d1` | [008](#pas-stack-008) |
 | Remember a user's preferences | `app.kv` | `localStorage` for identity or shared data | [009](#pas-stack-009) |
@@ -308,7 +308,7 @@ run: wrangler pages deploy web/dist --project-name my-app
 
 **Rationale.** Every other platform primitive authorizes on the platform session: registered actions scope rows to `:__user_id`, roles are keyed by platform user id, payouts are attributed by it. A parallel identity has none of that, and a self-built password store is the most common source of credential leaks.
 
-**Recommended implementation.** `app.auth.signIn()` (GitHub or Google), `app.auth.signInWithEmail()` for magic links, `app.auth.provisionChild()` / `signInWithCredentials()` for provisioned accounts (kids/students). Gate UI with `useProAuth()` / `useProGate()` or `ProShell`.
+**Recommended implementation.** `app.auth.signIn()` (GitHub or Google), `app.auth.signInWithEmail()` for magic links, `app.auth.provisionChild()` / `signInWithCredentials()` for provisioned accounts (kids/students). Gate UI with `useProAuth()` / `useProGate()` or `AppShell`.
 
 **Conforming example.**
 
@@ -794,7 +794,7 @@ await fetch('https://api.sendgrid.com/v3/mail/send', { headers: { Authorization:
 
 **Rationale.** One $5/month subscription unlocks every Pro app and creators are paid from the pool by usage; a separate checkout breaks that model and the payout attribution, and a processor key in the app is a credential leak.
 
-**Recommended implementation.** `useProSubscription(app)` (`isPro`) / `useProGate(app)` or `<ProShell>`; `app.subscription.openCheckout(…)` only via the SDK components; `app.usage` stays on so payouts are attributed.
+**Recommended implementation.** `useProSubscription(app)` (`isPro`) / `useProGate(app)` or `<AppShell>`; `app.subscription.openCheckout(…)` only via the SDK components; `app.usage` stays on so payouts are attributed.
 
 **Conforming example.**
 
@@ -859,22 +859,22 @@ initPro({ appId: 'my-app', monitoring: { auto: false } })
 
 **Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · **Since:** 1.1
 
-**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`ProShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
+**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 
 **Rationale.** The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. They do not require platform marketing in the app UI.
 
-**Recommended implementation.** Wrap the whole app in `<ProShell app={app} branding="app" nav={…}>…</ProShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
+**Recommended implementation.** Wrap the whole app in `<AppShell app={app} branding="app" nav={…}>…</AppShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
 
 **Conforming example.**
 
 ```tsx
-import { ProShell } from '@proappstore/sdk'
+import { AppShell } from '@proappstore/sdk'
 export default () => (
-  <ProShell app={app} appName="Tasks" branding="app" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
+  <AppShell app={app} appName="Tasks" branding="app" nav={[{ label: 'Tasks', href: '/' }, { label: 'Settings', href: '/settings' }]}>
     <Screens />
-  </ProShell>
+  </AppShell>
 )
 ```
 
@@ -886,7 +886,7 @@ export default () => (
 
 **Evidence.** Source: `@proappstore/sdk/ui` imports; CSS overriding brand variables; `web/index.html` fonts and meta; `pas check` output.
 
-**Remediation.** Adopt `ProShell` or the composables; delete brand overrides; run `pas check` until the UI checks pass.
+**Remediation.** Adopt `AppShell` or the composables; delete brand overrides; run `pas check` until the UI checks pass.
 
 **Tests.** `pas check` passes the listed checks; the live app renders correctly in light and dark schemes.
 

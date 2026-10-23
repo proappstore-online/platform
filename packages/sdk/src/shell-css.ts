@@ -1,9 +1,9 @@
 /**
- * ProShell's styles: the frame itself — wrapper, sticky topbar, main, footer,
+ * AppShell's styles: the frame itself — wrapper, sticky topbar, main, footer,
  * profile-menu items (#235) — and the resilience and feedback layer (#236):
  * skip link, offline banner, toast region, error and loading fallbacks,
  * PageHeader. Same model as navbar-css.ts: canonical tokens only (PAS-UI-001),
- * mirrored by Tailwind classes on the elements, injected by ProShell at render
+ * mirrored by Tailwind classes on the elements, injected by AppShell at render
  * so an app needs no configuration, and appended to dist/shell.css.
  */
 export const SHELL_CSS = `.pas-shell{display:flex;flex-direction:column;min-height:100dvh}

@@ -260,7 +260,7 @@ export const REACT_ERROR_CATEGORY = 'react.error-boundary';
 
 /**
  * The entry for a render error a React error boundary caught: the message and
- * stack (with causes), the component stack and the path. Shared by ProShell's
+ * stack (with causes), the component stack and the path. Shared by AppShell's
  * boundary and {@link Logs.captureReactError}, so both read the same.
  */
 export function describeReactError(error: unknown, componentStack?: string | null): { message: string; data: Record<string, unknown> } {
@@ -577,7 +577,7 @@ export class Logs {
    * Record a render error your own React error boundary caught (#392). React
    * does not pass a caught error to `window.onerror`, so call this from
    * `componentDidCatch(error, info)`: `app.logs.captureReactError(error,
-   * info.componentStack)`. Same entry as ProShell's boundary (category
+   * info.componentStack)`. Same entry as AppShell's boundary (category
    * `react.error-boundary`, stack with causes, component stack, path).
    */
   captureReactError(error: unknown, componentStack?: string | null): void {

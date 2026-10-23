@@ -7,23 +7,24 @@
 /**
  * What every create-app path hands the building AI (#237): provision_pas_app and
  * scaffold_app success output, and platform_guide. One source, so the MCP tells
- * one story — and an AI that only ever sees MCP output still builds on ProShell
+ * one story — and an AI that only ever sees MCP output still builds on AppShell
  * with real navigation from the first render instead of hand-rolled chrome.
  */
-export const BUILD_WITH_PROSHELL = `## Next — build the app on ProShell (the standard app frame)
-1. First, wrap the whole app in \`<ProShell app={app} appName="…" nav={[…]}>\` from '@proappstore/sdk'. List every screen in \`nav\` ({ label, href, title? }): the shell renders the app's main navigation as \`<nav aria-label="Main">\` in its topbar, marks the current route and collapses to a menu on small screens. Do not put navigation on a page, do not hand-roll a header, navbar or profile menu, and do not stack a second bar under the shell.
+export const BUILD_WITH_APPSHELL = `## Next — build the app on AppShell (the standard app frame)
+1. First, wrap the whole app in \`<AppShell app={app} appName="…" nav={[…]}>\` from '@proappstore/sdk'. List every screen in \`nav\` ({ label, href, title? }): the shell renders the app's main navigation as \`<nav aria-label="Main">\` in its topbar, marks the current route and collapses to a menu on small screens. Do not put navigation on a page, do not hand-roll a header, navbar or profile menu, and do not stack a second bar under the shell.
 2. Render the screen for \`location.pathname\` (or pass \`onNavigate={navigate}\` with a router). Start each screen with \`<PageHeader title="…" />\` (its one h1) and \`useDocumentTitle('…')\`.
 3. Build screens from the SDK components — Button, Card, Input, Modal, Tabs, EmptyState, Spinner, useToast — not hand-rolled UI. The error boundary, loading fallback, toast region, offline banner and skip link come with the shell.
 A complete minimal app: sdk_reference({ feature: 'shell' }). Every UI component: sdk_reference({ feature: 'components' }).`;
 
 export function buildSdkReferenceSections(): Record<string, string> {
   return {
-    shell: `## Start here: ProShell is the app frame
-Every PAS app is wrapped in \`ProShell\` — FIRST, before any screen. It owns the sign-in and subscription gates, the topbar (app name, text size, profile menu), the app's main navigation, the footer, and the resilience layer. Do not hand-roll any of it.
+    shell: `## Start here: AppShell is the app frame
+Every PAS app is wrapped in \`AppShell\` — FIRST, before any screen. It owns the sign-in and subscription gates, the topbar (app name, text size, profile menu), the app's main navigation, the footer, and the resilience layer. Do not hand-roll any of it.
+\`ProShell\` remains a deprecated alias for the same React component and types for at least one major version; existing apps can change names without resetting mounted state.
 
 \`\`\`tsx
 // web/src/App.tsx — a complete minimal app
-import { initPro, ProShell, PageHeader, useDocumentTitle, Button, EmptyState, useToast } from '@proappstore/sdk'
+import { initPro, AppShell, PageHeader, useDocumentTitle, Button, EmptyState, useToast } from '@proappstore/sdk'
 
 const app = initPro({ appId: 'my-app', authMode: 'platform-cookie' })
 
@@ -35,9 +36,9 @@ const NAV = [
 
 export default function App() {
   return (
-    <ProShell app={app} appName="My App" nav={NAV}>
+    <AppShell app={app} appName="My App" nav={NAV}>
       <Screens />
-    </ProShell>
+    </AppShell>
   )
 }
 
@@ -66,7 +67,7 @@ function Cases() {
 
 ### How do I add navigation?
 Pass the screens as \`nav\` — that is the only step. The shell renders \`<nav aria-label="Main">\`, marks the current route (\`aria-current="page"\`, nested routes mark their section), collapses to a menu button below 640 px, and sets a nav item's \`title\` as the tab title.
-- With a router: \`<ProShell … nav={NAV} onNavigate={navigate}>\` — clicks navigate client-side, and the shell scrolls to top / restores on back-forward and moves focus to the new screen's heading.
+- With a router: \`<AppShell … nav={NAV} onNavigate={navigate}>\` — clicks navigate client-side, and the shell scrolls to top / restores on back-forward and moves focus to the new screen's heading.
 - Custom navbar: \`renderNav={({ items, currentPath, onNavigate }) => …}\` (render a \`<nav aria-label="Main">\`).
 - Custom topbar: \`renderTopbar={({ appName, nav, profileMenu, textSizeToggle }) => …}\` — place \`nav\`.
 - Never: navigation inside a page, or a second navbar under the shell.
@@ -77,20 +78,20 @@ Error boundary around the screens (fallback with Try again, error recorded via a
 ### In each screen
 \`<PageHeader title description? actions? />\` (the screen's one h1) · \`useDocumentTitle('…')\` · the SDK components (sdk_reference({ feature: 'components' })).
 
-ProShell props: app, appName, nav, onNavigate, renderNav, allowFree, showThemeToggle, menuItems, hideTopbar, hideFooter, renderTopbar, renderFooter, renderError, renderLoading.
-Full docs: https://docs.proappstore.online/sdk-overview/#proshell-component`,
+AppShell props: app, appName, nav, onNavigate, renderNav, allowFree, showThemeToggle, menuItems, hideTopbar, hideFooter, renderTopbar, renderFooter, renderError, renderLoading.
+Full docs: https://docs.proappstore.online/sdk-overview/#appshell-component`,
     components: `## UI components — what exists (use these, don't hand-roll)
 Everything imports from '@proappstore/sdk' (also '@proappstore/sdk/ui'). All are styled on the platform design tokens, follow light/dark theme, and carry their accessibility.
 
 **App frame and navigation**
-- \`ProShell\` — the app frame: gates, topbar, main navigation (\`nav\`), footer, resilience layer. See sdk_reference({ feature: 'shell' }).
+- \`AppShell\` — the app frame: gates, topbar, main navigation (\`nav\`), footer, resilience layer. See sdk_reference({ feature: 'shell' }).
 - \`NavBar\` — the main navigation on its own (\`items\`, \`currentPath?\`, \`onNavigate?\`), for a \`hideTopbar\` layout.
 - \`PageHeader\` — \`title\`, \`description?\`, \`actions?\`: the screen's single h1.
 - \`useDocumentTitle(title)\` — the tab title for the screen.
 
 **Feedback**
-- \`useToast()\` — \`show(message, { variant: 'info' | 'success' | 'error', duration? })\`, \`dismiss(id)\` (inside ProShell).
-- \`Toast\` — a standalone toast (\`open\`, \`message\`, \`variant?\`, \`onClose\`, \`duration?\`); prefer useToast inside ProShell.
+- \`useToast()\` — \`show(message, { variant: 'info' | 'success' | 'error', duration? })\`, \`dismiss(id)\` (inside AppShell).
+- \`Toast\` — a standalone toast (\`open\`, \`message\`, \`variant?\`, \`onClose\`, \`duration?\`); prefer useToast inside AppShell.
 - \`Spinner\` — \`size?\`, \`color?\`.
 - \`EmptyState\` — \`title\`, \`description?\`, \`icon?\`, \`action?\`.
 - \`useOnline()\` — true/false, for a data screen's offline state.
@@ -104,11 +105,11 @@ Everything imports from '@proappstore/sdk' (also '@proappstore/sdk/ui'). All are
 
 **Account and subscription**
 - \`Avatar\` — \`user\`, \`size?\`. \`SignInButton\` — \`app\`, \`label?\`, \`provider?\`.
-- \`ProfileMenu\` — \`app?\`, \`showThemeToggle?\`, \`showBilling?\` (ProShell already renders one).
+- \`ProfileMenu\` — \`app?\`, \`showThemeToggle?\`, \`showBilling?\` (AppShell already renders one).
 - \`ProProfilePage\` — \`app?\`, \`showThemeToggle?\`: full account page.
 - \`ProBadge\` — \`size?\`. \`SubscriptionStatus\` — \`app?\`, \`showUpgrade?\`. \`UpgradeCard\` — \`app?\`, \`title?\`, \`description?\`, \`priceLabel?\`, \`features?\`. \`BillingButton\` — \`app?\`, \`label?\`, \`variant?\`.
-- \`GateScreen\` — \`gate\`, \`app?\`, \`appName?\` (ProShell uses it for its gates).
-- \`ThemeToggle\`, \`TextSizeToggle\` — the theme and text-size controls (both already in ProShell).
+- \`GateScreen\` — \`gate\`, \`app?\`, \`appName?\` (AppShell uses it for its gates).
+- \`ThemeToggle\`, \`TextSizeToggle\` — the theme and text-size controls (both already in AppShell).
 
 Full docs: https://docs.proappstore.online/ui/`,
     auth: `## Auth
@@ -271,14 +272,14 @@ const { isPro, upgrade, manageBilling } = useProSubscription(app)
 const { gate, user, signIn, upgrade } = useProGate(app)
 const { theme, preference, setPreference } = useTheme()
 const { isSubscribed, subscribe, unsubscribe } = useProNotifications(app)
-const toast = useToast()        // inside ProShell: toast.show('Saved', { variant: 'success' })
+const toast = useToast()        // inside AppShell: toast.show('Saved', { variant: 'success' })
 const online = useOnline()      // false while the connection is down
 useDocumentTitle('Cases — My App')
 \`\`\``,
     ui: `## UI Components
 \`\`\`tsx
 import {
-  initPro, ProShell, NavBar, PageHeader, useDocumentTitle, useToast, useOnline,
+  initPro, AppShell, NavBar, PageHeader, useDocumentTitle, useToast, useOnline,
   Button, Card, Input, Modal, Spinner, EmptyState, Tabs, Toast,
   Avatar, SignInButton, ProBadge, ProfileMenu, ProProfilePage, ThemeToggle, TextSizeToggle,
   SubscriptionStatus, UpgradeCard, BillingButton, GateScreen,
@@ -290,18 +291,18 @@ import {
 // renders <nav aria-label="Main"> in the topbar, marks the current route
 // (aria-current), and collapses to a menu button on small screens. Items are links;
 // render the screen for location.pathname, or pass onNavigate={navigate} with a router.
-<ProShell
+<AppShell
   app={app}
   appName="My App"
   nav={[{ label: 'Home', href: '/' }, { label: 'Cases', href: '/cases' }]}
   menuItems={[{ label: 'Profile', onClick: () => navigate('/profile') }]}
 >
   {children}
-</ProShell>
+</AppShell>
 
 // Custom topbar, keeping the gates: place the rendered \`nav\` with the account controls.
 // (renderNav={({ items, currentPath, onNavigate }) => …} replaces only the navbar.)
-<ProShell
+<AppShell
   app={app}
   appName="My App"
   nav={NAV}
@@ -315,15 +316,15 @@ import {
   )}
 >
   {children}
-</ProShell>
+</AppShell>
 
 // Fully custom shell chrome, while keeping auth/subscription gates (render your own
 // <nav aria-label="Main">, e.g. the exported <NavBar items={NAV} />):
-<ProShell app={app} appName="My App" hideTopbar hideFooter>
+<AppShell app={app} appName="My App" hideTopbar hideFooter>
   {children}
-</ProShell>
+</AppShell>
 
-// Built into ProShell: error boundary (renderError), Suspense spinner for lazy screens
+// Built into AppShell: error boundary (renderError), Suspense spinner for lazy screens
 // (renderLoading), offline banner, skip link to <main id="main">, and — with onNavigate —
 // scroll + focus on route changes. In screens:
 useDocumentTitle('Cases — Support')            // or a \`title\` on the nav item
@@ -366,7 +367,7 @@ Available recipes — copy-paste-ready patterns using the PAS SDK, design system
 
 Use the \`recipe\` MCP tool with a recipe name to get the full code.`,
     design_system: `## Design System (CSS Classes)
-Prefer the SDK components (sdk_reference({ feature: 'components' })) — ProShell, PageHeader, Button, Card, Input, Modal, Tabs, EmptyState — over these classes; use the classes for app-specific layout.
+Prefer the SDK components (sdk_reference({ feature: 'components' })) — AppShell, PageHeader, Button, Card, Input, Modal, Tabs, EmptyState — over these classes; use the classes for app-specific layout.
 The PAS app scaffold includes a design system with CSS custom properties and utility classes in \`src/index.css\`.
 
 ### Colors (CSS variables)

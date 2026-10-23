@@ -11,7 +11,7 @@ edit, parents view; show a spinner until the session is known.
 |---|---|---|
 | session | `initPro({ appId: 'club-roster', authMode: 'platform-cookie' })` in `src/pas.ts` | [PAS-AUTH-001](https://docs.proappstore.online/standard/auth/#pas-auth-001), [PAS-STACK-003](https://docs.proappstore.online/standard/stack/#pas-stack-003) |
 | sign-in | `SignInButton` / `app.auth.signIn('github')`, `app.auth.signIn('google')` | [PAS-AUTH-004](https://docs.proappstore.online/standard/auth/#pas-auth-004) |
-| hydration | `ProShell` (calls `app.auth.init()`); nothing auth-dependent before it settles; surface `app.auth.authError` | [PAS-AUTH-005](https://docs.proappstore.online/standard/auth/#pas-auth-005) |
+| hydration | `AppShell` (calls `app.auth.init()`); nothing auth-dependent before it settles; surface `app.auth.authError` | [PAS-AUTH-005](https://docs.proappstore.online/standard/auth/#pas-auth-005) |
 | sign-out | `ProfileMenu` → `app.auth.signOut()`; clear the roster cache in `app.auth.onChange` | [PAS-AUTH-007](https://docs.proappstore.online/standard/auth/#pas-auth-007) |
 | roles | `coach` (edit), `member` (view own child) — README documents both | [PAS-AUTH-017](https://docs.proappstore.online/standard/auth/#pas-auth-017), [PAS-AUTH-015](https://docs.proappstore.online/standard/auth/#pas-auth-015) |
 

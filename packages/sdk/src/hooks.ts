@@ -246,7 +246,7 @@ export function useGate(app?: ProAppStore, opts?: { allowFree?: boolean }) {
   const sub = useSubscription(app);
 
   // allowFree defaults to true while the platform has no payments wired up —
-  // see ProShell for the matching default. Flip back when Stripe is live.
+  // see AppShell for the matching default. Flip back when Stripe is live.
   const allowFree = opts?.allowFree ?? true;
 
   let gate: 'loading' | 'signed-out' | 'no-subscription' | 'ready';

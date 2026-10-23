@@ -18,7 +18,7 @@ const app = initPro({
 The init call is synchronous and cheap. It does not fetch anything; the
 first network call happens when you read auth state or call an API.
 
-In a React app, pass `app` to [`ProShell`](#proshell-component), which wraps
+In a React app, pass `app` to [`AppShell`](#appshell-component), which wraps
 the whole UI and calls `app.auth.init()` for you.
 
 ## Auth status
@@ -33,9 +33,9 @@ is `pending` (#241):
 - **`signed-out`**: auth resolved without a user, the user signed out, or an
   expired session was cleared (an API 401 signs out at once).
 
-`ProShell`, `useAuth()` (`status`, and `loading` while pending) and
+`AppShell`, `useAuth()` (`status`, and `loading` while pending) and
 `useGate()` already wait for it, so a signed-in refresh never flashes the
-sign-in screen. `ProShell`'s `renderLoading` replaces the neutral state. If
+sign-in screen. `AppShell`'s `renderLoading` replaces the neutral state. If
 you gate on auth yourself, check `loading` (or `status`) before `user`:
 
 ```tsx
@@ -151,7 +151,7 @@ Import from `@proappstore/sdk/hooks`:
 - `useProSubscription(app)` — subscription state + upgrade/manage
 - `useProGate(app, opts)` — combined auth + subscription gate
 
-ProShell already gates the whole app. Use these inside its screens, for
+AppShell already gates the whole app. Use these inside its screens, for
 example `useProGate(app, { allowFree: false })` on a single Pro-only screen.
 
 ## Auth session storage
@@ -401,14 +401,22 @@ Email also has 100/day per app (shared with `app.email.send`) and 10/day per
 recipient. A limit is a `429` and nothing is sent; with `'both'`, the push is
 not sent either. Title is at most 150 characters and body 2,000 for email.
 
-## ProShell component
+<a id="proshell-component"></a>
 
-`ProShell` is the app frame. It handles the sign-in gate, subscription wall,
+## AppShell component
+
+`AppShell` is the app frame. It handles the sign-in gate, subscription wall,
 provider context, topbar (app name, text size, profile menu), footer, and the
 **main navigation**. Import it from `@proappstore/sdk` (or `@proappstore/sdk/shell`).
 
-Every PAS app is wrapped in ProShell, and `pas create` scaffolds it that way
-(see [Getting Started](./getting-started.md#build-your-app-inside-proshell)).
+`ProShell` remains a deprecated alias from both entry points for at least one
+major version. It is the same React component as `AppShell`, so changing the
+import and JSX name does not reset mounted shell or screen state. The legacy
+`ProShellProps`, `ProShellRenderContext`, and `ProShellNavContext` types remain
+aliases of the corresponding `AppShell` types.
+
+Every PAS app is wrapped in AppShell, and `pas create` scaffolds it that way
+(see [Getting Started](./getting-started.md#build-your-app-inside-appshell)).
 Before building on it, read
 [what renders before sign-in](#what-renders-before-sign-in-first-render) and
 [routing](#routing-which-route-changes-the-shell-sees). To move an existing app
@@ -421,7 +429,7 @@ app's main navigation. Do not build navigation into a page, and do not add a
 second bar below the shell.
 
 ```tsx
-<ProShell
+<AppShell
   app={app}
   appName="Cases"
   nav={[
@@ -431,7 +439,7 @@ second bar below the shell.
   ]}
 >
   <Screens />
-</ProShell>
+</AppShell>
 ```
 
 The built-in `NavBar` provides:
@@ -453,7 +461,7 @@ client-side:
 
 ```tsx
 const navigate = useNavigate()
-<ProShell app={app} nav={NAV} onNavigate={navigate}>…</ProShell>
+<AppShell app={app} nav={NAV} onNavigate={navigate}>…</AppShell>
 ```
 
 **Custom navigation.** `renderNav({ items, currentPath, onNavigate })` replaces
@@ -469,7 +477,7 @@ provides `nav` (the rendered navigation), `profileMenu`, `textSizeToggle` and
 consistent:
 
 ```tsx
-<ProShell
+<AppShell
   app={app}
   appName="My App"
   nav={NAV}
@@ -483,23 +491,23 @@ consistent:
   )}
 >
   <MyAppContent />
-</ProShell>
+</AppShell>
 ```
 
 Use `hideTopbar` and `hideFooter` only when the app owns all the chrome and
-still wants the ProShell gates and provider context. The app then provides its
+still wants the AppShell gates and provider context. The app then provides its
 own `<nav aria-label="Main">`.
 
 ### Resilience and feedback (built in)
 
-ProShell also provides the parts every app would otherwise build, or ship
+AppShell also provides the parts every app would otherwise build, or ship
 without. Nothing needs enabling; the props below only customise them.
 
 | What | How you use it |
 |---|---|
 | **Error boundary** around the content: a screen that throws while rendering shows a fallback with **Try again**, not a white screen. The chrome stays. Navigating to another route clears it. | Nothing. The error is recorded via `app.logs` (category `react.error-boundary`, with the component stack). `renderError={({ error, reset }) => …}` replaces the fallback. |
 | **Loading fallback**: a shell-level `<Suspense>` shows the SDK spinner while a lazy screen loads. | `const Cases = lazy(() => import('./Cases'))`. `renderLoading={() => …}` replaces the spinner. |
-| **Toasts**: one polite live region, mounted once. Messages queue (newest four) and dismiss themselves (default 4 s; `duration: 0` stays until dismissed). | `const toast = useToast(); toast.show('Saved', { variant: 'success' })`. Variants are `info`, `success` and `error`. `toast.dismiss(id)`. Must be inside ProShell. |
+| **Toasts**: one polite live region, mounted once. Messages queue (newest four) and dismiss themselves (default 4 s; `duration: 0` stays until dismissed). | `const toast = useToast(); toast.show('Saved', { variant: 'success' })`. Variants are `info`, `success` and `error`. `toast.dismiss(id)`. Must be inside AppShell. |
 | **Offline banner** under the topbar while the connection is down: announced politely, dismissible, cleared on reconnect. | Nothing. Data screens read `useOnline()` for their own offline state ([PAS-UI-019](./standard/ui.md#pas-ui-019)). |
 | **Tab title per route** ([PAS-UI-003](./standard/ui.md#pas-ui-003)). | A `title` on a nav item, or `useDocumentTitle('Case 42 — Cases')` in the screen, which wins. |
 | **One `h1` per screen.** | `<PageHeader title="Cases" description="…" actions={<Button>New</Button>} />` |
@@ -508,7 +516,7 @@ without. Nothing needs enabling; the props below only customise them.
 
 ```tsx
 import { lazy } from 'react'
-import { ProShell, PageHeader, useDocumentTitle, useToast } from '@proappstore/sdk'
+import { AppShell, PageHeader, useDocumentTitle, useToast } from '@proappstore/sdk'
 
 const Cases = lazy(() => import('./Cases'))
 
@@ -530,17 +538,17 @@ regions.
 
 ### What renders before sign-in (first render)
 
-ProShell renders the app, and with it the topbar, navigation, skip link, toast
+AppShell renders the app, and with it the topbar, navigation, skip link, toast
 region and `<main>`, only once its gates pass. Until then it renders
 `GateScreen` alone. Plan for these:
 
 - **Every load waits for two checks.** First the gate spinner
-  shows. Then ProShell calls `app.subscription.status()` once the user is known,
+  shows. Then AppShell calls `app.subscription.status()` once the user is known,
   and renders the app when that returns. The wait happens on every load, even
   with `allowFree` (the default, `true`). If the check fails, an `allowFree` app
   still opens.
 - **A signed-out visitor sees only the sign-in screen**, with no topbar and no
-  navigation. Nothing inside ProShell is public: a screen meant for signed-out
+  navigation. Nothing inside AppShell is public: a screen meant for signed-out
   visitors cannot be one of its children.
 - **`platform-cookie` apps show the sign-in screen for a moment to returning
   users.** The session is hydrated from the cookie after the first render, and
@@ -549,7 +557,7 @@ region and `<main>`, only once its gates pass. Until then it renders
   signed-out state. `legacy-bearer` apps restore a stored session
   synchronously, so they skip this step.
 - **Hooks that need the shell work only in its children.** `useToast` throws
-  outside `<ProShell>`, and the gate screens have no toast region.
+  outside `<AppShell>`, and the gate screens have no toast region.
   `useOnline`, `PageHeader` and `useDocumentTitle` work anywhere.
 - **`allowFree` defaults to `true`.** Pass `allowFree={false}` to require an
   active subscription. The upgrade screen then replaces the whole app, not one
@@ -579,14 +587,14 @@ So:
   ```tsx
   const location = useLocation()
   const navigate = useNavigate()
-  <ProShell
+  <AppShell
     app={app}
     nav={NAV}
     onNavigate={navigate}
     renderNav={({ items, onNavigate }) => (
       <NavBar items={items} currentPath={location.pathname} onNavigate={onNavigate} />
     )}
-  >…</ProShell>
+  >…</AppShell>
   ```
 
 - **Hash routing** (`#/cases`). The shell matches `location.pathname`, which a
@@ -599,9 +607,9 @@ So:
 
 If an app already builds its own frame, such as a `Shell.tsx` or `Layout.tsx`,
 a `<header>` with links, a navbar, or navigation on the Home page, move it onto
-ProShell:
+AppShell:
 
-1. **Wrap the app.** Make `<ProShell app={app} appName="…" nav={NAV}>` the
+1. **Wrap the app.** Make `<AppShell app={app} appName="…" nav={NAV}>` the
    root of `App.tsx`. Keep your screen routing inside it.
 2. **Move navigation into `nav`.** Put every link from the hand-rolled navbar,
    or from the Home page, into `NAV` as `{ label, href, title? }`. Delete the
@@ -652,7 +660,7 @@ app.logs.error('checkout failed', { step: 'confirm' })   // deliberate
 // window.onerror + unhandledrejection are captured automatically
 ```
 
-A render error inside `ProShell` is caught by the shell's error boundary.
+A render error inside `AppShell` is caught by the shell's error boundary.
 React does not rethrow it to `window.onerror`, so the boundary records it
 itself: level `error`, category `react.error-boundary`, with the stack,
 component stack and path.
@@ -785,9 +793,9 @@ anything but the per-install `clientId`.
 - **Error causes.** `describeError` keeps `err.cause`, up to five levels. Each
   level is appended to the stack as a `Caused by:` section with its top frames.
   The outer stack is shortened first, so the root cause survives the size cap.
-- **Your own React error boundary.** ProShell's boundary records render errors
-  already. Outside ProShell, call `captureReactError` from your boundary. The
-  entry is the same as ProShell's, and the SDK still does not depend on React:
+- **Your own React error boundary.** AppShell's boundary records render errors
+  already. Outside AppShell, call `captureReactError` from your boundary. The
+  entry is the same as AppShell's, and the SDK still does not depend on React:
 
   ```tsx
   componentDidCatch(error: Error, info: ErrorInfo) {
