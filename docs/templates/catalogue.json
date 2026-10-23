@@ -21,7 +21,7 @@
         "any"
       ],
       "requires": {
-        "sdk": ">=1.16.0 (template pins ^1.9.0; resolves to the latest 1.x on install)",
+        "sdk": ">=1.16.78",
         "cli": ">=2.6.0",
         "node": ">=22",
         "pnpm": "10.x"
@@ -39,22 +39,20 @@
       ],
       "security_compliance": {
         "status": "reviewed",
-        "reviewed_at": "2026-09-23",
+        "reviewed_at": "2026-10-23",
         "known_deviations": [
-          "PAS-AUTH-001",
-          "PAS-UI-002",
-          "PAS-UI-007"
+          "PAS-AUTH-001"
         ],
-        "notes": "Template actions list_items/get_item are scoped to the calling user (d8c2e08). Known deviations an app must fix on day one: initPro() is called without authMode (PAS-AUTH-001), the theme boot script reads fas:theme instead of stores-theme (PAS-UI-002), and the viewport meta ships user-scalable=no (PAS-UI-007). Tracked for the template repository."
+        "notes": "Reviewed template-app@45c6947: the items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses stores-theme and viewport zoom is allowed. The deploy calls the keyless reusable pipeline. After replacing APPNAME, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long CLAUDE.md. Remaining standard deviation: initPro() omits an explicit authMode (PAS-AUTH-001); set the intended mode when building the app. The reviewed source fixture and migration/action isolation tests are in test/template-app-review.test.ts."
       },
       "maintainer": {
         "org": "proappstore-online",
         "contact": "https://github.com/proappstore-online/platform/issues"
       },
       "release": {
-        "version": "2026.09.23",
-        "source_commit": "d8c2e08f32b8e30847b27c7092fd4b0e64341d2f",
-        "released_at": "2026-09-23"
+        "version": "2026.10.23",
+        "source_commit": "45c69477bcaa1499a11ccf68ac4d6b3c1a80b152",
+        "released_at": "2026-10-23"
       },
       "preview": {
         "docs": "https://docs.proappstore.online/getting-started/",

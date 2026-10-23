@@ -119,7 +119,6 @@ let userCtx: { userId: string | null; login?: string | null; token: string | nul
   login: 'alice',
   token: 'tok-1',
 };
-registerProjectTools(fakeServer as any, env, () => userCtx);
 
 function getText(result: { content: { type: string; text: string }[] }): string {
   return result.content[0]!.text;
@@ -132,6 +131,10 @@ beforeEach(() => {
   userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
   mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {} });
+  // Production constructs a fresh server per request. Keep ownership caches
+  // isolated between scenarios, including a provision followed by a transfer.
+  tools.clear();
+  registerProjectTools(fakeServer as any, env, () => userCtx);
 });
 
 /**
@@ -653,6 +656,54 @@ describe('auth helpers', () => {
     await cachedTools.get('read_file')!({ app_id: 'cached-app', path: 'README.md' });
 
     expect(mockOwnership).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('provisioning_status current health', () => {
+  it('preserves an initial host 404 as history while showing the successful current deployment', async () => {
+    operations.set('smoke', {
+      receipt: 'receipt-smoke', appId: 'smoke', status: 'completed', attemptId: 'attempt-smoke',
+      steps: [{ name: 'host', status: 'pending', detail: 'initial host returned 404; deploy may still be pending' }],
+    });
+    const before = JSON.stringify(operations.get('smoke'));
+    const hostFetch = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const handlers = new Map<string, Handler>();
+    registerProjectTools({ tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => handlers.set(name, handler) } as any,
+      { ...env, HOST: { fetch: hostFetch } as unknown as Fetcher }, () => userCtx);
+    mockGh.getDeployStatus.mockResolvedValue({ ok: true, data: { workflow_runs: [{ name: 'Deploy to R2', status: 'completed', conclusion: 'success', updated_at: '2026-10-23T00:00:00Z' }] } });
+
+    const result = await handlers.get('provisioning_status')!({ app_id: 'smoke' });
+    const out = getText(result);
+
+    expect(result.isError).not.toBe(true);
+    expect(out).toContain('Historical provisioning receipt');
+    expect(out).toContain('~ host: initial host returned 404');
+    expect(out).toContain('+ Deploy to R2: success');
+    expect(out).toContain('Current route health: ok');
+    expect(JSON.stringify(operations.get('smoke'))).toBe(before);
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
+    expect(mockGh.pushFiles).not.toHaveBeenCalled();
+    expect(hostFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not check a route or GitHub when the authorized receipt read fails', async () => {
+    const result = await tools.get('provisioning_status')!({ app_id: 'no-access' });
+    expect(result.isError).toBe(true);
+    expect(mockGh.getDeployStatus).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not expose current private-repo diagnostics to a former app owner who can still read their receipt', async () => {
+    operations.set('transferred-status', {
+      receipt: 'old-receipt', appId: 'transferred-status', status: 'completed', attemptId: 'old-attempt', steps: [],
+    });
+    mockOwnership.mockResolvedValue(false);
+    const result = await tools.get('provisioning_status')!({ app_id: 'transferred-status' });
+    expect(getText(result)).toContain('Receipt: old-receipt');
+    expect(getText(result)).toContain('current app ownership could not be verified');
+    expect(mockGh.getDeployStatus).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

@@ -130,6 +130,7 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | Tool | Description |
 |---|---|
 | `provision_pas_app` | Operator workflow: create or reuse a PAS app GitHub repo from template-app, configure deploy credentials/placeholders, provision platform infrastru… — **confirm**, **dry_run** |
+| `provisioning_status` | Historical provisioning receipt plus timestamped current deployment and route health; read-only, with current ownership required for fresh diagnostics. |
 | `scaffold_app` | Create a new PAS app. — **confirm**, **dry_run** |
 | `write_file` | Create or overwrite a file in a PAS app's GitHub repo. |
 | `read_file` | Read a file from a PAS app's GitHub repo. |

@@ -17,6 +17,7 @@ import { gateMutation, dryRun } from "./safety.js";
 import { BUILD_WITH_PROSHELL } from "./sdk-reference.js";
 import { errText } from "./errors.js";
 import { text, type Text } from "./text-result.js";
+import { readCurrentDeployment } from "./deployment-health.js";
 
 interface ProjectToolsEnv {
   GITHUB_ORG: string;
@@ -242,7 +243,7 @@ export function registerProjectTools(
   // ── provisioning_status ───────────────────────────────────
   server.tool(
     "provisioning_status",
-    "Read the durable receipt and step evidence for a provision_pas_app operation. This never creates infrastructure or changes an app.",
+    "Read historical provisioning evidence plus fresh, current-owner-scoped deployment and route health. This never creates infrastructure or changes an app.",
     { app_id: APP_ID },
     async ({ app_id }) => {
       const auth = requireAuth();
@@ -251,7 +252,18 @@ export function registerProjectTools(
       if (!response.ok || typeof response.data.receipt !== "string" || response.data.status === undefined || !Array.isArray(response.data.steps)) {
         return errText(`Error reading provisioning status for ${app_id}: ${response.data.error ?? `HTTP ${response.status}`}`);
       }
-      return text(formatProvisionOperation(response.data as ProvisionOperationReceipt));
+      // A receipt remains readable by its original creator after a transfer.
+      // Fresh private-repo diagnostics require CURRENT app ownership as well.
+      const ownsCurrentApp = await workflow.ownsApp(app_id, { userId: getUserContext().userId, token: auth.token });
+      const current = ownsCurrentApp
+        ? await readCurrentDeployment(gh, env.HOST, app_id)
+        : "Current deployment and route health: unavailable (current app ownership could not be verified).";
+      return text([
+        "Historical provisioning receipt (recorded during provisioning; not current deployment health):",
+        formatProvisionOperation(response.data as ProvisionOperationReceipt),
+        "",
+        current,
+      ].join("\n"));
     },
   );
 

@@ -196,7 +196,7 @@ const OWNERSHIP_CACHE_TTL_MS = 60_000;
 const COPY_TREE_ATTEMPTS = 5;
 const COPY_TREE_RETRY_MS = 1_000;
 
-const stepIcon = (status: string) => status === "ok" ? "+" : status === "skip" ? "~" : "!";
+const stepIcon = (status: string) => status === "ok" ? "+" : status === "skip" || status === "pending" ? "~" : "!";
 const formatSteps = (steps: ProvisionStep[] = []) =>
   steps.map((s) => `${stepIcon(s.status)} ${s.name}: ${s.detail}`).join("\n");
 

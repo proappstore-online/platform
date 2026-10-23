@@ -82,8 +82,18 @@ From the configured MCP connection call `whoami`, `list_apps` and `list_template
 Verify the expected account and read behavior before consequential operations.
 Use a fresh client session to reload tool schemas after deployment.
 
-For provisioning, use `provisioning_status` to read the durable receipt. Replaying
-`provision_pas_app` against a failed, exhausted or unreconciled receipt returns
+For provisioning, use `provisioning_status` to read the durable receipt and
+separate current deployment/route diagnostics. The historical section preserves
+the original checks, including a host 404 while the first deployment was queued;
+it does not claim that the app is still down. The current section has its own UTC
+check timestamp, the latest GitHub Actions results and a route-health probe
+through the HOST binding. An intentional private-app access gate counts as up.
+Both diagnostics are bounded to five seconds and report unavailable/timeout
+explicitly. Reading status never retries provisioning or updates the receipt.
+An unauthorized receipt read performs no additional diagnostics. Fresh diagnostics
+also require current app ownership: a former owner can still inspect their own
+historical receipt, without reading the new owner's private repository activity.
+Replaying `provision_pas_app` against a failed, exhausted or unreconciled receipt returns
 `isError: true`; pending and completed receipts remain successful status results.
 The legacy `scaffold_app` stops before infrastructure provisioning if template
 configuration fails. Its repository may already exist: inspect the reported repo

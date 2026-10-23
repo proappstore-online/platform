@@ -5,7 +5,7 @@ license: MIT
 compatibility: Works with any Agent Skills client that can read and edit the app repository. Best with the ProAppStore MCP server (https://mcp.proappstore.online/mcp) for the approved template revision, the app's registered actions, migration status and deploy history; otherwise the public docs only. Read-only MCP allow-list — no provisioning, no credentials; edits happen only in the user's repository, one reviewed stage at a time.
 metadata:
   author: proappstore-online
-  version: "1.0"
+  version: "1.1"
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.9"
   issue: proappstore-online/platform#177

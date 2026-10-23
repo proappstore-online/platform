@@ -34,7 +34,7 @@ Every skill is checked, deterministically and on every push, for the ten propert
 | [`proappstore-auth-sessions-roles`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-auth-sessions-roles/SKILL.md) | 1.0 | no | 13 (scenario 9, blocker 4) | 6 / 5 / 3 | 9.2 KB of 12.0 KB | 30.3 KB of 40.0 KB | 49.6 KB of 60.0 KB | `1526700d5221` |
 | [`proappstore-data-migrations-actions`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-data-migrations-actions/SKILL.md) | 1.0 | no | 15 (scenario 10, blocker 5) | 6 / 5 / 3 | 10.0 KB of 12.0 KB | 38.3 KB of 48.0 KB | 59.3 KB of 68.0 KB | `b0e2ceef318c` |
 | [`proappstore-publish-deploy`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-publish-deploy/SKILL.md) | 1.0 | no | 11 (scenario 6, blocker 5) | 6 / 5 / 3 | 11.6 KB of 12.0 KB | 28.0 KB of 40.0 KB | 48.3 KB of 60.0 KB | `895899774adc` |
-| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.0 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.4 KB of 48.0 KB | 55.2 KB of 68.0 KB | `9b7483e91cce` |
+| [`proappstore-upgrade-app`](https://github.com/proappstore-online/platform/blob/main/skills/proappstore-upgrade-app/SKILL.md) | 1.1 | no | 14 (scenario 8, blocker 6) | 6 / 5 / 3 | 10.5 KB of 12.0 KB | 34.4 KB of 48.0 KB | 55.2 KB of 68.0 KB | `ca59c63d1e30` |
 
 Property coverage per skill (the test that holds each property):
 

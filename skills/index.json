@@ -692,7 +692,7 @@
     },
     {
       "name": "proappstore-upgrade-app",
-      "version": "1.0",
+      "version": "1.1",
       "description": "Upgrade an existing ProAppStore app to the current SDK, template and Application Standard without overwriting its product code — inventory the app, compare its dependencies, configuration and workflows with the supported baseline (SDK and CLI versions, Node and pnpm, the approved template revision, the canonical deploy, CI and compliance workflows), find template drift, and prepare a staged upgrade plan covering the platform-cookie session migration, registered actions and migrations, the UI/PWA baseline, MCP tools, tests and rollback. Runs in dry-run report mode by default and in a bounded implementation mode that changes one stage at a time, preserves customer customisations, and requires explicit review before any destructive or broad rewrite. Use when a user asks to upgrade, update, modernise or re-align an existing app on proappstore.online with the latest SDK, template or standard. Not for creating a new app, a release, or a full audit.",
       "license": "MIT",
       "standard-version": "1.9",
@@ -710,8 +710,8 @@
         "qa_list_runs"
       ],
       "mutating": false,
-      "bytes": 56502,
-      "digest": "9b7483e91ccea522b98d0035523d75186179f04fe99e2339a43b1bda26d2f98d",
+      "bytes": 56504,
+      "digest": "ca59c63d1e30c8f8488407406207a39961674062161a364e0aae5e826d24e52e",
       "files": [
         {
           "path": "evals/cases.json",
@@ -740,8 +740,8 @@
         },
         {
           "path": "references/decision-tables.md",
-          "bytes": 10883,
-          "sha256": "cd9efca7f3e41b22cece3cb74dc867ac2bdb6aefee4c835a0b9a8ec3f35d1394"
+          "bytes": 10884,
+          "sha256": "9db948143bc43f45275beac85a5cbc9bce44c7a29b466b99ac806c284c805042"
         },
         {
           "path": "references/negative-cases.md",
@@ -750,8 +750,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 2629,
-          "sha256": "1ac1b91ea6953fd9f7968996944d290202a4dc05593724e9321a68cd06224553"
+          "bytes": 2630,
+          "sha256": "43f13dc2b56c34dbc23358c0d27fa90cc7cacd0a60fb7ad5562b684c107914f9"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -766,7 +766,7 @@
         {
           "path": "SKILL.md",
           "bytes": 10757,
-          "sha256": "e177d521a25c20011cf4e79e527f869d255991af904ff46719f1d3dab4e2cf3f"
+          "sha256": "3c0239d23e7e62ac19a9216a34274e278fe5141774018cb6f7ac8d5fe662e947"
         }
       ],
       "evaluations": {
@@ -787,8 +787,8 @@
         },
         "actual": {
           "skill_md_bytes": 10757,
-          "references_bytes": 35198,
-          "bundle_bytes": 56502
+          "references_bytes": 35200,
+          "bundle_bytes": 56504
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

@@ -1,4 +1,4 @@
-import { env, SELF, runInDurableObject } from "cloudflare:test";
+import { env, SELF, runInDurableObject, fetchMock } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { mintSession } from "@proappstore/build-core";
 import type { OAuthState } from "../../../mcp/src/oauth-state";
@@ -52,6 +52,26 @@ const exchange = ({ code, verifier }: { code: string; verifier: string }) => tok
 const refresh = (value: string) => token({ grant_type: "refresh_token", refresh_token: value, client_id: "runtime-client" });
 
 describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
+  it('keeps the provisioning snapshot historical while reading fresh deployment and host health', async () => {
+    fetchMock.activate();
+    fetchMock.disableNetConnect();
+    fetchMock.get('https://api.github.com').intercept({
+      path: '/repos/proappstore-online/example/actions/runs?per_page=5', method: 'GET',
+    }).reply(200, { workflow_runs: [{ name: 'Deploy to R2', conclusion: 'success', status: 'completed', updated_at: '2026-10-23T00:00:00Z' }] });
+    try {
+      const result = await rpc(await access('gh:1'), 'tools/call', { name: 'provisioning_status', arguments: { app_id: 'example' } });
+      expect(result.body.result.isError).not.toBe(true);
+      const text = result.body.result.content[0].text;
+      expect(text).toContain('Historical provisioning receipt');
+      expect(text).toContain('~ host: Initial host returned 404');
+      expect(text).toContain('+ Deploy to R2: success');
+      expect(text).toContain('Current route health: ok');
+      fetchMock.assertNoPendingInterceptors();
+    } finally {
+      fetchMock.deactivate();
+    }
+  });
+
   it("issues broker credentials through the internal service host using the public issuer", async () => {
     const requestId = `req_${'a'.repeat(43)}`;
     const ownerSession = await session('gh:1');

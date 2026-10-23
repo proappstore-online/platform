@@ -11,7 +11,7 @@
 | Area | Current | Baseline | Drift | Clause |
 |---|---|---|---|---|
 | Node / pnpm | <engines, packageManager> | node >=22, pnpm 10.x | <none | behind | missing> | PAS-STACK-001 |
-| SDK / CLI | <ranges> | sdk >=1.16.0, cli >=2.6.0 | <…> | PAS-STACK-002 |
+| SDK / CLI | <ranges> | sdk >=1.16.78, cli >=2.6.0 | <…> | PAS-STACK-002 |
 | deploy.yml | <canonical | diverged: …> | canonical | <…> | PAS-STACK-005 |
 | ci.yml / compliance.yml | <…> | template gates | <…> | PAS-OPS-004 |
 | Secrets | <gh secret list> | none | <…> | PAS-OPS-006 |

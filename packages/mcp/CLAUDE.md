@@ -45,6 +45,7 @@ Tools marked **confirm** need `confirm: true` to execute; **dry_run** tools acce
 | Tool | Description |
 |------|-------------|
 | `provision_pas_app` | Operator workflow: create/reuse a PAS app GitHub repo from `template-app`, configure deploy variables, provision R2 route + D1 + data worker, and verify status — **confirm**, **dry_run** |
+| `provisioning_status` | Historical receipt plus bounded, timestamped current deployment and route checks. Fresh diagnostics require current app ownership; no mutation. |
 | `scaffold_app` | Legacy create-from-template flow (GitHub repo + R2 route + D1 + data worker) — **confirm**, **dry_run** |
 | `write_file` | Create/overwrite a file in an app's repo (commits to main) |
 | `read_file` | Read a file from an app's repo |

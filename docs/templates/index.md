@@ -61,7 +61,7 @@ one made before this, is approved with its provenance recorded as unknown
 
 | id | repo@ref | status | reviewed commit | categories | requires | known deviations |
 |---|---|---|---|---|---|---|
-| `template-app` (default) | `proappstore-online/template-app@main` | approved | `d8c2e08f32b8` (2026.09.23) | any | sdk >=1.16.0, cli >=2.6.0, node >=22, pnpm 10.x | [PAS-AUTH-001](../standard/auth.md#pas-auth-001), [PAS-UI-002](../standard/ui.md#pas-ui-002), [PAS-UI-007](../standard/ui.md#pas-ui-007) |
+| `template-app` (default) | `proappstore-online/template-app@main` | approved | `45c69477bcaa` (2026.10.23) | any | sdk >=1.16.78, cli >=2.6.0, node >=22, pnpm 10.x | [PAS-AUTH-001](../standard/auth.md#pas-auth-001) |
 | `template-marketplace` | `proappstore-online/template-marketplace@main` | approved | `4b000c9967db` (2026.09.25) | marketplace, real-estate, lifestyle, business, social | sdk >=1.16.61, cli >=2.6.0, node >=22, pnpm 10.x | none |
 
 ### `template-app` — ProAppStore app template
@@ -69,7 +69,7 @@ one made before this, is approved with its provenance recorded as unknown
 The canonical Pro app scaffold: React 19 + Vite 8 + Tailwind 4 web/ workspace, @proappstore/sdk, registered actions (mcp.json), additive D1 migrations (migrations.json), PWA manifest and service worker, the keyless deploy / CI / compliance workflows, and the design tokens. Suits any app category.
 
 - **Capabilities:** platform-auth, registered-actions, d1-migrations, pwa, design-tokens, keyless-oidc-deploy, ci-typecheck, compliance-workflow, app-shell
-- **Security / compliance:** reviewed on 2026-09-23. Template actions list_items/get_item are scoped to the calling user (d8c2e08). Known deviations an app must fix on day one: initPro() is called without authMode (PAS-AUTH-001), the theme boot script reads fas:theme instead of stores-theme (PAS-UI-002), and the viewport meta ships user-scalable=no (PAS-UI-007). Tracked for the template repository.
+- **Security / compliance:** reviewed on 2026-10-23 at `45c69477bcaa1499a11ccf68ac4d6b3c1a80b152`. The items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses `stores-theme`, viewport zoom is allowed, and deployment uses the keyless reusable pipeline. After replacing `APPNAME`, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long `CLAUDE.md`. The remaining standard deviation is [PAS-AUTH-001](../standard/auth.md#pas-auth-001): `initPro()` omits an explicit `authMode`; set the intended mode when building the app. The reviewed source fixture and migration/action isolation tests are in `test/template-app-review.test.ts`.
 - **Maintainer:** proappstore-online — https://github.com/proappstore-online/platform/issues
 - **Preview:** https://docs.proappstore.online/getting-started/
 - **Deprecation:** none
@@ -136,6 +136,15 @@ placeholder. To publish one (an org owner creates the repository, since members 
    `node scripts/build-template-catalogue.mjs` to regenerate `catalogue.json`.
 
 ## Adding, deprecating, withdrawing
+
+A newer template head needs a fresh review before advancing its reviewed
+revision. For `template-app`, preserve the relevant source files verbatim in
+`test/fixtures/template-app-review.json`, together with the exact commit and
+review date. Run the source compliance checks after substituting `APPNAME` and
+the migration/action isolation checks in `test/template-app-review.test.ts`.
+Update the actual requirements and remaining deviations in the catalogue, then
+regenerate its public JSON and update this guide. Do not remove a deviation just
+because the template head changed.
 
 A template enters the catalogue only after it exists as a GitHub template
 repository in `proappstore-online`, passes `pas check`, has been audited

@@ -73,7 +73,7 @@
     },
     {
       "name": "provisioning_status",
-      "description": "Read the durable provisioning receipt, current state, and completed step evidence for one PAS app."
+      "description": "Read historical provisioning evidence plus fresh, current-owner-scoped deployment and route health."
     },
     {
       "name": "scaffold_app",
