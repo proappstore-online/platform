@@ -9,9 +9,9 @@
  * last hours not days, and never hold the admin role.
  */
 import { Hono } from 'hono';
-import { mintSession, type NewSession } from '@proappstore/build-core';
+import { internalTokenOk, mintSession, type NewSession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { HttpError, requireUser } from '../lib/auth.js';
+import { HttpError, isAdminId, requireUser } from '../lib/auth.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
 import { CHESS_REPOSITORY, isChessRepository } from '../lib/app-deploy-oidc.js';
 
@@ -120,9 +120,11 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
 });
 
 // ── Grant management: platform admins only ─────────────────────────
-async function requireAdmin(c: Parameters<typeof requireUser>[0]) {
+async function requireGrantAdmin(c: Parameters<typeof requireUser>[0]) {
   const user = await requireUser(c);
-  if (!user.roles.includes('admin')) throw new HttpError('requires platform admin', 403);
+  const trustedMcpAdmin = internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)
+    && isAdminId(user.id, c.env);
+  if (!user.roles.includes('admin') && !trustedMcpAdmin) throw new HttpError('requires platform admin', 403);
   return user;
 }
 
@@ -132,7 +134,7 @@ const grantView = (g: GrantRow) => ({
 });
 
 oidcSessionRoutes.get('/admin/oidc-session-grants', async (c) => {
-  await requireAdmin(c);
+  await requireGrantAdmin(c);
   const rows = await c.env.DB.prepare(
     'SELECT id, repository, workflow, ref, user_id, label, created_by, created_at, revoked_at, last_minted_at, mint_count FROM oidc_session_grants ORDER BY created_at DESC LIMIT 500',
   ).all<GrantRow>();
@@ -141,11 +143,11 @@ oidcSessionRoutes.get('/admin/oidc-session-grants', async (c) => {
 });
 
 oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
-  const admin = await requireAdmin(c);
+  const admin = await requireGrantAdmin(c);
   const body = await c.req.json<{ repository?: unknown; user_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown }>().catch(() => null);
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
   if (typeof body.repository !== 'string' || (!REPO_RE.test(body.repository) && body.repository !== CHESS_REPOSITORY)) throw new HttpError(`repository must be ${ORG}/<repo> or ${CHESS_REPOSITORY}`, 400);
-  if (typeof body.user_id !== 'string' || !/^gh:\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> account', 400);
+  if (typeof body.user_id !== 'string' || !/^(?:gh|google):\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> or google:<id> account', 400);
   const workflow = body.workflow === undefined || body.workflow === null ? null : String(body.workflow);
   if (workflow !== null && !WORKFLOW_RE.test(workflow)) throw new HttpError('workflow must be a .github/workflows/<file>.yml path', 400);
   const ref = body.ref === undefined || body.ref === null ? 'refs/heads/main' : String(body.ref);
@@ -166,7 +168,7 @@ oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
 });
 
 oidcSessionRoutes.delete('/admin/oidc-session-grants/:id', async (c) => {
-  await requireAdmin(c);
+  await requireGrantAdmin(c);
   const result = await c.env.DB.prepare('UPDATE oidc_session_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
     .bind(Date.now(), c.req.param('id')!).run();
   if (!result.meta?.changes) throw new HttpError('grant not found', 404);

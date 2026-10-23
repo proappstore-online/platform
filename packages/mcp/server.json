@@ -286,6 +286,18 @@
     {
       "name": "find_apps",
       "description": "Read-only: search the app directory you can reach (and your drafts) by id, name, live/store/repo URL or custom domain; filter by lifecycle and access; an exact id reports yours/accessible/unclaimed/reserved/exists_inaccessible; optional live route health."
+    },
+    {
+      "name": "list_oidc_session_grants",
+      "description": "Platform admins only: list GitHub Actions OIDC e2e session grants and their mint history."
+    },
+    {
+      "name": "create_oidc_session_grant",
+      "description": "Platform admins only: authorize a repository workflow/ref to mint short-lived non-admin creator sessions as a dedicated smoke account; confirm: true; dry_run."
+    },
+    {
+      "name": "revoke_oidc_session_grant",
+      "description": "Platform admins only: revoke an OIDC e2e session grant so future exchanges are denied; confirm: true; dry_run."
     }
   ],
   "_meta": {
@@ -317,7 +329,9 @@
           "apply_admin_update",
           "request_ownership_transfer",
           "respond_ownership_transfer",
-          "resolve_ownership_request"
+          "resolve_ownership_request",
+          "create_oidc_session_grant",
+          "revoke_oidc_session_grant"
         ],
         "dry_run_supported": [
           "delete_file",
@@ -330,7 +344,9 @@
           "apply_admin_update",
           "add_marketing_site",
           "request_ownership_transfer",
-          "respond_ownership_transfer"
+          "respond_ownership_transfer",
+          "create_oidc_session_grant",
+          "revoke_oidc_session_grant"
         ],
         "audit": "every mutating call, dry-run and read-only denial is recorded per user (90 days, secrets redacted); read it with mcp_audit_log",
         "errors": "failures return isError: true"
@@ -421,6 +437,11 @@
           "respond_ownership_transfer",
           "request_ownership_recovery",
           "resolve_ownership_request"
+        ],
+        "OIDC e2e grants": [
+          "list_oidc_session_grants",
+          "create_oidc_session_grant",
+          "revoke_oidc_session_grant"
         ]
       },
       "docs": {

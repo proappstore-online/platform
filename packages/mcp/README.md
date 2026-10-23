@@ -83,7 +83,7 @@ fetched over HTTPS without credentials or redirects. Other clients use `/registe
 
 ## Tools
 
-68 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
+71 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
 checked against `server.json` by `src/server-json.test.ts`). Tools marked
 **confirm** refuse unless called with `confirm: true`; **dry_run** tools accept
 `dry_run: true` to return the plan without changing anything.
@@ -210,6 +210,16 @@ Every rule is the backend's (`/v1/apps/:appId/ownership`); ownership moves only 
 | `respond_ownership_transfer` | `accept` (needs `confirm`) or `decline` a transfer offered to you; `cancel` one you sent or a recovery request you filed; `escalate` a stuck transfer to a platform admin — **confirm** (accept), **dry_run** (accept) |
 | `request_ownership_recovery` | A verified non-owner asks a platform admin to recover an app created under another sign-in, with evidence. Never moves ownership by itself; the owner is not told who asked |
 | `resolve_ownership_request` | Platform admins: `approve` (needs `confirm`) or `reject` an escalated request with a required reason, recorded in the audit record. Never to yourself; refused if the owner changed since filing — **confirm** (approve) |
+
+### OIDC e2e session grants (platform admin only)
+
+These tools manage the narrow authorization that lets one GitHub Actions workflow mint a four-hour, non-admin creator session as a dedicated smoke account. The MCP OAuth session remains de-privileged: the backend permits these calls only when the valid caller is a configured immutable platform-admin ID and the request also carries the trusted MCP worker credential.
+
+| Tool | Description |
+|---|---|
+| `list_oidc_session_grants` | List active and revoked grants, their exact repository/workflow/ref scope, target account and mint history. Read-only. |
+| `create_oidc_session_grant` | Grant an existing GitHub or Google OAuth smoke account to one repository, optionally narrowed to a workflow, and a full git ref (default `refs/heads/main`) — **confirm**, **dry_run** |
+| `revoke_oidc_session_grant` | Revoke a grant so future exchanges fail; already-minted short sessions expire normally — **confirm**, **dry_run** |
 
 ## Safety
 

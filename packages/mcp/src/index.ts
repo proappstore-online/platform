@@ -18,6 +18,7 @@ import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
+import { registerOidcSessionTools } from "./oidc-session-tools.js";
 import { installToolMetadata } from "./tool-metadata.js";
 import { createAuthChallenge } from "./oauth-provider.js";
 export { OAuthState } from "./oauth-state.js";
@@ -109,6 +110,12 @@ export async function createPasMcpServer(env: Env, props: Record<string, unknown
 
     // ── App directory discovery, read-only (#424) ───────────────
     registerDirectoryTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Platform-admin GitHub Actions OIDC e2e grants (#475) ───
+    registerOidcSessionTools(server, env, () => ({
       userId: userId,
       token: userToken,
     }));

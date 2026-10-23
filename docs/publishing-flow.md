@@ -40,13 +40,24 @@ SQL is rejected with 422.
 
 A workflow that drives the deployed app as a signed-in user (a nightly e2e
 suite) gets its session the same keyless way it gets its deploy credentials
-(#146). A platform admin grants the repository once:
+(#146). A platform admin grants the repository once through the official PAS
+MCP, after checking `whoami`:
 
 ```
-POST /v1/admin/oidc-session-grants
-{ "repository": "proappstore-online/chess-academy",
-  "workflow": ".github/workflows/e2e-full.yml", "user_id": "gh:<e2e account>" }
+create_oidc_session_grant {
+  "repository": "proappstore-online/chess-academy",
+  "workflow": ".github/workflows/e2e-full.yml",
+  "user_id": "gh:<e2e account> or google:<e2e account>",
+  "confirm": true
+}
 ```
+
+Preview first by omitting `confirm` or setting `dry_run: true`; do not call the
+private admin endpoint directly. The MCP session remains de-privileged. The
+backend accepts grant management only when the caller's immutable ID is a
+configured platform admin and the call also comes from the trusted MCP worker.
+Use `list_oidc_session_grants` to verify scope and
+`revoke_oidc_session_grant` when the workflow or smoke account is retired.
 
 Then the workflow (with `permissions: id-token: write`) exchanges its OIDC
 token — nothing stored in the repo:

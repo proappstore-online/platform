@@ -7,12 +7,13 @@ read_file list_files search_files get_deploy_status list_projects get_project li
 get_project_files agent_project_status agent_board agent_activity agent_ticket_detail agent_cost
 qa_list_flows qa_list_runs qa_run_artifacts qa_flow_playwright inspect_admin_console
 list_admin_capabilities preview_admin_console propose_admin_update validate_admin_security
-ownership_status find_apps`.split(/\s+/));
+ownership_status find_apps list_oidc_session_grants`.split(/\s+/));
 
 const DESTRUCTIVE = new Set(`call_app_tool provision_pas_app scaffold_app write_file delete_file
 provision_app publish_app batch_write_files write_project_files delete_project_files deploy_project
 set_project_budget set_project_running set_model update_ticket build_knowledge_base qa_save_flow
-qa_delete_flow apply_admin_update respond_ownership_transfer resolve_ownership_request`.split(/\s+/));
+qa_delete_flow apply_admin_update respond_ownership_transfer resolve_ownership_request
+create_oidc_session_grant revoke_oidc_session_grant`.split(/\s+/));
 
 /** A shared tool's behavior is fixed even when one invocation is a dry-run. */
 export function platformToolAnnotations(name: string): ToolAnnotations {

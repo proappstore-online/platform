@@ -45,7 +45,7 @@ function mockD1(...stmts: ReturnType<typeof mockStmt>[]) {
   prepare.mockReturnValue(mockStmt());
   return { prepare, batch: vi.fn().mockResolvedValue([]) };
 }
-const makeEnv = (db: ReturnType<typeof mockD1>) => sharedMakeEnv({ ADMIN_GITHUB_IDS: 'gh:42' }, db);
+const makeEnv = (db: ReturnType<typeof mockD1>, overrides: Record<string, unknown> = {}) => sharedMakeEnv({ ADMIN_GITHUB_IDS: 'gh:42', INTERNAL_TOKEN: 'internal-secret', ...overrides }, db);
 const grant = (o: Record<string, unknown> = {}) => ({ id: 'g1', repository: REPO, workflow: null, ref: 'refs/heads/main', user_id: 'gh:42', label: 'nightly', created_by: 'gh:1', created_at: 1, revoked_at: null, last_minted_at: null, mint_count: 3, ...o });
 const e2eUser = () => mockStmt({ first: { id: 'gh:42', login: 'e2e-bot', avatar_url: null } });
 const exchange = (bearer: string | null) =>
@@ -143,6 +143,19 @@ describe('POST /v1/auth/exchange/oidc (#146)', () => {
 });
 
 describe('admin grant management', () => {
+  it('allows the configured admin through trusted MCP without promoting the MCP session', async () => {
+    const admin = await testToken('gh:42', { roles: ['user'] });
+    const other = await testToken('gh:2', { roles: ['user'] });
+    const request = (token: string, internal?: string) => ({
+      headers: { Authorization: `Bearer ${token}`, ...(internal ? { 'X-Internal-Token': internal } : {}) },
+    });
+
+    expect((await app.request('/v1/admin/oidc-session-grants', request(admin, 'internal-secret'), makeEnv(mockD1()))).status).toBe(200);
+    expect((await app.request('/v1/admin/oidc-session-grants', request(admin), makeEnv(mockD1()))).status).toBe(403);
+    expect((await app.request('/v1/admin/oidc-session-grants', request(admin, 'wrong'), makeEnv(mockD1()))).status).toBe(403);
+    expect((await app.request('/v1/admin/oidc-session-grants', request(other, 'internal-secret'), makeEnv(mockD1()))).status).toBe(403);
+  });
+
   it('allows an admin to grant the transferred repository, but not its other org repositories', async () => {
     const admin = await testToken('gh:1', { roles: ['user', 'creator', 'admin'] });
     for (const [repository, status] of [['ChessClubs-online/chess-clubs', 201], ['ChessClubs-online/other-app', 400]] as const) {
@@ -171,6 +184,11 @@ describe('admin grant management', () => {
     const g = ((await created.json()) as { grant: Record<string, unknown> }).grant;
     expect(g).toMatchObject({ repository: REPO, user_id: 'gh:42', workflow: '.github/workflows/e2e-full.yml', ref: 'refs/heads/main', label: 'nightly', created_by: 'gh:1', mint_count: 0 });
     expect(insert.bind.mock.calls[0]![0]).toBe(g.id);
+
+    const googleBody = { ...body, user_id: 'google:110736373305646082562' };
+    const google = await app.request('/v1/admin/oidc-session-grants', json(ADMIN, 'POST', googleBody), makeEnv(mockD1(mockStmt({ first: { id: googleBody.user_id } }), mockStmt())));
+    expect(google.status).toBe(201);
+    expect(((await google.json()) as { grant: { user_id: string } }).grant.user_id).toBe(googleBody.user_id);
 
     for (const bad of [{ ...body, repository: 'evil-org/x' }, { ...body, user_id: 'octo' }, { ...body, workflow: 'e2e.yml' }, { ...body, ref: 'main' }]) {
       expect((await app.request('/v1/admin/oidc-session-grants', json(ADMIN, 'POST', bad), makeEnv(mockD1()))).status).toBe(400);
