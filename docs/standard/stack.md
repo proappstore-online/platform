@@ -56,7 +56,7 @@ clause that says why.
 | Send email, SMS, webhooks | `app.email`, `app.sms`, `app.webhooks` | SendGrid/Resend/Twilio from the browser | [019](#pas-stack-019) |
 | Charge for Pro features | Platform subscription: `useProGate`, `GateScreen`, `app.license` | Own Stripe/Paddle checkout, per-app prices | [020](#pas-stack-020) |
 | See failures in production | `app.logs` (auto) | GA/Mixpanel/PostHog/Sentry-style trackers | [021](#pas-stack-021) |
-| Build an accessible app shell | `@proappstore/sdk/ui`, design tokens | Brand overrides, custom fonts | [022](#pas-stack-022) |
+| Build an accessible app shell | `@proappstore/sdk/ui`, design tokens | Brand overrides | [022](#pas-stack-022) |
 | Let an AI agent operate it | The same `mcp.json` actions via `mcp.proappstore.online` | A second agent API or own MCP server | [023](#pas-stack-023) |
 | Add a library | Pure client-side libraries without network credentials | Any substitute in the table above | [024](#pas-stack-024) |
 | Run code on a schedule, hold server-authoritative state, bind services | Pro-tier platform capabilities — see the [Data chapter](./data.md) | Own Workers deployed with `wrangler` | [004](#pas-stack-004) |
@@ -859,11 +859,11 @@ initPro({ appId: 'my-app', monitoring: { auto: false } })
 
 **Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · **Since:** 1.1
 
-**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
+**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 
-**Rationale.** The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. They do not require platform marketing in the app UI.
+**Rationale.** The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts. They do not require platform marketing in the app UI.
 
 **Recommended implementation.** Wrap the whole app in `<AppShell app={app} branding="app" nav={…}>…</AppShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
 
@@ -881,7 +881,7 @@ export default () => (
 **Non-conforming example.**
 
 ```ts
-:root { --brand-primary: #ff0000; font-family: "Comic Sans MS"; }   /* overrides brand tokens; no dark scheme */
+:root { --brand-primary: #ff0000; }   /* overrides brand tokens; no dark scheme */
 ```
 
 **Evidence.** Source: `@proappstore/sdk/ui` imports; CSS overriding brand variables; `web/index.html` fonts and meta; `pas check` output.

@@ -1043,7 +1043,7 @@ Supporting links: [SDK overview — monitoring](../sdk-overview.md#monitoring), 
 URL: https://docs.proappstore.online/standard/stack/#pas-stack-022
 Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · Since: 1.1
 
-Rule: The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens, fonts and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
+Rule: The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 *
 
@@ -1051,7 +1051,7 @@ Applicability: All apps with a user interface.
 
 *
 
-Rationale: The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. They do not require platform marketing in the app UI.
+Rationale: The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts. They do not require platform marketing in the app UI.
 
 *
 
@@ -1071,7 +1071,7 @@ export default () => (
 *
 
 Non-conforming example: ```ts
-:root { --brand-primary: #ff0000; font-family: "Comic Sans MS"; }   /* overrides brand tokens; no dark scheme */
+:root { --brand-primary: #ff0000; }   /* overrides brand tokens; no dark scheme */
 ```
 
 *
@@ -3275,7 +3275,7 @@ URL: https://docs.proappstore.online/standard/ui/
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-001
 Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*; platform CI design-system lint (`scripts/check-design-system.sh`) · Since: 1.4 · Kind: Quality
 
-Rule: The app SHOULD build its chrome with `AppShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
+Rule: The app SHOULD build its chrome with `AppShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens). It MUST NOT redefine those tokens or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 *
 
@@ -3283,7 +3283,7 @@ Applicability: All apps with a user interface.
 
 *
 
-Rationale: One design system is what makes the store feel like one product and lets the components carry accessible behaviour the app would otherwise re-implement. Aliases split the token set and defeat the lint; overrides change the brand per app.
+Rationale: One design system is what makes the store feel like one product and lets the components carry accessible behaviour the app would otherwise re-implement. Aliases split the token set and defeat the lint; overrides change the brand per app. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts. The brand fonts (Manrope body, Fraunces display) remain the template default, and *No brand overrides* no longer inspects `font-family`.
 
 *
 
@@ -3299,12 +3299,11 @@ Conforming example: ```css
 
 Non-conforming example: ```css
 :root { --accent: #ff0000; --bg: #fff; }         /* override + banned alias */
-h1 { font-family: "Comic Sans MS"; }
 ```
 
 *
 
-Evidence: Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
+Evidence: Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
 
 *
 

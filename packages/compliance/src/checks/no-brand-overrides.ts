@@ -4,19 +4,20 @@ import type { CheckResult } from '../types.js';
 import { extOf, lineNumberAt } from '../lib/source-text.js';
 
 /**
- * Apps and games on the platform must look consistent with the storefront
- * and with each other — brand colors, fonts, and layout rhythm come from
- * the template, not the app. This check fails on the most common forms of
- * brand-override drift:
+ * Brand colour tokens come from the template, not the app. This check fails
+ * when an app redefines a platform-defined CSS variable (--paper, --ink,
+ * --accent, --line, --line-strong, --panel, --muted) outside the canonical
+ * theme file; such a redefinition changes the brand colours per app.
  *
- *   1. Custom CSS variable overrides for the platform-defined tokens
- *      (--paper, --ink, --accent, --line, --panel, --muted). These are
- *      defined by the template; an app redefining them changes the brand.
- *   2. Custom font-family declarations beyond the brand stack
- *      (Manrope, Fraunces) and the system / monospace fallbacks.
+ * Fonts are deliberately NOT checked here. The font rule has to stay for FAS
+ * (Free App Store), because those store apps need to look consistent with
+ * each other. PAS (ProAppStore) doesn't: every app is different, so apps may
+ * use their own licensed fonts. The font half of this check was therefore
+ * removed from the PAS compliance package only.
  *
  * What's allowed:
  *   - Using the variables (color: var(--accent)) — that's the whole point.
+ *   - Any font-family declaration.
  *   - Hardcoded colors for non-brand purposes (highlight states, error
  *     red, etc.). We don't try to gate every hex literal — too noisy and
  *     too many false positives.
@@ -29,11 +30,9 @@ export async function checkNoBrandOverrides(source: FileSource): Promise<CheckRe
     if (!SCANNED_EXTS.has(ext)) continue;
     const raw = await source.read(path);
     if (!raw) continue;
-    // Strip comment bodies so a `// font-family: "Comic Sans"` note
-    // doesn't fire. Preserve string-literal contents — the JSX value
-    // `fontFamily: "Comic Sans"` IS a string literal and is the thing
-    // we're auditing. For .css/.scss use the css-only stripper (no `//`
-    // syntax at the language level).
+    // Strip comment bodies so a commented-out `--accent: red` note doesn't
+    // fire. For .css/.scss use the css-only stripper (no `//` syntax at the
+    // language level).
     const content =
       ext === '.css' || ext === '.scss' ? stripCssComments(raw) : stripCommentsOnly(raw);
     // Canonical theme file: the platform's CSS variables ARE defined here.
@@ -53,7 +52,7 @@ export async function checkNoBrandOverrides(source: FileSource): Promise<CheckRe
     return {
       name: 'No brand overrides',
       status: 'pass',
-      detail: 'apps inherit colors + fonts from the template',
+      detail: 'apps inherit brand colour tokens from the template',
     };
   }
   return {
@@ -64,7 +63,6 @@ export async function checkNoBrandOverrides(source: FileSource): Promise<CheckRe
       ...issues.slice(0, 5),
       ...(issues.length > 5 ? [`...and ${issues.length - 5} more`] : []),
       'Use the template tokens (var(--accent), var(--ink), etc.) instead of redefining them.',
-      'Brand fonts are Manrope (body) + Fraunces (display). Stick to those + system / monospace.',
     ],
   };
 }
@@ -79,51 +77,6 @@ const PROTECTED_VARS = new Set([
   '--line',
   '--line-strong',
   '--panel',
-]);
-
-/**
- * Whitelist of font-family declarations we accept. Anything outside this
- * set — for ANY font name not in the brand stack and not a generic /
- * system fallback — flags. The check is case-insensitive.
- */
-const ALLOWED_FONT_TOKENS = new Set([
-  // Brand stack
-  'manrope',
-  'fraunces',
-  // Generic/system fallbacks (CSS keywords)
-  'serif',
-  'sans-serif',
-  'monospace',
-  'system-ui',
-  'ui-monospace',
-  'ui-serif',
-  'ui-sans-serif',
-  'inherit',
-  'initial',
-  'unset',
-  'revert',
-  // Common system stack names — these are aliases, not custom fonts.
-  '-apple-system',
-  'blinkmacsystemfont',
-  'segoe ui',
-  'roboto',
-  'helvetica',
-  'helvetica neue',
-  'arial',
-  'sf mono',
-  'sf pro',
-  'menlo',
-  'monaco',
-  'consolas',
-  'liberation mono',
-  'courier',
-  'courier new',
-  'georgia',
-  'noto sans',
-  'noto color emoji',
-  'apple color emoji',
-  'segoe ui emoji',
-  'segoe ui symbol',
 ]);
 
 export function scanContent(
@@ -146,95 +99,5 @@ export function scanContent(
     }
   }
 
-  // 2. font-family overrides.
-  // Capture the value of every font-family / fontFamily declaration, then
-  // extract candidate font names. JSX values can be ternaries
-  // (`fontFamily: isFoo ? "Fraunces" : "Manrope"`), so we pull out every
-  // quoted string in the value and check each one separately. If there are
-  // no quoted strings, the value is treated as a CSS-style comma list
-  // (`font-family: Comic Sans, serif`).
-  // Patterns:
-  //   - `font-family:` (kebab-case + colon) — real CSS rule
-  //   - `fontFamily:` (camelCase + colon) — JSX inline style object property
-  //   - `fontFamily=` (camelCase + equals) — JSX attribute on a styled component
-  // Deliberately NOT matched: `font-family=` (kebab + equals). That form
-  // only legitimately appears as an SVG/HTML attribute, and in practice
-  // shows up most often inside JS template-literal SVG generators —
-  // greedily slicing those values picks up adjacent SVG attributes
-  // (`font-size="280"`, `fill="rgba(...)"`) as fake "font candidates"
-  // and false-positives. Real SVG-in-JSX with kebab fontFamily is rare
-  // enough to skip.
-  const fontHeadRe = /(font-family\s*:|fontFamily\s*[:=])/g;
-  const quotedRe = /(['"`])([^'"`\n]+)\1/g;
-  let m: RegExpExecArray | null;
-  while ((m = fontHeadRe.exec(content)) !== null) {
-    const isJsx = m[1]!.startsWith('fontFamily');
-    const start = m.index + m[0].length;
-    const value = sliceFontValue(content, start, isJsx);
-    const quotedStrings = [...value.matchAll(quotedRe)].map((x) => x[2]!);
-    const candidates = quotedStrings.length > 0 ? quotedStrings : [value];
-    let flagged = false;
-    for (const cand of candidates) {
-      const tokens = cand
-        .split(',')
-        .map((t) =>
-          t
-            .trim()
-            .replace(/^["']|["']$/g, '')
-            .toLowerCase(),
-        )
-        .filter(Boolean);
-      for (const t of tokens) {
-        if (!ALLOWED_FONT_TOKENS.has(t)) {
-          const line = lineNumberAt(content, m.index);
-          out.push(`${filename}:${line} non-brand font "${t}"`);
-          flagged = true;
-          break;
-        }
-      }
-      if (flagged) break;
-    }
-  }
-
   return out;
-}
-
-/**
- * Walk forward from `start` until we hit the end of the font-family value.
- *
- * CSS values end at `;` or `}` or newline.
- * JSX values end at `}` or at a `,` followed by another identifier+colon
- * (the next style property). Commas inside quoted strings or before
- * non-identifiers (e.g. font fallbacks) are part of the value.
- */
-function sliceFontValue(content: string, start: number, isJsx: boolean): string {
-  let i = start;
-  let quote: string | null = null;
-  while (i < content.length) {
-    const c = content[i]!;
-    if (quote) {
-      if (c === '\\') {
-        i += 2;
-        continue;
-      }
-      if (c === quote) quote = null;
-      i++;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      quote = c;
-      i++;
-      continue;
-    }
-    if (c === '\n' || c === ';' || c === '}') break;
-    if (isJsx && c === ',') {
-      // Lookahead: is this `,` followed by `identifier:`? If yes, end of value.
-      let j = i + 1;
-      while (j < content.length && (content[j] === ' ' || content[j] === '\t')) j++;
-      const rest = content.slice(j, j + 64);
-      if (/^[A-Za-z_$][\w$]*\s*:/.test(rest)) break;
-    }
-    i++;
-  }
-  return content.slice(start, i);
 }

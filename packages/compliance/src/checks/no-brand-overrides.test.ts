@@ -47,93 +47,33 @@ describe('scanContent (unit)', () => {
     expect(issues).toEqual([]);
   });
 
-  it('flags a non-brand font-family in CSS', () => {
-    const issues = scanContent(
-      'web/src/index.css',
-      `
-      h1 { font-family: "Cormorant Garamond", serif; }
-    `,
-    );
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatch(/cormorant garamond/);
-  });
-
-  it('flags a non-brand font in inline JSX styles', () => {
-    const issues = scanContent(
-      'web/src/App.tsx',
-      `
-      <h1 style={{ fontFamily: "Sora, sans-serif" }} />
-    `,
-    );
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatch(/sora/);
-  });
-
-  it('does not consume sibling JSX style props when scanning fontFamily value', () => {
-    // Regression: previously matched through the `,` separator into `color:`
-    // and tried to validate `"var(--success)"` as a font-family token.
-    const issues = scanContent(
-      'web/src/App.tsx',
-      `
-      <h2 style={{ fontFamily: "Fraunces, serif", color: "var(--success)" }} />
-    `,
-    );
-    expect(issues).toEqual([]);
-  });
-
-  it('handles a JSX ternary fontFamily without false-positiving on the predicate', () => {
-    // Regression: the prefix `isGiven ?` used to be parsed as a font name
-    // because the opening quote in the regex was optional.
-    const issues = scanContent(
-      'web/src/App.tsx',
-      `
-      const s = { fontFamily: isGiven ? "Fraunces, serif" : "Manrope, system-ui, sans-serif" };
-    `,
-    );
-    expect(issues).toEqual([]);
-  });
-
-  it('flags a non-brand branch inside a ternary fontFamily', () => {
-    const issues = scanContent(
-      'web/src/App.tsx',
-      `
-      const s = { fontFamily: isGiven ? "Cormorant Garamond" : "Manrope" };
-    `,
-    );
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatch(/cormorant garamond/);
-  });
-
-  it('accepts brand fonts and system fallbacks', () => {
-    const issues = scanContent(
-      'web/src/index.css',
-      `
-      body { font-family: "Manrope", system-ui, sans-serif; }
-      h1 { font-family: Fraunces, Georgia, serif; }
-      code { font-family: "SF Mono", Menlo, monospace; }
-    `,
-    );
-    expect(issues).toEqual([]);
-  });
-
   it('reports line numbers', () => {
     const issues = scanContent('web/src/index.css', `\n\n:root { --paper: red; }\n`);
     expect(issues[0]).toMatch(/:3 /);
   });
 
-  it('does NOT false-positive on SVG-in-template-literal `font-family="..."`', () => {
-    // Regression: a JS template literal generating SVG markup uses
-    // `font-family="Georgia,serif"` as an SVG attribute. Earlier the
-    // CSS-style slicer would read past the value into adjacent
-    // attributes (`font-size="280"`, `fill="rgba(...)"`) and flag those
-    // numeric / color strings as "fonts". The fix: only kebab-case
-    // `font-family:` (with colon) matches; the equals form is skipped
-    // since it almost always appears inside string templates.
-    const issues = scanContent(
-      'web/src/lib/seed.ts',
-      'export const svg = `<text font-family="Georgia,serif" font-size="280" fill="rgba(0,0,0,0.5)">x</text>`;',
+  it('does not flag any font-family (PAS apps may use their own licensed fonts)', () => {
+    // The font rule stays in FAS (store apps must look consistent with each
+    // other) but not in PAS: every app is different, so apps may use their
+    // own licensed fonts.
+    const css = scanContent(
+      'web/src/components/Type.css',
+      `
+      h1 { font-family: "Comic Sans MS", cursive; }
+      code { font-family: SFMono-Regular, Consolas, monospace; }
+      `,
     );
-    expect(issues).toEqual([]);
+    expect(css).toEqual([]);
+    const tsx = scanContent(
+      'web/src/AppStyle.tsx',
+      [
+        "const m = css.match(/font-family:\\s*'([^']+)'/);",
+        'const s = `body { font-family: \'${t.fontBody}\', serif; }`;',
+        "<h1 style={{ fontFamily: 'Comic Sans MS' }} />",
+        "<p style={{ fontFamily: `${t.fontDisplay}, serif` }} />",
+      ].join('\n'),
+    );
+    expect(tsx).toEqual([]);
   });
 });
 
@@ -170,21 +110,22 @@ describe('checkNoBrandOverrides (integration)', () => {
     expect(r.status).toBe('pass');
   });
 
-  it('fails when an app uses non-brand fonts', async () => {
+  it('passes when an app uses its own fonts', async () => {
     const dir = await fixture({
       'web/src/App.tsx': `
         const h1 = <h1 style={{ fontFamily: "Cormorant Garamond, serif" }} />;
       `,
+      'web/src/components/Code.css': `code { font-family: SFMono-Regular, "Comic Sans MS"; }`,
     });
     const r = await checkNoBrandOverrides(fsFileSource(dir));
-    expect(r.status).toBe('fail');
+    expect(r.status).toBe('pass');
   });
 
   // --- comment-stripping regression guards ---
 
-  it('does NOT flag a font-family mention inside a // comment', async () => {
+  it('does NOT flag a CSS-variable override inside a // comment', async () => {
     const dir = await fixture({
-      'web/src/App.tsx': '// font-family: "Comic Sans" — used to be here\nexport {};',
+      'web/src/App.tsx': '// :root { --accent: hotpink; } — used to be here\nexport {};',
     });
     const r = await checkNoBrandOverrides(fsFileSource(dir));
     expect(r.status).toBe('pass');

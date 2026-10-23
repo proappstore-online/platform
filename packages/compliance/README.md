@@ -50,7 +50,7 @@ There is also a separate live-URL audit (`auditLive`, exported from
 | `No tracking SDKs` | No reference to any of the known trackers (google-analytics, gtag, amplitude, mixpanel, segment, hotjar, plausible, posthog) — hardened word-boundary matching via the shared `TRACKERS` / `matchedTrackers` | **fail** |
 | `Brand fonts present` | Manrope + Fraunces referenced in CSS or HTML | **fail** |
 | `Brand tokens defined` | Canonical brand CSS custom properties (`--paper`, `--ink`, `--accent`, …) are defined in theme CSS | **fail** |
-| `No brand overrides` | App does not redefine the platform-defined brand tokens/fonts | **fail** |
+| `No brand overrides` | App does not redefine the platform-defined brand colour tokens (fonts are not checked: FAS keeps its font rule because its store apps must look consistent with each other; PAS apps are each different and may use their own licensed fonts) | **fail** |
 | `No scroll (games only)` | Games fit the viewport — no document-level scroll (games only; skipped for non-games) | **fail** / warn |
 | `Viewport support` | Declares supported screens + orientations for the storefront coverage badge | **fail** / warn |
 | `No unsafe 100vh` | No bare `100vh` (breaks on iOS Safari with the URL bar visible) | warn |

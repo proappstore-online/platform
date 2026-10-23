@@ -136,7 +136,7 @@
       "automation": "partial",
       "evidenceClass": "source",
       "scope": "all",
-      "limits": "Common override forms only; the banned alias names themselves are caught by the platform design-system lint, not here.",
+      "limits": "Brand colour-token redefinitions only; the banned alias names themselves are caught by the platform design-system lint, not here. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts.",
       "live": false
     },
     {

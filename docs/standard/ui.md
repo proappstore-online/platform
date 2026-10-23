@@ -105,11 +105,11 @@ provides and are not restated here.
 
 **Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*; platform CI design-system lint (`scripts/check-design-system.sh`) · **Since:** 1.4 · **Kind:** Quality
 
-**Rule.** The app SHOULD build its chrome with `AppShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens) and the brand fonts (Manrope body, Fraunces display). It MUST NOT redefine those tokens, add other font families, or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
+**Rule.** The app SHOULD build its chrome with `AppShell` or the composable `@proappstore/sdk/ui` components and MUST style with the canonical tokens (`--paper`, `--ink`, `--accent`, `--line`, `--panel`, `--muted`, the status and radius tokens). It MUST NOT redefine those tokens or use the banned aliases `--bg`, `--surface`, `--border`, `--glass`, `--dock`. An app MAY have no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 
-**Rationale.** One design system is what makes the store feel like one product and lets the components carry accessible behaviour the app would otherwise re-implement. Aliases split the token set and defeat the lint; overrides change the brand per app.
+**Rationale.** One design system is what makes the store feel like one product and lets the components carry accessible behaviour the app would otherwise re-implement. Aliases split the token set and defeat the lint; overrides change the brand per app. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts. The brand fonts (Manrope body, Fraunces display) remain the template default, and *No brand overrides* no longer inspects `font-family`.
 
 **Recommended implementation.** Wrap the whole app in `<AppShell app={app} nav={…}>`. It provides the topbar, the main navigation, the gates and the resilience layer. Build screens from `PageHeader`, `Button`, `Card`, `Input`, `Modal`, `Tabs`, `EmptyState` and `useToast`. For custom chrome, use AppShell's `renderTopbar` and compose `ProfileMenu`, `ThemeToggle` and `Avatar` in it. Use hooks inside screens, still on the tokens. Use `var(--accent)` etc. in app CSS; never assign to them.
 
@@ -123,10 +123,9 @@ provides and are not restated here.
 
 ```css
 :root { --accent: #ff0000; --bg: #fff; }         /* override + banned alias */
-h1 { font-family: "Comic Sans MS"; }
 ```
 
-**Evidence.** Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments and `font-family` declarations in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
+**Evidence.** Source: `@proappstore/sdk` / `@proappstore/sdk/ui` imports; token assignments in `web/src/**/*.css` and inline styles; `pas check` output for the four checks. Apps scaffolded before `template-app` `1297e90` still *define* the banned aliases in `index.css` as compatibility mappings. Delete them; an app MUST NOT reference them.
 
 **Remediation.** Adopt the components; delete overrides and alias references; run `pas check` and `bash scripts/check-design-system.sh web` until clean.
 

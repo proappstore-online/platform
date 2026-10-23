@@ -245,18 +245,16 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
         "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
       },
     ],
-    "detail": "2 apparent overrides",
+    "detail": "1 apparent override",
     "evidence": {
       "class": "source",
-      "detail": "2 apparent overrides",
+      "detail": "1 apparent override",
     },
     "name": "No brand overrides",
     "status": "fail",
     "suggestions": [
       "web/src/extra.css:4 redefines --accent (template owns this token)",
-      "web/src/index.css:5 non-brand font "comic sans ms"",
       "Use the template tokens (var(--accent), var(--ink), etc.) instead of redefining them.",
-      "Brand fonts are Manrope (body) + Fraunces (display). Stick to those + system / monospace.",
     ],
   },
   {

@@ -62,7 +62,7 @@ export const CHECKS: readonly CheckMeta[] = [
   { id: 'brand-tokens', name: 'Brand tokens defined', clauses: ['PAS-UI-001', 'PAS-STACK-022'], automation: 'partial', evidenceClass: 'source', scope: 'all',
     limits: 'That the canonical tokens are defined; not that the app uses them instead of hard-coded colours.' },
   { id: 'no-brand-overrides', name: 'No brand overrides', clauses: ['PAS-UI-001', 'PAS-STACK-022'], automation: 'partial', evidenceClass: 'source', scope: 'all',
-    limits: 'Common override forms only; the banned alias names themselves are caught by the platform design-system lint, not here.' },
+    limits: 'Brand colour-token redefinitions only; the banned alias names themselves are caught by the platform design-system lint, not here. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn\'t — every app is different, so apps may use their own licensed fonts.' },
   { id: 'no-scroll', name: 'No scroll (games only)', clauses: ['PAS-UI-009'], automation: 'partial', evidenceClass: 'source', scope: 'games',
     limits: 'Games only; static CSS anti-patterns. Real document scroll is measured only in a browser.' },
   { id: 'viewport-support', name: 'Viewport support', clauses: ['PAS-UI-008'], automation: 'partial', evidenceClass: 'configuration', scope: 'all',
