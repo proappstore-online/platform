@@ -413,10 +413,33 @@ function traceIdOf(header: string | undefined): string | null {
   return /^00-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(header?.trim().toLowerCase() ?? '')?.[1] ?? null;
 }
 
+/** Expected database rejections are safe 4xx answers. Never return arbitrary
+ * D1/trigger text: it may contain SQL, schema names or caller values. Only exact
+ * standard conflict signals get a more specific, fixed response. */
+function constraintResponse(err: Error): { status: 409 | 422; error: string; errorCode: string } | null {
+  const match = /^D1_ERROR: ([\s\S]+): SQLITE_CONSTRAINT(?:_[A-Z]+)?$/.exec(err.message);
+  if (!match) return null;
+  if (match[1] === 'stale revision' || match[1] === 'stale organisation revision') {
+    return { status: 409, error: 'stale revision', errorCode: 'stale_revision' };
+  }
+  if (match[1] === 'operation key conflict') {
+    return { status: 409, error: 'operation key conflict', errorCode: 'operation_conflict' };
+  }
+  return { status: 422, error: 'action rejected by database constraint', errorCode: 'constraint_violation' };
+}
+
 app.onError((err, c) => {
   const origin = corsOrigin(c.req.header('Origin'));
   if (err instanceof HTTPException) {
     const res = c.json({ error: err.message }, err.status);
+    setCorsHeaders(res, origin);
+    return res;
+  }
+  const rejection = constraintResponse(err);
+  if (rejection) {
+    const { status, ...body } = rejection;
+    const res = c.json(body, status);
+    res.headers.set('Cache-Control', 'no-store');
     setCorsHeaders(res, origin);
     return res;
   }

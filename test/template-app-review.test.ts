@@ -21,12 +21,12 @@ describe('reviewed base-template contract', () => {
     expect(template.requires.sdk).toBe(`>=${pkg.dependencies['@proappstore/sdk'].replace(/^\^/, '')}`);
   });
 
-  it('documents only the remaining auth-mode deviation, not the fixed theme or zoom issues', () => {
+  it('selects host-owned cookie sessions and retains the fixed theme and zoom behaviour', () => {
     const html = review.files['web/index.html']!;
     expect(html).toContain("localStorage.getItem('stores-theme')");
     expect(html).not.toMatch(/fas:theme|user-scalable\s*=\s*no|maximum-scale\s*=\s*1/);
-    expect(review.files['web/src/App.tsx']).not.toMatch(/authMode\s*:/);
-    expect(template.security_compliance.known_deviations).toEqual(['PAS-AUTH-001']);
+    expect(review.files['web/src/App.tsx']).toMatch(/authMode\s*:\s*'platform-cookie'/);
+    expect(template.security_compliance.known_deviations).toEqual([]);
   });
 
   it('can migrate and execute all registered actions with caller isolation', () => {

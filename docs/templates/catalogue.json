@@ -40,10 +40,8 @@
       "security_compliance": {
         "status": "reviewed",
         "reviewed_at": "2026-10-23",
-        "known_deviations": [
-          "PAS-AUTH-001"
-        ],
-        "notes": "Reviewed template-app@45c6947: the items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses stores-theme and viewport zoom is allowed. The deploy calls the keyless reusable pipeline. After replacing APPNAME, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long CLAUDE.md. Remaining standard deviation: initPro() omits an explicit authMode (PAS-AUTH-001); set the intended mode when building the app. The reviewed source fixture and migration/action isolation tests are in test/template-app-review.test.ts."
+        "known_deviations": [],
+        "notes": "Reviewed template-app@715f404: the items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses stores-theme and viewport zoom is allowed. The deploy calls the keyless reusable pipeline. After replacing APPNAME, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long CLAUDE.md. The starter explicitly selects platform-cookie authentication; no known standard deviations remain in this reviewed scaffold. The reviewed source fixture and migration/action isolation tests are in test/template-app-review.test.ts."
       },
       "maintainer": {
         "org": "proappstore-online",
@@ -51,7 +49,7 @@
       },
       "release": {
         "version": "2026.10.23",
-        "source_commit": "45c69477bcaa1499a11ccf68ac4d6b3c1a80b152",
+        "source_commit": "715f404ac689488c129faaae7de8a248431c34c7",
         "released_at": "2026-10-23"
       },
       "preview": {

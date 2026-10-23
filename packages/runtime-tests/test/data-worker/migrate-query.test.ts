@@ -27,9 +27,25 @@ describe('data worker with a real D1', () => {
       { sql: 'INSERT INTO items (id, owner_id, title, created_at) VALUES (?, ?, ?, ?)', params: ['i2', 'gh:owner', 'second', 2] },
       { sql: 'INSERT INTO items (id, owner_id, title, created_at) VALUES (?, ?, ?, ?)', params: ['i1', 'gh:owner', 'dup', 3] },
     ] }));
-    expect(batch.status).toBeGreaterThanOrEqual(400);
+    expect(batch.status).toBe(422);
+    expect(await batch.json()).toEqual({ error: 'action rejected by database constraint', errorCode: 'constraint_violation' });
     const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM items').first<{ n: number }>();
     expect(count?.n).toBe(1);
+  });
+
+  it.each([
+    ['stale revision', 409, 'stale revision', 'stale_revision'],
+    ['operation key conflict', 409, 'operation key conflict', 'operation_conflict'],
+    ['private trigger value', 422, 'action rejected by database constraint', 'constraint_violation'],
+  ])('returns a safe %s rejection and rolls back the complete D1 batch', async (signal, status, error, errorCode) => {
+    await env.DB.exec(`CREATE TABLE guarded (id TEXT PRIMARY KEY); CREATE TRIGGER reject_guarded BEFORE INSERT ON guarded WHEN NEW.id = 'reject' BEGIN SELECT RAISE(ABORT, '${signal}'); END;`);
+    const response = await SELF.fetch('https://data/batch', internal({ statements: [
+      { sql: 'INSERT INTO guarded VALUES (?)', params: ['first'] },
+      { sql: 'INSERT INTO guarded VALUES (?)', params: ['reject'] },
+    ] }));
+    expect(response.status, await response.clone().text()).toBe(status);
+    expect(await response.json()).toEqual({ error, errorCode });
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM guarded').first<{ n: number }>())?.n).toBe(0);
   });
 
   it('schema coherence: /validate compiles statements against the live schema and names a missing column', async () => {

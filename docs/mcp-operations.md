@@ -5,6 +5,22 @@ platform tools. App endpoints use `/mcp/apps/<app_id>` and expose that app's
 registered actions plus identity and audit tools. See [connection setup and app
 tools](mcp-app-tools.md) for client instructions.
 
+## Action rejection contract
+
+Registered actions propagate safe data-worker validation responses through MCP
+with `isError: true`. A rejected D1 constraint returns HTTP 422 with
+`errorCode: "constraint_violation"` and a fixed message; SQL, schema names, values
+and arbitrary trigger text remain private. Exact trigger signals `stale revision`
+(also `stale organisation revision`) and `operation key conflict` return HTTP 409
+with `stale_revision` and `operation_conflict` respectively. Apps can use those
+signals for optimistic concurrency and idempotency conflicts. Rejected D1 batches
+roll back every statement. Schema defects and infrastructure failures remain
+safe 5xx errors; their outcome may require reconciliation before retrying.
+
+The data-worker script is embedded into the platform deployment. Existing app
+workers need an owner-authorised `provision_app` preview and execution to receive
+the new script; no migration or data reset is needed.
+
 ## Deployment and state
 
 The source lives in `platform/packages/mcp`, not a standalone MCP repository.

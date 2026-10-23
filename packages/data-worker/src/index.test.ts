@@ -549,7 +549,6 @@ describe("fault verdict and trace context (#394)", () => {
 
   it.each([
     ["D1_ERROR: no such column: emial: SQLITE_ERROR", "tenant"],
-    ["D1_ERROR: UNIQUE constraint failed: users.email: SQLITE_CONSTRAINT", "tenant"],
     ["near \"SELEC\": syntax error", "tenant"],
     ["D1_TYPE_ERROR: Type 'object' not supported for value '[object Object]'", "tenant"],
     ["D1_ERROR: Network connection lost.", "platform"],
@@ -564,6 +563,22 @@ describe("fault verdict and trace context (#394)", () => {
     // Its own log line names the trace, route pattern and verdict.
     expect(errSpy).toHaveBeenCalledWith("Unhandled error:", expect.objectContaining({ traceId: "ab".repeat(16), route: "/query", fault }));
     errSpy.mockRestore();
+  });
+
+  it.each([
+    ['stale revision', 409, 'stale revision', 'stale_revision'],
+    ['stale organisation revision', 409, 'stale revision', 'stale_revision'],
+    ['operation key conflict', 409, 'operation key conflict', 'operation_conflict'],
+    ['UNIQUE constraint failed: users.private_email', 422, 'action rejected by database constraint', 'constraint_violation'],
+    ['reporting cycle', 422, 'action rejected by database constraint', 'constraint_violation'],
+    ['employment periods overlap', 422, 'action rejected by database constraint', 'constraint_violation'],
+    ['private user value: stale revision', 422, 'action rejected by database constraint', 'constraint_violation'],
+  ])('safely returns the expected rejection for %s', async (message, status, error, errorCode) => {
+    const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(`D1_ERROR: ${message}: SQLITE_CONSTRAINT`) as never, INTERNAL_TOKEN));
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error, errorCode });
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    expect(res.headers.get('X-PAS-Fault')).toBeNull();
   });
 
   it("a body that is not JSON is a client fault", async () => {

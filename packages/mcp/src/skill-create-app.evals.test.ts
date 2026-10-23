@@ -159,19 +159,23 @@ describe('create-proappstore-app — catalogue-driven template guidance (#357)',
   });
 
   it('derives selected-template follow-ups from the catalogue rather than a fixed deviation list', () => {
-    const templateApp = byId('template-app');
-    expect(followUpsFor(templateApp)).not.toEqual([]);
     expect(skill).toMatch(/selected entry's current\n`security_compliance\.known_deviations` from `list_templates`/i);
     expect(skill).toContain('include follow-ups only for those listed deviations');
 
     // A static clause list in the skill would drift as the selected template
     // changes. Its only contract is to read the selected catalogue entry.
-    for (const template of approvedTemplates) {
+    // Keep a deviation-bearing case even when all live templates are clean.
+    const withDeviation: CatalogueTemplate = {
+      ...byId('template-app'),
+      security_compliance: { known_deviations: ['PAS-AUTH-001'] },
+    };
+    for (const template of [...approvedTemplates, withDeviation]) {
       for (const deviation of followUpsFor(template)) expect(skill).not.toContain(deviation);
     }
   });
 
   it('creates no deviation remediation tasks for an approved no-deviation template', () => {
+    expect(followUpsFor(byId('template-app'))).toEqual([]);
     const marketplace = byId('template-marketplace');
     expect(marketplace.release.source_commit).toBe('4b000c9967dbd7981e4d45cbfdfffba680beb8e7');
     expect(followUpsFor(marketplace)).toEqual([]);

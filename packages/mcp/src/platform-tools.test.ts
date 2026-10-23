@@ -33,7 +33,8 @@ describe('list_templates', () => {
     const out = await text();
     expect(out).toContain('unknown/withdrawn templates are rejected');
     expect(out).toContain('https://docs.proappstore.online/templates/catalogue.json');
-    expect(out).toContain('known deviations: PAS-AUTH-001');
+    const baseTemplate = out.split('## template-app (default)')[1]!.split('\n## ')[0];
+    expect(baseTemplate).toContain('known deviations: none');
   });
 
   it('hides non-approved entries unless asked', async () => {

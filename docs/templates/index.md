@@ -61,7 +61,7 @@ one made before this, is approved with its provenance recorded as unknown
 
 | id | repo@ref | status | reviewed commit | categories | requires | known deviations |
 |---|---|---|---|---|---|---|
-| `template-app` (default) | `proappstore-online/template-app@main` | approved | `45c69477bcaa` (2026.10.23) | any | sdk >=1.16.78, cli >=2.6.0, node >=22, pnpm 10.x | [PAS-AUTH-001](../standard/auth.md#pas-auth-001) |
+| `template-app` (default) | `proappstore-online/template-app@main` | approved | `715f404ac689` (2026.10.23) | any | sdk >=1.16.78, cli >=2.6.0, node >=22, pnpm 10.x | none |
 | `template-marketplace` | `proappstore-online/template-marketplace@main` | approved | `4b000c9967db` (2026.09.25) | marketplace, real-estate, lifestyle, business, social | sdk >=1.16.61, cli >=2.6.0, node >=22, pnpm 10.x | none |
 
 ### `template-app` — ProAppStore app template
@@ -69,7 +69,7 @@ one made before this, is approved with its provenance recorded as unknown
 The canonical Pro app scaffold: React 19 + Vite 8 + Tailwind 4 web/ workspace, @proappstore/sdk, registered actions (mcp.json), additive D1 migrations (migrations.json), PWA manifest and service worker, the keyless deploy / CI / compliance workflows, and the design tokens. Suits any app category.
 
 - **Capabilities:** platform-auth, registered-actions, d1-migrations, pwa, design-tokens, keyless-oidc-deploy, ci-typecheck, compliance-workflow, app-shell
-- **Security / compliance:** reviewed on 2026-10-23 at `45c69477bcaa1499a11ccf68ac4d6b3c1a80b152`. The items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses `stores-theme`, viewport zoom is allowed, and deployment uses the keyless reusable pipeline. After replacing `APPNAME`, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long `CLAUDE.md`. The remaining standard deviation is [PAS-AUTH-001](../standard/auth.md#pas-auth-001): `initPro()` omits an explicit `authMode`; set the intended mode when building the app. The reviewed source fixture and migration/action isolation tests are in `test/template-app-review.test.ts`.
+- **Security / compliance:** reviewed on 2026-10-23 at `715f404ac689488c129faaae7de8a248431c34c7`. The items migration matches all three registered actions; reads are caller-scoped. The theme boot script uses `stores-theme`, viewport zoom is allowed, and deployment uses the keyless reusable pipeline. After replacing `APPNAME`, 20 source compliance checks pass; two warnings remain for the unbuilt bundle and long `CLAUDE.md`. The starter explicitly selects `authMode: 'platform-cookie'`, resolving [PAS-AUTH-001](../standard/auth.md#pas-auth-001); no known standard deviations remain in this reviewed scaffold. The reviewed source fixture and migration/action isolation tests are in `test/template-app-review.test.ts`.
 - **Maintainer:** proappstore-online — https://github.com/proappstore-online/platform/issues
 - **Preview:** https://docs.proappstore.online/getting-started/
 - **Deprecation:** none

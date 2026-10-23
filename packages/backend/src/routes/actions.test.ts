@@ -562,6 +562,8 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
       .mockResolvedValueOnce(new Response('{"error":"constraint failed"}', { status: 409, headers: { 'Content-Type': 'application/json' } })));
     const failedWrite = await call(claim());
     expect(failedWrite.status).toBe(409);
+    expect(await failedWrite.json()).toEqual({ error: 'constraint failed' });
+    expect(failedWrite.headers.get('Cache-Control')).toBe('no-store');
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('not json', { status: 200 })));
     expect((await call(claim())).status).toBe(502);
