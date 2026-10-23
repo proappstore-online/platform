@@ -52,6 +52,53 @@ const exchange = ({ code, verifier }: { code: string; verifier: string }) => tok
 const refresh = (value: string) => token({ grant_type: "refresh_token", refresh_token: value, client_id: "runtime-client" });
 
 describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
+  it('accepts the official native Codex client metadata in the Workers runtime', async () => {
+    const clientId = 'https://chatgpt.com/oauth/codex/client.json';
+    fetchMock.activate();
+    fetchMock.disableNetConnect();
+    fetchMock.get('https://chatgpt.com').intercept({ path: '/oauth/codex/client.json', method: 'GET' }).reply(200, {
+      client_id: clientId, client_uri: 'https://chatgpt.com/codex', application_type: 'native',
+      redirect_uris: ['http://127.0.0.1/callback', 'http://localhost/callback'],
+      token_endpoint_auth_method: 'none', token_endpoint_auth_methods_supported: ['none'],
+      grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], client_name: 'Codex',
+      logo_uri: 'https://persistent.oaistatic.com/sonic/misc/openai-logo.png',
+    });
+    try {
+      const query = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: 'http://127.0.0.1:49152/callback', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', resource: `${origin}/mcp` });
+      const response = await SELF.fetch(`${origin}/authorize?${query}`);
+      const body = await response.text();
+      expect(response.status, body).toBe(200);
+      expect(body).toContain('Connect ProAppStore');
+      fetchMock.assertNoPendingInterceptors();
+    } finally {
+      fetchMock.deactivate();
+    }
+  });
+
+  it('rejects redirected client metadata without fetching the redirect destination', async () => {
+    const clientId = 'https://chatgpt.com/redirected-client.json';
+    let destinationCalls = 0;
+    fetchMock.activate();
+    fetchMock.disableNetConnect();
+    fetchMock.get('https://chatgpt.com').intercept({ path: '/redirected-client.json', method: 'GET' })
+      .reply(302, '', { headers: { Location: 'https://untrusted.example/client.json' } });
+    fetchMock.enableNetConnect(host => {
+      if (host.includes('untrusted.example')) destinationCalls++;
+      return false; // Observe attempted outbound connections without allowing one.
+    });
+    try {
+      const query = new URLSearchParams({ client_id: clientId, response_type: 'code', redirect_uri: 'http://127.0.0.1:49152/callback', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' });
+      const response = await SELF.fetch(`${origin}/authorize?${query}`);
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe('invalid client_id');
+      expect(destinationCalls).toBe(0);
+      fetchMock.assertNoPendingInterceptors();
+    } finally {
+      fetchMock.disableNetConnect();
+      fetchMock.deactivate();
+    }
+  });
+
   it('keeps the provisioning snapshot historical while reading fresh deployment and host health', async () => {
     fetchMock.activate();
     fetchMock.disableNetConnect();

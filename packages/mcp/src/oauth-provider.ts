@@ -432,7 +432,9 @@ async function clientMetadata(clientId: string, config: OAuthConfig): Promise<st
     const url = new URL(clientId);
     const hosts = config.clientMetadataHosts ?? ["chatgpt.com", "claude.ai"];
     if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port || !hosts.includes(url.hostname)) return null;
-    const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5_000), headers: { Accept: "application/json" } });
+    // Workers does not implement redirect: "error". Manual mode prevents any
+    // follow-up fetch; the non-2xx check below rejects redirected metadata.
+    const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(5_000), headers: { Accept: "application/json" } });
     if (!response.ok) return null;
     const raw = await response.text();
     if (raw.length > 65_536) return null;

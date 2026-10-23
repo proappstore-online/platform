@@ -912,7 +912,7 @@ describe('OAuth client interoperability and validation', () => {
     const query = new URLSearchParams({ client_id: id, response_type: 'code', redirect_uri: 'http://127.0.0.1:49152/callback', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' });
     for (let i = 0; i < 2; i++) expect((await handleOAuthRoute(new Request(`https://mcp.proappstore.online/authorize?${query}`), config))?.status).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'error', headers: { Accept: 'application/json' } });
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'manual', headers: { Accept: 'application/json' } });
   });
 
   it('does not fetch client metadata from an untrusted host', async () => {

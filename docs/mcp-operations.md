@@ -56,6 +56,9 @@ rollback must preserve `OAuthState`, its binding, tombstones and resource checks
 - Public clients may dynamically register. Trusted HTTPS client metadata documents
   are supported for hosts in `OAUTH_CIMD_HOSTS`; redirects, credentials and
   untrusted-host fetches are refused. Other clients use dynamic registration.
+  The fetch uses Workers-supported `redirect: "manual"` and rejects non-2xx
+  responses. Do not use `redirect: "error"`: Workers throws before fetching,
+  causing valid native clients such as Codex to fail with `invalid client_id`.
 - Refreshes rotate to one successor. A retry within 30 seconds returns the same
   pair with its remaining access lifetime; later reuse revokes the family.
   `/revoke` implements client-bound revocation. App grants can also be revoked
