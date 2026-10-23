@@ -72,6 +72,9 @@ function fixtureAuth(path, authorization, body) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (env.STUB_NAME === 'outbound-echo' && url.href === 'https://proappstore.online/catalogue.json') {
+      return Response.json({ apps: [{ id: 'seo-public', name: 'Public App', description: 'Approved public description', appUrl: 'https://seo-public.proappstore.online' }] });
+    }
     const headers = {};
     for (const [k, v] of request.headers) headers[k] = v;
     const body = request.method === 'GET' || request.method === 'HEAD' ? null : await request.text();

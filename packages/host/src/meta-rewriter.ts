@@ -9,6 +9,10 @@ import type { ListingMeta } from "./host.js";
 
 export interface SocialMeta extends ListingMeta {
   title?: string | null;
+  fallbackTitle?: string | null;
+  fallbackDescription?: string | null;
+  /** Only an approved public root or declared public page_meta path qualifies. */
+  canonical?: boolean;
   /** The app is private (#259): stamp VISIBILITY_META_TAG so the SDK keeps file URLs same-origin. */
   private?: boolean;
 }
@@ -41,6 +45,7 @@ export class MetaTagTracker {
   readonly found = new Set<string>();
   private meta: SocialMeta;
   private canonicalUrl: string;
+  appCanonical?: string;
   constructor(meta: SocialMeta, canonicalUrl: string) {
     this.meta = meta;
     this.canonicalUrl = canonicalUrl;
@@ -49,21 +54,27 @@ export class MetaTagTracker {
   /** HTML to inject before </head> for any tags not already in the document. */
   missingTagsHtml(): string {
     const parts: string[] = [];
-    if (this.meta.title) {
-      if (!this.found.has("title"))
-        parts.push(`<title>${esc(this.meta.title)}</title>`);
+    const title = this.meta.title || this.meta.fallbackTitle;
+    const description = this.meta.tagline || this.meta.fallbackDescription;
+    const canonical = this.appCanonical || this.canonicalUrl;
+    if (this.meta.canonical && !this.meta.private && !this.found.has("canonical"))
+      parts.push(`<link rel="canonical" href="${esc(canonical)}">`);
+    if (this.meta.private && !this.found.has("robots"))
+      parts.push('<meta name="robots" content="noindex, nofollow">');
+    if (title) {
+      if (!this.found.has("title")) parts.push(`<title>${esc(title)}</title>`);
       if (!this.found.has("og:title"))
-        parts.push(`<meta property="og:title" content="${esc(this.meta.title)}">`);
+        parts.push(`<meta property="og:title" content="${esc(title)}">`);
       if (!this.found.has("twitter:title"))
-        parts.push(`<meta name="twitter:title" content="${esc(this.meta.title)}">`);
+        parts.push(`<meta name="twitter:title" content="${esc(title)}">`);
     }
-    if (this.meta.tagline) {
+    if (description) {
       if (!this.found.has("og:description"))
-        parts.push(`<meta property="og:description" content="${esc(this.meta.tagline)}">`);
+        parts.push(`<meta property="og:description" content="${esc(description)}">`);
       if (!this.found.has("description"))
-        parts.push(`<meta name="description" content="${esc(this.meta.tagline)}">`);
+        parts.push(`<meta name="description" content="${esc(description)}">`);
       if (!this.found.has("twitter:description"))
-        parts.push(`<meta name="twitter:description" content="${esc(this.meta.tagline)}">`);
+        parts.push(`<meta name="twitter:description" content="${esc(description)}">`);
     }
     const icon = this.meta.icon_url ? absoluteUrl(this.meta.icon_url, this.canonicalUrl) : null;
     if (icon) {
@@ -71,25 +82,31 @@ export class MetaTagTracker {
         parts.push(`<meta property="og:image" content="${esc(icon)}">`);
       if (!this.found.has("twitter:image"))
         parts.push(`<meta name="twitter:image" content="${esc(icon)}">`);
-      if (!this.found.has("icon"))
-        parts.push(`<link rel="icon" href="${esc(icon)}">`);
+      if (!this.found.has("icon")) parts.push(`<link rel="icon" href="${esc(icon)}">`);
       if (!this.found.has("apple-touch-icon"))
         parts.push(`<link rel="apple-touch-icon" href="${esc(icon)}">`);
     }
     if (!this.found.has("og:url"))
-      parts.push(`<meta property="og:url" content="${esc(this.canonicalUrl)}">`);
+      parts.push(`<meta property="og:url" content="${esc(canonical)}">`);
     if (!this.found.has(AUTH_MODE_META_NAME)) parts.push(AUTH_MODE_META_TAG);
     if (this.meta.private) parts.push(VISIBILITY_META_TAG);
     if (!this.found.has("twitter:card")) {
-      const hasShareImage = Boolean(icon) || this.found.has("twitter:image") || this.found.has("og:image");
-      parts.push(`<meta name="twitter:card" content="${hasShareImage ? "summary_large_image" : "summary"}">`);
+      const hasShareImage =
+        Boolean(icon) || this.found.has("twitter:image") || this.found.has("og:image");
+      parts.push(
+        `<meta name="twitter:card" content="${hasShareImage ? "summary_large_image" : "summary"}">`,
+      );
     }
     return parts.join("\n");
   }
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function absoluteUrl(value: string, canonicalUrl: string): string {
@@ -119,14 +136,22 @@ class MetaContentRewriter implements HTMLRewriterElementContentHandlers {
   #key: string;
   #canonicalUrl: string | null;
   #tracker: MetaTagTracker;
-  constructor(value: string, key: string, tracker: MetaTagTracker, canonicalUrl: string | null = null) {
+  constructor(
+    value: string,
+    key: string,
+    tracker: MetaTagTracker,
+    canonicalUrl: string | null = null,
+  ) {
     this.#value = value;
     this.#key = key;
     this.#tracker = tracker;
     this.#canonicalUrl = canonicalUrl;
   }
   element(el: Element) {
-    el.setAttribute("content", this.#canonicalUrl ? absoluteUrl(this.#value, this.#canonicalUrl) : this.#value);
+    el.setAttribute(
+      "content",
+      this.#canonicalUrl ? absoluteUrl(this.#value, this.#canonicalUrl) : this.#value,
+    );
     this.#tracker.found.add(this.#key);
   }
 }
@@ -184,7 +209,9 @@ class IconLinkRewriter implements HTMLRewriterElementContentHandlers {
 /** Inject any missing meta tags right before </head> closes. */
 class HeadEndInjector implements HTMLRewriterElementContentHandlers {
   #tracker: MetaTagTracker;
-  constructor(tracker: MetaTagTracker) { this.#tracker = tracker; }
+  constructor(tracker: MetaTagTracker) {
+    this.#tracker = tracker;
+  }
   element(el: Element) {
     // onEndTag fires when </head> is reached — by then all child meta
     // elements have been processed and the tracker knows what exists.
@@ -202,22 +229,46 @@ class HeadEndInjector implements HTMLRewriterElementContentHandlers {
 /** The cross-origin loader URL apps embed; rewritten to the same-origin one (#402). */
 const API_ANALYTICS_LOADER = "https://api.proappstore.online/v1/analytics.js";
 
-export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalUrl: string): Response {
+export function rewriteMetaTags(
+  response: Response,
+  meta: SocialMeta,
+  canonicalUrl: string,
+): Response {
   const tracker = new MetaTagTracker(meta, canonicalUrl);
   let rewriter = new HTMLRewriter()
     .on(`meta[name="${AUTH_MODE_META_NAME}"]`, new FoundTagMarker(AUTH_MODE_META_NAME, tracker))
+    .on('link[rel="canonical"]', {
+      element(el: Element) {
+        const href = el.getAttribute("href");
+        if (href?.trim()) {
+          tracker.found.add("canonical");
+          tracker.appCanonical = absoluteUrl(href, canonicalUrl);
+        } else el.remove();
+      },
+    })
     // An app's own pas-visibility tag is dropped: only the host may say it.
-    .on(`meta[name="${VISIBILITY_META_NAME}"]`, { element: (el: Element) => { el.remove(); } })
+    .on(`meta[name="${VISIBILITY_META_NAME}"]`, {
+      element: (el: Element) => {
+        el.remove();
+      },
+    })
     // #402: the platform analytics loader is served same-origin on app origins, so an
     // app's own `connect-src 'self'` CSP admits its beacons. The app comes from the
     // route there, so the ?app= query is dropped with the cross-origin URL.
-    .on(`script[src^="${API_ANALYTICS_LOADER}"]`, { element: (el: Element) => { el.setAttribute("src", ANALYTICS_LOADER_PATH); } });
+    .on(`script[src^="${API_ANALYTICS_LOADER}"]`, {
+      element: (el: Element) => {
+        el.setAttribute("src", ANALYTICS_LOADER_PATH);
+      },
+    });
 
   if (meta.title) {
     rewriter = rewriter
       .on("title", new TitleRewriter(meta.title, tracker))
       .on('meta[property="og:title"]', new MetaContentRewriter(meta.title, "og:title", tracker))
-      .on('meta[name="twitter:title"]', new MetaContentRewriter(meta.title, "twitter:title", tracker));
+      .on(
+        'meta[name="twitter:title"]',
+        new MetaContentRewriter(meta.title, "twitter:title", tracker),
+      );
   } else {
     rewriter = rewriter
       .on("title", new FoundTagMarker("title", tracker))
@@ -227,9 +278,15 @@ export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalU
 
   if (meta.tagline) {
     rewriter = rewriter
-      .on('meta[property="og:description"]', new MetaContentRewriter(meta.tagline, "og:description", tracker))
+      .on(
+        'meta[property="og:description"]',
+        new MetaContentRewriter(meta.tagline, "og:description", tracker),
+      )
       .on('meta[name="description"]', new MetaContentRewriter(meta.tagline, "description", tracker))
-      .on('meta[name="twitter:description"]', new MetaContentRewriter(meta.tagline, "twitter:description", tracker));
+      .on(
+        'meta[name="twitter:description"]',
+        new MetaContentRewriter(meta.tagline, "twitter:description", tracker),
+      );
   } else {
     rewriter = rewriter
       .on('meta[property="og:description"]', new FoundTagMarker("og:description", tracker))
@@ -244,21 +301,44 @@ export function rewriteMetaTags(response: Response, meta: SocialMeta, canonicalU
       .on('meta[name="twitter:image"]', new MetaContentRewriter(icon, "twitter:image", tracker))
       .on('link[rel="icon"]', new IconLinkRewriter(icon, "icon", canonicalUrl, tracker))
       .on('link[rel="shortcut icon"]', new IconLinkRewriter(icon, "icon", canonicalUrl, tracker))
-      .on('link[rel="apple-touch-icon"]', new IconLinkRewriter(icon, "apple-touch-icon", canonicalUrl, tracker));
+      .on(
+        'link[rel="apple-touch-icon"]',
+        new IconLinkRewriter(icon, "apple-touch-icon", canonicalUrl, tracker),
+      );
   } else {
     rewriter = rewriter
       .on('meta[property="og:image"]', new MetaUrlRewriter("og:image", canonicalUrl, tracker))
       .on('meta[name="twitter:image"]', new MetaUrlRewriter("twitter:image", canonicalUrl, tracker))
       .on('link[rel="icon"]', new IconLinkRewriter(null, "icon", canonicalUrl, tracker))
       .on('link[rel="shortcut icon"]', new IconLinkRewriter(null, "icon", canonicalUrl, tracker))
-      .on('link[rel="apple-touch-icon"]', new IconLinkRewriter(null, "apple-touch-icon", canonicalUrl, tracker));
+      .on(
+        'link[rel="apple-touch-icon"]',
+        new IconLinkRewriter(null, "apple-touch-icon", canonicalUrl, tracker),
+      );
   }
 
-  rewriter = rewriter.on('meta[property="og:url"]', new MetaContentRewriter(canonicalUrl, "og:url", tracker));
+  rewriter = meta.canonical
+    ? rewriter.on('meta[property="og:url"]', new FoundTagMarker("og:url", tracker))
+    : rewriter.on(
+        'meta[property="og:url"]',
+        new MetaContentRewriter(canonicalUrl, "og:url", tracker),
+      );
+  if (meta.private)
+    rewriter = rewriter.on(
+      'meta[name="robots"]',
+      new MetaContentRewriter("noindex, nofollow", "robots", tracker),
+    );
   rewriter = icon
-    ? rewriter.on('meta[name="twitter:card"]', new MetaContentRewriter("summary_large_image", "twitter:card", tracker))
+    ? rewriter.on(
+        'meta[name="twitter:card"]',
+        new MetaContentRewriter("summary_large_image", "twitter:card", tracker),
+      )
     : rewriter.on('meta[name="twitter:card"]', new FoundTagMarker("twitter:card", tracker));
   rewriter = rewriter.on("head", new HeadEndInjector(tracker));
 
-  return rewriter.transform(response);
+  const headers = new Headers(response.headers);
+  headers.delete("ETag");
+  headers.delete("Content-Length");
+  headers.set("Cache-Control", meta.private ? "private, no-store" : "no-store");
+  return rewriter.transform(new Response(response.body, { status: response.status, headers }));
 }

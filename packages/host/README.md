@@ -94,3 +94,15 @@ pnpm typecheck
 ## Design reference
 
 `~/.gstack/projects/serge-ivo-stores-workspace/serge-ivo-main-design-20260521-181709.md`
+
+## Public app metadata
+
+`proappstore.online/catalogue.json` contains the approved, healthy public catalogue.
+Root HTML uses that name/description only to fill missing metadata; explicit app
+canonicals, descriptions and noindex intent are preserved. A self-canonical is
+added only for approved public roots or declared public `page_meta` routes, never
+for arbitrary workspace paths. Private HTML is noindex and remains behind its
+existing access gate. Public roots without authored crawl files receive a root
+sitemap and robots declaration; noindex roots are omitted. Declared sitemap
+and page-meta actions continue to take precedence. Registry-dependent transformed
+HTML does not reuse an R2 ETag. Metadata lookup failure never blocks app serving.

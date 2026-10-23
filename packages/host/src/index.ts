@@ -10,13 +10,9 @@
  * dynamically created and can't have static service bindings.
  */
 
-import type { Env } from "./env.js";
-import { handleAuthRoute } from "./auth-handler.js";
-import { handlePlatformMediation } from "./platform-mediation.js";
 import { handleAnalyticsMediation } from "./analytics-mediation.js";
-import { handleQaRunner } from "./qa-runner.js";
-import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
-import { refuseUnlessVisible } from "./visibility-gate.js";
+import { handleAuthRoute } from "./auth-handler.js";
+import type { Env } from "./env.js";
 import {
   contentType,
   etagsMatch,
@@ -35,8 +31,13 @@ import {
   slugFromHostname,
   withCodeHealthCors,
 } from "./host.js";
-import { rewriteMetaTags } from "./meta-rewriter.js";
 import { serveMarketingSite } from "./marketing-site.js";
+import { rewriteMetaTags } from "./meta-rewriter.js";
+import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
+import { handlePlatformMediation } from "./platform-mediation.js";
+import { getPublicCatalogueApp } from "./public-catalogue.js";
+import { handleQaRunner } from "./qa-runner.js";
+import { refuseUnlessVisible } from "./visibility-gate.js";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -195,12 +196,23 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
       const urls = await getSitemapUrls(env.API, route.slug, action);
       if (!urls) {
         // A failing action must not publish, or cache, an empty sitemap.
-        return new Response("Sitemap temporarily unavailable", { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "300" } });
+        return new Response("Sitemap temporarily unavailable", {
+          status: 503,
+          headers: { "Cache-Control": "no-store", "Retry-After": "300" },
+        });
       }
-      const sitemap = new Response(request.method === "HEAD" ? null : renderSitemap(url.origin, urls), {
-        headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": skipEdgeCache ? "private, no-store" : "public, max-age=3600", "X-Content-Type-Options": "nosniff" },
-      });
-      if (request.method === "GET" && !skipEdgeCache) ctx.waitUntil(cache.put(request, sitemap.clone()));
+      const sitemap = new Response(
+        request.method === "HEAD" ? null : renderSitemap(url.origin, urls),
+        {
+          headers: {
+            "Content-Type": "application/xml; charset=utf-8",
+            "Cache-Control": skipEdgeCache ? "private, no-store" : "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      );
+      if (request.method === "GET" && !skipEdgeCache)
+        ctx.waitUntil(cache.put(request, sitemap.clone()));
       return sitemap;
     }
   }
@@ -225,14 +237,67 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
     }
   }
 
+  if (
+    !object &&
+    !privateApp &&
+    !operatorPath &&
+    ["/robots.txt", "/sitemap.xml"].includes(url.pathname)
+  ) {
+    const approved = await getPublicCatalogueApp(route.slug);
+    const root = approved && (await env.APPS.get(`${route.r2_prefix}/index.html`));
+    if (root) {
+      let noindex = false;
+      let rootCanonical = `${url.origin}/`;
+      await new HTMLRewriter()
+        .on('meta[name="robots"], meta[name="googlebot"]', {
+          element(el: Element) {
+            if (/\bnoindex\b/i.test(el.getAttribute("content") ?? "")) noindex = true;
+          },
+        })
+        .on('link[rel="canonical"]', {
+          element(el: Element) {
+            const href = el.getAttribute("href");
+            if (href?.trim()) {
+              try {
+                rootCanonical = new URL(href, url.origin).href;
+              } catch {}
+            }
+          },
+        })
+        .transform(new Response(root.body))
+        .text();
+      if ((!noindex && rootCanonical === `${url.origin}/`) || url.pathname === "/robots.txt") {
+        const robots = `User-agent: *\nAllow: /\n${noindex || rootCanonical !== `${url.origin}/` ? "" : `Sitemap: ${url.origin}/sitemap.xml\n`}`;
+        return new Response(
+          request.method === "HEAD"
+            ? null
+            : url.pathname === "/robots.txt"
+              ? robots
+              : renderSitemap(url.origin, [{ path: "/", lastmod: null }]),
+          {
+            headers: {
+              "Content-Type":
+                url.pathname === "/robots.txt"
+                  ? "text/plain; charset=utf-8"
+                  : "application/xml; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          },
+        );
+      }
+    }
+  }
   if (!object) {
     return new Response("Not found", { status: 404 });
   }
 
   // 304 Not Modified
   const etag = object.httpEtag;
-  if (etagsMatch(request.headers.get("If-None-Match"), etag)) {
-    return new Response(null, { status: 304, headers: privateApp ? { ETag: etag, "Cache-Control": "private, no-store" } : { ETag: etag } });
+  if (!key.endsWith(".html") && etagsMatch(request.headers.get("If-None-Match"), etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: privateApp ? { ETag: etag, "Cache-Control": "private, no-store" } : { ETag: etag },
+    });
   }
 
   // Serve the object
@@ -241,7 +306,8 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   const updateSensitive = isUpdateSensitivePath(key) || !isContentAddressed(key);
   const headers = securityHeaders(isHtml, updateSensitive);
   headers.set("Content-Type", contentType(key));
-  headers.set("ETag", etag);
+  if (!isHtml) headers.set("ETag", etag);
+  else headers.set("Cache-Control", privateApp || operatorPath ? "private, no-store" : "no-store");
   if (operatorPath || privateApp) headers.set("Cache-Control", "private, no-store");
   if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
@@ -254,17 +320,26 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   // and a declared page_meta route overrides all three for its path (#210).
   // Each lookup fails open; the result is cached with the page below.
   if (isHtml && request.method === "GET") {
-    const [listing, tenant, page] = await Promise.all([
+    const root = url.pathname === "/" || url.pathname === "/index.html";
+    const [listing, tenant, page, approved] = await Promise.all([
       getListingMeta(env.DB, route.slug),
       getTenantMeta(env.API, route.slug, route.tenant),
       getPageMeta(env.DB, env.API, route.slug, url.pathname),
+      root && !privateApp && !operatorPath ? getPublicCatalogueApp(route.slug) : undefined,
     ]);
-    response = rewriteMetaTags(response, {
-      title: page?.title ?? tenant?.title ?? null,
-      tagline: page?.description ?? listing?.tagline ?? null,
-      icon_url: page?.image_url ?? tenant?.icon_url ?? listing?.icon_url ?? null,
-      private: privateApp,
-    }, `${url.origin}${url.pathname}`);
+    response = rewriteMetaTags(
+      response,
+      {
+        title: page?.title ?? tenant?.title ?? null,
+        tagline: page?.description ?? listing?.tagline ?? null,
+        icon_url: page?.image_url ?? tenant?.icon_url ?? listing?.icon_url ?? null,
+        private: privateApp,
+        fallbackTitle: approved?.name,
+        fallbackDescription: approved?.description,
+        canonical: !privateApp && !operatorPath && (Boolean(approved) || Boolean(page)),
+      },
+      `${url.origin}${root ? "/" : url.pathname}`,
+    );
   }
 
   // Edge cache: store the response so next request skips R2 + D1. GET only:

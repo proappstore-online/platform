@@ -214,3 +214,50 @@ describe('host: /.vcqa/ answers are readable cross-origin (#350)', () => {
     expect((await read('https://plain.proappstore.online/assets/missing.js')).headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 });
+
+
+it('adds canonical and listing fallback only to approved public roots and declared public routes', async () => {
+  await seedRoute('seo-public');
+  await env.APPS.put('apps/seo-public/index.html', '<html><head><title>Custom App Title</title></head><body><div id="root"></div></body></html>');
+  const response = await SELF.fetch('https://seo-public.proappstore.online/?utm_source=test', { headers: { 'If-None-Match': '"old"' } });
+  const html = await response.text();
+  expect(response.status).toBe(200);
+  expect(response.headers.get('ETag')).toBeNull();
+  expect(html).toContain('<title>Custom App Title</title>');
+  expect(html).toContain('<link rel="canonical" href="https://seo-public.proappstore.online/">');
+  expect(html).toContain('<meta name="description" content="Approved public description">');
+  expect(html).toContain('<div id="root"></div>');
+  const deep = await (await SELF.fetch('https://seo-public.proappstore.online/workspace/private-item')).text();
+  expect(deep).not.toContain('rel="canonical"');
+  expect(deep).not.toContain('Approved public description');
+  const sitemap = await SELF.fetch('https://seo-public.proappstore.online/sitemap.xml');
+  expect(sitemap.status).toBe(200);
+  expect(await sitemap.text()).toContain('<loc>https://seo-public.proappstore.online/</loc>');
+  expect(await (await SELF.fetch('https://seo-public.proappstore.online/robots.txt')).text()).toContain('Sitemap: https://seo-public.proappstore.online/sitemap.xml');
+});
+
+it('preserves explicit app canonical and noindex instructions without advertising a noindex root', async () => {
+  await seedRoute('seo-public');
+  await env.APPS.put('apps/seo-public/index.html', '<html><head><meta name="robots" content="noindex"><link rel="canonical" href="https://custom.example/"><meta name="description" content="Custom description"></head><body></body></html>');
+  const html = await (await SELF.fetch('https://seo-public.proappstore.online/')).text();
+  expect(html).toContain('name="robots" content="noindex"');
+  expect(html).toContain('href="https://custom.example/"');
+  expect(html).toContain('name="description" content="Custom description"');
+  expect(html).toContain('property="og:url" content="https://custom.example/"');
+  const sitemap = await SELF.fetch('https://seo-public.proappstore.online/sitemap.xml');
+  expect(sitemap.status).toBe(404);
+  await sitemap.text();
+});
+
+
+it('does not advertise a secondary host when an approved app selects its custom domain', async () => {
+  await seedRoute('seo-public');
+  await env.APPS.put('apps/seo-public/index.html', '<html><head><link rel="canonical" href="https://custom.example/"></head><body>Public app</body></html>');
+  const sitemap = await SELF.fetch('https://seo-public.proappstore.online/sitemap.xml');
+  expect(sitemap.status).toBe(404);
+  await sitemap.text();
+  expect(await (await SELF.fetch('https://seo-public.proappstore.online/robots.txt')).text()).toBe('User-agent: *\nAllow: /\n');
+  const head = await SELF.fetch('https://seo-public.proappstore.online/', { method: 'HEAD' });
+  expect(head.headers.get('ETag')).toBeNull();
+  expect(await head.text()).toBe('');
+});

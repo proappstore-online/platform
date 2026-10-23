@@ -14,7 +14,10 @@ describe("pas-auth-mode marker", () => {
   });
 
   it("is injected alongside listing metadata on a custom domain", () => {
-    const html = new MetaTagTracker({ title: "Meetup", tagline: "t", icon_url: "/i.png" }, "https://app.example.com/").missingTagsHtml();
+    const html = new MetaTagTracker(
+      { title: "Meetup", tagline: "t", icon_url: "/i.png" },
+      "https://app.example.com/",
+    ).missingTagsHtml();
     expect(html).toContain(AUTH_MODE_META_TAG);
     expect(html).toContain('<meta property="og:url" content="https://app.example.com/">');
   });
@@ -24,4 +27,29 @@ describe("pas-auth-mode marker", () => {
     tracker.found.add(AUTH_MODE_META_NAME);
     expect(tracker.missingTagsHtml()).not.toContain("pas-auth-mode");
   });
+});
+
+it("canonical injection is explicit, private pages are noindex and existing canonicals are preserved", () => {
+  const base = {
+    tagline: null,
+    icon_url: null,
+    fallbackTitle: "Public app",
+    fallbackDescription: "<Approved> & safe",
+  };
+  expect(new MetaTagTracker(base, "https://app.example/").missingTagsHtml()).not.toContain(
+    'rel="canonical"',
+  );
+  const publicPage = new MetaTagTracker({ ...base, canonical: true }, "https://app.example/");
+  expect(publicPage.missingTagsHtml()).toContain(
+    '<link rel="canonical" href="https://app.example/">',
+  );
+  expect(publicPage.missingTagsHtml()).toContain("&lt;Approved&gt; &amp; safe");
+  publicPage.found.add("canonical");
+  expect(publicPage.missingTagsHtml()).not.toContain('rel="canonical"');
+  const privateHtml = new MetaTagTracker(
+    { ...base, canonical: true, private: true },
+    "https://app.example/",
+  ).missingTagsHtml();
+  expect(privateHtml).not.toContain('rel="canonical"');
+  expect(privateHtml).toContain('name="robots" content="noindex, nofollow"');
 });
