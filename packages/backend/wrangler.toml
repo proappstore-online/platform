@@ -210,6 +210,12 @@ dataset = "pas_payout_meter"
 binding = "APP_WORKER_CALLS"
 dataset = "pas_app_worker_calls"
 
+# App-worker outbound requests (#267): one point per request through the egress
+# gateway, indexed by app; blobs method, host, allow|block, reason. Never the path.
+[[analytics_engine_datasets]]
+binding = "APP_WORKER_EGRESS"
+dataset = "pas_app_worker_egress"
+
 # Realtime rooms — Durable Object for WebSocket fan-out.
 [durable_objects]
 bindings = [

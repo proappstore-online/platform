@@ -4,18 +4,18 @@
  * `ctx.exports.AppWorkerEgress({ props: { appId } })`, so every `fetch()` the
  * worker makes arrives here first, tagged with an app id the worker cannot forge.
  *
- * Prototype scope (first-party apps only): it forwards and logs the app, method
- * and host — never the path, query or headers, which may carry the app's
- * credentials. #267 adds allow-listing and credential injection here before app
- * workers open to all apps.
+ * The policy (lib/app-worker-egress.ts, #267): only public internet hosts. The
+ * platform's own origins, other apps' workers and private ranges answer 403.
+ * Every request is recorded per app (method and host, never the path, query or
+ * headers, which may carry the app's credentials) to Analytics Engine.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { Env } from '../types.js';
+import { egressFetch } from '../lib/app-worker-egress.js';
 
 export class AppWorkerEgress extends WorkerEntrypoint<Env, { appId: string }> {
   override async fetch(request: Request): Promise<Response> {
     const appId = (this.ctx as { props?: { appId?: string } }).props?.appId ?? '?';
-    console.log(`[app-worker-egress] ${appId} ${request.method} ${new URL(request.url).host}`);
-    return fetch(request);
+    return egressFetch(this.env, appId, request);
   }
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { appWorkerHost, disableAppWorker, rotateAppWorkerCredentials, ROTATION_OVERLAP_MS, KEPT_BUNDLES } from './app-worker-host.js';
+import { APP_WORKER_LIMITS, APP_WORKER_SUBREQUEST_SPLIT, appWorkerHost, disableAppWorker, rotateAppWorkerCredentials, ROTATION_OVERLAP_MS, KEPT_BUNDLES } from './app-worker-host.js';
 import { createShim } from '../app-worker-shim/entry.js';
+import { MAX_PAS_CALLS_PER_INVOCATION } from './app-worker-calls.js';
 import { resetBurstState } from './log-quota.js';
 import type { Env } from '../types.js';
 
@@ -192,6 +193,19 @@ describe('loader backend lifecycle (#253)', () => {
     await host.invoke('demo', event(), { timeoutMs: 5_000 });
     expect(made).toEqual([{ props: { appId: 'demo' } }]);
     expect(loads[0]!.code.globalOutbound).toEqual({ stub: 'egress' });
+  });
+
+  it('hands the runtime both limits: 30 s CPU and subRequests = the 200 PAS calls + 300 outbound fetches (#267, ADR-009 §4)', async () => {
+    // The platform counts PAS calls itself (D1, #254); the runtime counts EVERY subrequest, so it must also cover outbound fetches.
+    expect(APP_WORKER_SUBREQUEST_SPLIT.pasCalls).toBe(MAX_PAS_CALLS_PER_INVOCATION);
+    expect(APP_WORKER_LIMITS).toEqual({ cpuMs: 30_000, subRequests: 500 });
+    expect(APP_WORKER_LIMITS.subRequests).toBe(APP_WORKER_SUBREQUEST_SPLIT.pasCalls + APP_WORKER_SUBREQUEST_SPLIT.outboundFetches);
+    const host = appWorkerHost(env);
+    await host.deploy('demo', bundle());
+    await host.invoke('demo', event(), { timeoutMs: 5_000 });
+    expect(loads[0]!.code.limits).toEqual({ cpuMs: 30_000, subRequests: 500 });
+    // A fresh object per load: a mutation by the runtime cannot change the platform constant.
+    expect(loads[0]!.code.limits).not.toBe(APP_WORKER_LIMITS);
   });
 
   it('records a non-2xx with the first 1 KB, a timeout, and refuses a duplicate id', async () => {

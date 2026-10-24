@@ -52,7 +52,11 @@ const COMPATIBILITY_FLAGS = ['nodejs_compat'];
  * the 200-call `PAS` budget plus 300 outbound fetches through the egress
  * gateway (#311). #267 re-sizes the outbound part from measured usage.
  */
-export const APP_WORKER_LIMITS = { cpuMs: 30_000, subRequests: 500 } as const;
+export const APP_WORKER_SUBREQUEST_SPLIT = { pasCalls: 200, outboundFetches: 300 } as const;
+export const APP_WORKER_LIMITS = {
+  cpuMs: 30_000,
+  subRequests: APP_WORKER_SUBREQUEST_SPLIT.pasCalls + APP_WORKER_SUBREQUEST_SPLIT.outboundFetches,
+} as const;
 /** How outbound traffic leaves a loaded worker; part of the loader ID (#311). */
 const EGRESS_MODE = 'gateway:AppWorkerEgress';
 /** #308: every loaded worker is tailed by AppWorkerTail. Part of the shim hash, so isolates cached without a tail are not reused. */
