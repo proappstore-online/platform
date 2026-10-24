@@ -148,7 +148,7 @@ describe('host: per-route page meta and sitemap (#210)', () => {
 
   it('returns real uncached noindex 404s for opted-in missing records, including HEAD', async () => {
     await seedRoute('missing-record');
-    await env.APPS.put('apps/missing-record/index.html', shell);
+    await env.APPS.put('apps/missing-record/index.html', shell.replace('</head>', '<link rel="canonical" href="https://missing-record.proappstore.online/"><meta name="robots" content="index, follow"><script src="/assets/app.js"></script></head>').replace('<body>', '<body><div id="app-shell"></div>'));
     await pageMeta('missing-record', '/p/:id', 'fixture_product_meta', 'id');
     await env.DB.prepare('UPDATE app_page_meta SET not_found_status = 404 WHERE app_id = ?').bind('missing-record').run();
     for (const method of ['GET', 'HEAD']) {
@@ -161,6 +161,12 @@ describe('host: per-route page meta and sitemap (#210)', () => {
       else {
         expect(html).toContain('Page not found');
         expect(html).not.toContain('rel="canonical"');
+        expect(html).toContain('id="app-shell"');
+        expect(html).toContain('src="/assets/app.js"');
+        expect(html).toContain('name="pas-auth-mode" content="platform-cookie"');
+        expect(html).not.toContain('name="pas-visibility"');
+        expect(html).not.toContain('content="index, follow"');
+        expect(html.match(/name="robots"/g)).toHaveLength(1);
       }
     }
     // A present record, the app root and undeclared signed-in SPA paths remain intact.
