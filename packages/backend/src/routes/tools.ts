@@ -638,7 +638,7 @@ export function siteManifestFrom(body: SiteManifest | null | undefined): SiteMan
   return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions };
 }
 
-interface PageMetaRoute { path: string; action: string; param: string }
+interface PageMetaRoute { path: string; action: string; param: string; not_found?: 404 }
 
 const MAX_PAGE_META_ROUTES = 20;
 const PATH_LITERAL = /^[A-Za-z0-9._~-]+$/;
@@ -668,7 +668,8 @@ function validateSiteManifest(
   for (const [i, raw] of pageMeta.entries()) {
     const where = `page_meta[${i}]`;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: `${where} must be an object` };
-    const { path, action, param } = raw as Record<string, unknown>;
+    const { path, action, param, not_found } = raw as Record<string, unknown>;
+    if (not_found !== undefined && not_found !== 404) return { error: `${where}: not_found must be 404 when supplied` };
     if (typeof path !== 'string' || path.length > 200 || !path.startsWith('/')) return { error: `${where}: path must start with / (max 200 chars)` };
     if (typeof param !== 'string' || !param) return { error: `${where}: param is required` };
     const segments = path.split('/').slice(1);
@@ -684,7 +685,7 @@ function validateSiteManifest(
     if (!tool.params?.[param]) return { error: `${where}: action "${tool.name}" does not declare param "${param}"` };
     const missing = ['title', 'description', 'image_url'].filter((col) => !selectsColumn(tool.sql ?? '', col));
     if (missing.length) return { error: `${where}: action "${tool.name}" must select ${missing.join(', ')}` };
-    routes.push({ path, action: tool.name, param });
+    routes.push({ path, action: tool.name, param, ...(not_found === 404 ? { not_found } : {}) });
   }
 
   if (site.sitemap === undefined || site.sitemap === null) return { routes, sitemap: null };
@@ -1095,8 +1096,8 @@ export async function replaceAppTools(
     declaredPermissionsStatement(db, appId, permissionsResult.permissions, now),
     ...siteResult.routes.map((r, i) =>
       db.prepare(
-        'INSERT INTO app_page_meta (app_id, position, path_pattern, action_name, param_name, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).bind(appId, i, r.path, r.action, r.param, now),
+        'INSERT INTO app_page_meta (app_id, position, path_pattern, action_name, param_name, created_at, not_found_status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).bind(appId, i, r.path, r.action, r.param, now, r.not_found ?? null),
     ),
     ...(siteResult.sitemap
       ? [db.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind(appId, siteResult.sitemap, now)]

@@ -146,6 +146,41 @@ describe('host: per-route page meta and sitemap (#210)', () => {
     expect(body).toContain('<loc>https://sm1.proappstore.online/p/c&amp;d</loc>');
   });
 
+  it('returns real uncached noindex 404s for opted-in missing records, including HEAD', async () => {
+    await seedRoute('missing-record');
+    await env.APPS.put('apps/missing-record/index.html', shell);
+    await pageMeta('missing-record', '/p/:id', 'fixture_product_meta', 'id');
+    await env.DB.prepare('UPDATE app_page_meta SET not_found_status = 404 WHERE app_id = ?').bind('missing-record').run();
+    for (const method of ['GET', 'HEAD']) {
+      const response = await SELF.fetch('https://missing-record.proappstore.online/p/missing', { method });
+      expect(response.status).toBe(404);
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+      const html = await response.text();
+      if (method === 'HEAD') expect(html).toBe('');
+      else {
+        expect(html).toContain('Page not found');
+        expect(html).not.toContain('rel="canonical"');
+      }
+    }
+    // A present record, the app root and undeclared signed-in SPA paths remain intact.
+    for (const path of ['/p/abc', '/', '/app/inbox']) {
+      const response = await SELF.fetch(`https://missing-record.proappstore.online${path}`);
+      expect(response.status, path).toBe(200);
+      expect(await response.text()).not.toContain('Page not found');
+    }
+  });
+
+  it('never labels opted-in upstream action failures as missing records', async () => {
+    await seedRoute('failed-record');
+    await env.APPS.put('apps/failed-record/index.html', shell);
+    await pageMeta('failed-record', '/p/:id', 'broken_meta', 'id');
+    await env.DB.prepare('UPDATE app_page_meta SET not_found_status = 404 WHERE app_id = ?').bind('failed-record').run();
+    const response = await SELF.fetch('https://failed-record.proappstore.online/p/missing');
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('<title>Trade Port</title>');
+  });
+
   it('answers 503 (never an empty, cached sitemap) when the action fails; serves a static file when none is declared', async () => {
     await seedRoute('sm2');
     await env.DB.prepare('INSERT INTO app_sitemap (app_id, action_name, created_at) VALUES (?, ?, ?)').bind('sm2', 'broken_sitemap', Date.now()).run();

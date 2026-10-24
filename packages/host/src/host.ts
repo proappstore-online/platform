@@ -206,6 +206,8 @@ export async function getTenantMeta(
 
 /** Per-route link-preview metadata from an app's declared `page_meta` action (#210). */
 export interface PageMeta {
+  /** Only a successful empty query on an explicitly opted-in public route. */
+  notFound?: true;
   title: string | null;
   description: string | null;
   image_url: string | null;
@@ -256,7 +258,8 @@ async function callPublicAction(api: Fetcher, appId: string, action: string, par
     ));
     if (!res.ok) return null;
     const data = await res.json() as { rows?: unknown };
-    return Array.isArray(data.rows) ? data.rows as Record<string, unknown>[] : null;
+    return Array.isArray(data.rows) && data.rows.every((row) => row !== null && typeof row === "object" && !Array.isArray(row))
+      ? data.rows as Record<string, unknown>[] : null;
   } catch {
     return null;
   }
@@ -271,24 +274,35 @@ const httpUrl = (v: unknown): string | null => {
 
 /**
  * Link-preview metadata for this path from the app's first matching `page_meta`
- * route. Fails open like getTenantMeta: any error, timeout or empty row → null,
- * and the page is served with app-level meta.
+ * route. Errors/timeouts always fail open; empty results also do unless the
+ * app explicitly declares not_found: 404 for that public route.
  */
 export async function getPageMeta(db: D1Database, api: Fetcher, appId: string, pathname: string): Promise<PageMeta | null> {
-  let routes: { path_pattern: string; action_name: string; param_name: string }[];
+  type MetaRoute = { path_pattern: string; action_name: string; param_name: string; not_found_status?: number | null };
+  let routes: MetaRoute[];
   try {
-    routes = (await db
-      .prepare("SELECT path_pattern, action_name, param_name FROM app_page_meta WHERE app_id = ?1 ORDER BY position")
-      .bind(appId)
-      .all<{ path_pattern: string; action_name: string; param_name: string }>()).results ?? [];
+    const load = async (columns: string) => (await db
+      .prepare(`SELECT ${columns} FROM app_page_meta WHERE app_id = ?1 ORDER BY position`)
+      .bind(appId).all<MetaRoute>()).results ?? [];
+    try {
+      routes = await load("path_pattern, action_name, param_name, not_found_status");
+    } catch (error) {
+      // Host/backend deploy independently. Preserve existing metadata while the
+      // additive backend migration is still pending; opt-in is unavailable then.
+      if (!/no such column: (?:\w+\.)?not_found_status/i.test(String(error))) throw error;
+      routes = await load("path_pattern, action_name, param_name");
+    }
   } catch {
     return null;
   }
   for (const route of routes) {
     const value = matchPagePath(route.path_pattern, pathname);
     if (value === null) continue;
-    const row = (await callPublicAction(api, appId, route.action_name, { [route.param_name]: value }))?.[0];
-    if (!row) return null;
+    const rows = await callPublicAction(api, appId, route.action_name, { [route.param_name]: value });
+    if (rows === null) return null;
+    if (rows.length === 0) return route.not_found_status === 404
+      ? { title: null, description: null, image_url: null, notFound: true } : null;
+    const row = rows[0]!;
     const meta = { title: text(row.title, 200), description: text(row.description, 500), image_url: httpUrl(row.image_url) };
     return meta.title || meta.description || meta.image_url ? meta : null;
   }

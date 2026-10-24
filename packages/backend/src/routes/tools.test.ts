@@ -769,7 +769,7 @@ describe('PUT /v1/apps/:appId/tools — page_meta and sitemap (#210)', () => {
     const insert = sqls.findIndex((q) => q.startsWith('INSERT INTO app_page_meta'));
     expect(sqls.indexOf('DELETE FROM app_page_meta WHERE app_id = ?')).toBeGreaterThan(-1);
     expect(sqls.indexOf('DELETE FROM app_page_meta WHERE app_id = ?')).toBeLessThan(insert);
-    expect(db.prepare.mock.results[insert]!.value.bind).toHaveBeenCalledWith('test-app', 0, '/p/:id', 'public_product_meta', 'id', expect.any(Number));
+    expect(db.prepare.mock.results[insert]!.value.bind).toHaveBeenCalledWith('test-app', 0, '/p/:id', 'public_product_meta', 'id', expect.any(Number), null);
     expect(sqls.some((q) => q.startsWith('INSERT INTO app_sitemap'))).toBe(true);
   });
 
@@ -778,6 +778,17 @@ describe('PUT /v1/apps/:appId/tools — page_meta and sitemap (#210)', () => {
       { page_meta: [{ path: '/p/:id', action: 'list_items', param: 'id' }] },
       'page_meta[0]: action "list_items" must be a public query',
     );
+  });
+
+  it('stores explicit public not-found policy and rejects every other status/shape', async () => {
+    const r = await put({ tools: [productMeta], page_meta: [{ path: '/p/:id', action: 'public_product_meta', param: 'id', not_found: 404 }] });
+    expect(r.res.status).toBe(200);
+    const insertion = r.db.prepare.mock.calls.findIndex((c) => String(c[0]).startsWith('INSERT INTO app_page_meta'));
+    expect(r.db.prepare.mock.results[insertion]!.value.bind).toHaveBeenCalledWith('test-app', 0, '/p/:id', 'public_product_meta', 'id', expect.any(Number), 404);
+    for (const status of [200, 403, 410, '404', true, null, {}]) {
+      await refused({ page_meta: [{ path: '/p/:id', action: 'public_product_meta', param: 'id', not_found: status }] }, 'not_found must be 404');
+    }
+    await refused({ page_meta: [{ path: '/p/:id', action: 'list_items', param: 'id', not_found: 404 }] }, 'must be a public query');
   });
 
   it('refuses an unknown action, a missing placeholder, an undeclared param, and missing output columns', async () => {

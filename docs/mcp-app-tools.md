@@ -483,6 +483,13 @@ can be rebuilt from the base table.
 
 ## Link previews and sitemap (`page_meta`, `sitemap`)
 
+A public-record `page_meta` route may declare `"not_found": 404`. A successful
+empty result from its public query then serves HTTP 404 with `noindex, nofollow`
+for GET and HEAD. Omit it to preserve the default SPA fallback. Transport errors,
+timeouts and malformed responses always retain the existing fallback; private
+and operator screens are outside this policy. Use the same publication/privacy
+filters in the metadata query and sitemap so unpublished records stay absent.
+
 Link unfurlers (LinkedIn, Slack, WhatsApp) and non-rendering crawlers never run
 your JavaScript, so a title set by the SPA is invisible to them. Declare which
 paths have their own preview, and the host rewrites `<title>`, `og:title`,
@@ -518,10 +525,10 @@ and are registered and replaced with them.
   declares `param` and selects `title`, `description` and `image_url` (as
   columns or aliases). Registration answers `400` otherwise. The check is a
   light scan of the SELECT list, not a parser.
-- On an uncached HTML GET for a matching path, the host calls the action with
+- For a matching public HTML GET or HEAD, the host calls the action with
   the path value. Any field it returns overrides the app-level listing and
   tenant metadata. `image_url` must be an absolute `http(s)` URL.
-- **Fail-open:** an error, an empty row, or no answer within 1.5 s serves the
+- **Default fail-open:** an error, an empty result without `not_found: 404`, or no answer within 1.5 s serves the
   page with app-level meta and a `200`. The rewritten page is cached with the
   page at the edge.
 

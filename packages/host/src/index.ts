@@ -311,6 +311,17 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   if (operatorPath || privateApp) headers.set("Cache-Control", "private, no-store");
   if (!isHtml && object.size !== undefined) headers.set("Content-Length", String(object.size));
 
+  // Private/operator screens never opt into public-record absence semantics.
+  // HEAD must agree with GET even though only GET needs HTML rewriting.
+  const page = isHtml && !privateApp && !operatorPath
+    ? await getPageMeta(env.DB, env.API, route.slug, url.pathname) : null;
+  if (page?.notFound) {
+    await object.body.cancel();
+    headers.set("Cache-Control", "no-store");
+    headers.set("X-Robots-Tag", "noindex, nofollow");
+    const missing = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex, nofollow"><title>Page not found</title></head><body><h1>Page not found</h1><p>This page is not available.</p><a href="/">Go to home page</a></body></html>';
+    return new Response(request.method === "HEAD" ? null : missing, { status: 404, headers });
+  }
   const body = request.method === "HEAD" ? null : object.body;
   let response = new Response(body, { status: 200, headers });
 
@@ -321,10 +332,9 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   // Each lookup fails open; the result is cached with the page below.
   if (isHtml && request.method === "GET") {
     const root = url.pathname === "/" || url.pathname === "/index.html";
-    const [listing, tenant, page, approved] = await Promise.all([
+    const [listing, tenant, approved] = await Promise.all([
       getListingMeta(env.DB, route.slug),
       getTenantMeta(env.API, route.slug, route.tenant),
-      getPageMeta(env.DB, env.API, route.slug, url.pathname),
       root && !privateApp && !operatorPath ? getPublicCatalogueApp(route.slug) : undefined,
     ]);
     response = rewriteMetaTags(

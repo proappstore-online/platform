@@ -454,6 +454,42 @@ describe("getPageMeta", () => {
     expect(elapsed).toBeGreaterThanOrEqual(PAGE_META_TIMEOUT_MS - 50);
     expect(elapsed).toBeLessThan(PAGE_META_TIMEOUT_MS + 1500);
   }, 10_000);
+  const missingRoute = [{ ...productRoute[0], not_found_status: 404 }];
+  it("only opts a successful empty public query into not-found", async () => {
+    const empty = api(async () => Response.json({ rows: [] }));
+    await expect(getPageMeta(db(missingRoute), empty, "tradies", "/p/absent")).resolves.toMatchObject({ notFound: true });
+    await expect(getPageMeta(db(productRoute), empty, "tradies", "/p/absent")).resolves.toBeNull();
+    await expect(getPageMeta(db(missingRoute), empty, "tradies", "/app/inbox")).resolves.toBeNull();
+    const present = api(async () => Response.json({ rows: [{ title: "Published" }] }));
+    await expect(getPageMeta(db(missingRoute), present, "tradies", "/p/published")).resolves.toEqual({ title: "Published", description: null, image_url: null });
+  });
+
+  it.each([{}, { rows: null }, { rows: [null] }, { rows: [false] }, { rows: [[]] }, { rows: [{}] }])(
+    "never turns malformed metadata into a missing record: %j", async (payload) => {
+      await expect(getPageMeta(db(missingRoute), api(async () => Response.json(payload)), "tradies", "/p/a")).resolves.toBeNull();
+    },
+  );
+
+  it("keeps opted-in routes fail-open on upstream errors and timeouts", async () => {
+    const failed = api(async () => Response.json({ rows: [] }, { status: 503 }));
+    await expect(getPageMeta(db(missingRoute), failed, "tradies", "/p/a")).resolves.toBeNull();
+    const timeout = api(async () => { throw new DOMException("Timed out", "TimeoutError"); });
+    await expect(getPageMeta(db(missingRoute), timeout, "tradies", "/p/a")).resolves.toBeNull();
+  });
+
+  it("preserves legacy metadata if the independent backend migration is pending", async () => {
+    const statements: string[] = [];
+    const pending = { prepare: (sql: string) => ({ bind: () => ({ all: async () => {
+      statements.push(sql);
+      if (sql.includes("not_found_status")) throw new Error("D1_ERROR: no such column: not_found_status");
+      return { results: productRoute };
+    } }) }) } as unknown as D1Database;
+    const found = api(async () => Response.json({ rows: [{ title: "Existing metadata" }] }));
+    await expect(getPageMeta(pending, found, "tradies", "/p/a")).resolves.toMatchObject({ title: "Existing metadata" });
+    expect(statements).toHaveLength(2);
+  });
+
+
 });
 
 describe("getSitemapUrls / renderSitemap", () => {
