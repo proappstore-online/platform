@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  # #360: a newer push to a PR supersedes the older run. Pushes to main are never cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   security-events: write
