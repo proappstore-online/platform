@@ -194,6 +194,22 @@ describe('owner commands (#261)', () => {
     expect(out.join('')).toMatch(/action digest\s+failed\n {2}boom/);
   });
 
+  it('pas schedule runs --status queued is accepted, filters on the server, and shows queued runs as in progress', async () => {
+    routes['GET /v1/apps/demo/scheduled-runs'] = { runs: [
+      { run_id: 'r2', action_name: 'worker:reconcile', due_at: 0, finished_at: null, status: 'queued', changes: null, error: null },
+    ] };
+    await run(scheduleCommand, ['runs', '--status', 'queued']);
+    expect(calls.at(-1)!.url).toBe('https://api.test/v1/apps/demo/scheduled-runs?limit=50&status=queued');
+    expect(out.join('')).toMatch(/worker reconcile\s+in progress \(queued\)/);
+  });
+
+  it('pas schedule run reports the run as enqueued at once, not waiting for a tick', async () => {
+    routes['POST /v1/apps/demo/worker/schedules/reconcile/run'] = { run_id: 'r3', status: 'queued' };
+    await run(scheduleCommand, ['run', 'reconcile']);
+    expect(out.join('')).toContain('enqueued at once (status: queued)');
+    expect(out.join('')).not.toContain('next platform tick');
+  });
+
   it('pas hook deliveries <name> --status failed filters on the server; hook list flags a missing secret', async () => {
     routes['GET /v1/apps/demo/hook-deliveries'] = { deliveries: [
       { id: 'd', hook: 'github', delivery_id: 'gh-1', event: 'push', received_at: 0, status: 'failed', attempts: 2, finished_at: 1, error: 'worker answered 500' },

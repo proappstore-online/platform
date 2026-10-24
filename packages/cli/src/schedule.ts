@@ -13,7 +13,7 @@ interface Run {
   error: string | null;
 }
 
-const RUN_STATUSES = ['due', 'claimed', 'succeeded', 'failed'];
+const RUN_STATUSES = ['due', 'claimed', 'queued', 'succeeded', 'failed'];
 const WORKER_RUN_PREFIX = 'worker:';
 
 export const scheduleCommand = new Command('schedule')
@@ -52,13 +52,13 @@ export const scheduleCommand = new Command('schedule')
   )
   .addCommand(
     new Command('run')
-      .description('Run a worker schedule now: the next platform tick (≤ 5 min) starts it.')
+      .description('Run a worker schedule now: it is enqueued at once (status queued) and delivered by the queue.')
       .argument('<name>', 'worker schedule name from mcp.json worker.schedules')
       .option('--app <id>', 'app id (defaults to package.json name in cwd)')
       .action(async (name: string, opts: { app?: string }) => {
         const cfg = await requireSession();
         const appId = await resolveAppIdOrExit(opts.app);
         const r = await ownerApi<{ run_id: string }>(cfg, 'POST', `/v1/apps/${appId}/worker/schedules/${encodeURIComponent(name)}/run`, `run ${name}`);
-        process.stdout.write(`✓ queued ${name} (run ${r.run_id}); it starts on the next platform tick. Follow it: pas schedule runs\n`);
+        process.stdout.write(`✓ queued ${name} (run ${r.run_id}); it is enqueued at once (status: queued). Follow it: pas schedule runs\n`);
       }),
   );

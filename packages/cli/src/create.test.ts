@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,5 +66,38 @@ describe('pas create provisioning', () => {
       appId: 'my-app',
       description: 'My App',
     });
+  });
+
+  it('scaffolds worker/ and registers it in the workspace only with --with-worker (#261)', async () => {
+    const catalogue = vi.fn(async (url: string) => {
+      if (url.endsWith('/catalogue.json')) {
+        return Response.json({ templates: [{
+          id: 'template-app', repo: 'proappstore-online/template-app', ref: 'main', status: 'approved', default: true, deprecation: null,
+        }] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', catalogue);
+    // The cloned template ships a workspace file; the clone mock only creates the directory.
+    childProcess.spawn.mockImplementation((_cmd: string, args: string[]) => {
+      const handlers: Record<string, (code: number) => void> = {};
+      if (args[0] === 'clone') {
+        const target = args.at(-1)!;
+        mkdirSync(target, { recursive: true });
+        writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - web\n');
+      }
+      queueMicrotask(() => handlers.exit?.(0));
+      return { on(event: string, handler: (code: number) => void) { handlers[event] = handler; return this; } };
+    });
+
+    await createApp('with-w', { skipInstall: true, skipGit: true, skipProvision: true, withWorker: true });
+    expect(existsSync(join(dir, 'with-w', 'worker', 'package.json'))).toBe(true);
+    expect(existsSync(join(dir, 'with-w', 'worker', 'tsconfig.json'))).toBe(true);
+    expect(existsSync(join(dir, 'with-w', 'worker', 'src', 'index.ts'))).toBe(true);
+    expect(readFileSync(join(dir, 'with-w', 'pnpm-workspace.yaml'), 'utf8')).toContain('  - worker\n');
+
+    await createApp('no-w', { skipInstall: true, skipGit: true, skipProvision: true });
+    expect(existsSync(join(dir, 'no-w', 'worker'))).toBe(false);
+    expect(readFileSync(join(dir, 'no-w', 'pnpm-workspace.yaml'), 'utf8')).not.toContain('worker');
   });
 });
