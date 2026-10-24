@@ -249,9 +249,14 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
       let noindex = false;
       let rootCanonical = `${url.origin}/`;
       await new HTMLRewriter()
-        .on('meta[name="robots"], meta[name="googlebot"]', {
+        .on("meta", {
           element(el: Element) {
-            if (/\bnoindex\b/i.test(el.getAttribute("content") ?? "")) noindex = true;
+            // Google treats crawler names and directive tokens case-insensitively.
+            // Match complete tokens: max-image-preview:none still permits indexing.
+            const name = el.getAttribute("name")?.trim().toLowerCase();
+            if (name !== "robots" && name !== "googlebot") return;
+            const directives = (el.getAttribute("content") ?? "").toLowerCase().split(/[,\s]+/);
+            if (directives.includes("noindex") || directives.includes("none")) noindex = true;
           },
         })
         .on('link[rel="canonical"]', {
