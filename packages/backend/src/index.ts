@@ -431,7 +431,7 @@ export default {
     // Worker now receives a five-minute tick for scheduled app actions.
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;
     ctx.waitUntil(checkSessionKeyDrift({ env }));
-    // #381: the payout run (runScheduledPayouts) is archived in archived/payouts/ and no longer scheduled.
+    // #381: the payout run (runScheduledPayouts) was removed and is no longer scheduled (#450).
     // #275: close new app-worker enables when today's account-wide usage passes the ceiling.
     ctx.waitUntil(checkAccountCeiling(env, tickAt).catch((e) => console.error(`[app-worker-usage] account check failed: ${(e as Error).message}`)));
     // #307: once a day, delete review uploads older than the app's retention (default 30 days).

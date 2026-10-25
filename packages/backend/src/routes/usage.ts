@@ -5,7 +5,7 @@ import { wrap } from '../lib/route-wrap.js';
 import { APP_ID_RE } from './validation.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { utcDayKey } from '../lib/day-key.js';
-// #381: payouts are archived; the payout meter (archived/payouts/lib-payout-meter.ts) is no longer written.
+// #381: payouts are archived; the payout meter (lib-payout-meter.ts, deleted in #450) is no longer written.
 // import { payoutActorId, writePayoutUsagePoint } from '../lib/payout-meter.js';
 
 /**

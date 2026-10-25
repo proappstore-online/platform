@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { app } from '../../index.js';
-import { makeEnv, mockD1, mockStmt, testToken } from '../../test-helpers.js';
+import { app } from '../index.js';
+import { makeEnv, mockD1, mockStmt, testToken } from '../test-helpers.js';
 
 // #381: payouts are archived. Every payout route answers 404 (unregistered),
 // even with valid credentials, and developer earnings answer 410. The

@@ -1,8 +1,8 @@
 # Payout metering and reconciliation
 
 > **Archived (#381).** ProAppStore has no payouts. Nothing described on this page runs:
-> the payout routes, crons and meter writes are unregistered, and their code is kept in
-> `packages/backend/src/archived/payouts/` for history only.
+> the payout routes, crons and meter writes are unregistered, and their code was deleted
+> (#450). It remains in git history from `d873cd8`.
 
 Creator usage-share payouts are calculated from the `pas_payout_meter` Workers
 Analytics Engine dataset (#25). It is an append-only financial ledger, separate
