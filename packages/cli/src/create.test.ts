@@ -10,6 +10,7 @@ const childProcess = vi.hoisted(() => ({
 
 vi.mock('node:child_process', () => childProcess);
 vi.mock('./og-image.js', () => ({ writeOgImage: vi.fn() }));
+vi.mock('./lettermark.js', () => ({ writeDefaultIcons: vi.fn() }));
 
 const { createApp } = await import('./create.js');
 

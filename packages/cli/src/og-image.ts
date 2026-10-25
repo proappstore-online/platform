@@ -5,7 +5,7 @@ import { deflateSync } from 'node:zlib';
 const WIDTH = 1200;
 const HEIGHT = 630;
 
-const FONT: Record<string, string[]> = {
+export const FONT: Record<string, string[]> = {
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
   '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
   '0': ['11111', '10001', '10011', '10101', '11001', '10001', '11111'],
@@ -124,7 +124,7 @@ function rect(pixels: Buffer, x: number, y: number, w: number, h: number, color:
   }
 }
 
-function encodePng(width: number, height: number, pixels: Buffer): Buffer {
+export function encodePng(width: number, height: number, pixels: Buffer): Buffer {
   const scanlines = Buffer.alloc((width * 4 + 1) * height);
   for (let y = 0; y < height; y++) {
     const row = y * (width * 4 + 1);
