@@ -114,32 +114,65 @@ describe('GET /analytics/admin/apps (#417)', () => {
   });
 
   it('lists every registered app, zero-view apps included, with per-app and platform totals and daily series', async () => {
-    let sql = '';
+    const sqls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      sql = String(init?.body);
+      const sql = String(init?.body);
+      sqls.push(sql);
+      if (sql.includes('NOT IN')) return Response.json({ data: [{ views: 1, ids: 1 }] }); // 'gone': no longer registered
       return Response.json({ data: [
         { app: 'notes', t: '2026-10-16 00:00:00', views: 3 },
         { app: 'crm', t: '2026-10-16 00:00:00', views: '10' },
         { app: 'notes', t: '2026-10-17 00:00:00', views: 4 },
-        { app: 'gone', t: '2026-10-17 00:00:00', views: 1 },
       ] });
     }));
     const db = mockD1(mockStmt({ all: { results: [{ id: 'crm' }, { id: 'notes' }, { id: 'quiet' }] } }));
     const res = await get('/analytics/admin/apps?days=30', await testToken('gh:1', { roles: ['admin'] }), makeEnv({ CF_ANALYTICS_API_TOKEN: 'analytics-token' }, db));
     expect(res.status).toBe(200);
-    expect(sql).toContain("INTERVAL '30' DAY");
-    expect(sql).toContain("blob2 = 'pageview'");
+    expect(sqls).toHaveLength(2);
+    for (const sql of sqls) { expect(sql).toContain("INTERVAL '30' DAY"); expect(sql).toContain("blob2 = 'pageview'"); }
     expect(await res.json()).toEqual({
       days: 30,
-      totals: { views: 18, apps: 4, apps_with_views: 3, apps_without_views: 1 },
-      series: [{ t: '2026-10-16 00:00:00', views: 13 }, { t: '2026-10-17 00:00:00', views: 5 }],
+      totals: { views: 17, apps: 3, apps_with_views: 2, apps_without_views: 1 },
+      unregistered: { app_ids: 1, views: 1 },
+      truncated: false,
+      series: [{ t: '2026-10-16 00:00:00', views: 13 }, { t: '2026-10-17 00:00:00', views: 4 }],
       apps: [
         { app_id: 'crm', registered: true, views: 10, series: [{ t: '2026-10-16 00:00:00', views: 10 }] },
         { app_id: 'notes', registered: true, views: 7, series: [{ t: '2026-10-16 00:00:00', views: 3 }, { t: '2026-10-17 00:00:00', views: 4 }] },
-        { app_id: 'gone', registered: false, views: 1, series: [{ t: '2026-10-17 00:00:00', views: 1 }] },
         { app_id: 'quiet', registered: true, views: 0, series: [] },
       ],
     });
+  });
+
+  it('#444: fabricated app ids never inflate the app counts or the list; the query is bounded to registered ids', async () => {
+    const sqls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const sql = String(init?.body);
+      sqls.push(sql);
+      // A well-behaved Analytics Engine applies the IN / NOT IN filter; the endpoint must be sending them.
+      if (sql.includes('NOT IN')) return Response.json({ data: [{ views: '5000', ids: '5000' }] });
+      return Response.json({ data: [{ app: 'crm', t: '2026-10-16 00:00:00', views: 2 }] });
+    }));
+    const db = mockD1(mockStmt({ all: { results: [{ id: 'crm' }, { id: 'quiet' }] } }));
+    const res = await get('/analytics/admin/apps', await testToken('gh:1', { roles: ['admin'] }), makeEnv({ CF_ANALYTICS_API_TOKEN: 'analytics-token' }, db));
+    const body = await res.json() as { totals: Record<string, number>; unregistered: Record<string, number>; apps: { app_id: string }[] };
+    expect(body.totals).toEqual({ views: 2, apps: 2, apps_with_views: 1, apps_without_views: 1 });
+    expect(body.unregistered).toEqual({ app_ids: 5000, views: 5000 });
+    expect(body.apps.map((a) => a.app_id)).toEqual(['crm', 'quiet']);
+    expect(sqls.find((s) => !s.includes('NOT IN'))).toContain("blob1 IN ('crm', 'quiet')");
+    expect(sqls.find((s) => s.includes('NOT IN'))).toContain("blob1 NOT IN ('crm', 'quiet')");
+  });
+
+  it('#444: even if the store returns ids outside the registry they are dropped, and the registry read is capped', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) =>
+      Response.json({ data: String(init?.body).includes('NOT IN') ? [] : [{ app: 'fake-1', t: 'd', views: 9 }, { app: 'crm', t: 'd', views: 1 }] })));
+    const stmt = mockStmt({ all: { results: [{ id: 'crm' }] } });
+    const res = await get('/analytics/admin/apps', await testToken('gh:1', { roles: ['admin'] }), makeEnv({ CF_ANALYTICS_API_TOKEN: 'analytics-token' }, mockD1(stmt)));
+    const body = await res.json() as { totals: Record<string, number>; apps: unknown[]; unregistered: Record<string, number> };
+    expect(body.totals).toMatchObject({ views: 1, apps: 1 });
+    expect(body.apps).toHaveLength(1);
+    expect(body.unregistered).toEqual({ app_ids: 0, views: 0 });
+    expect(stmt.bind).toHaveBeenCalledWith(1001);
   });
 
   it('answers 503 when the analytics token is not configured', async () => {

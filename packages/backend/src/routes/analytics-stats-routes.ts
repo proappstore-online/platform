@@ -19,6 +19,9 @@ import {
   wrap,
 } from './analytics-shared.js';
 
+/** #444: most registered apps the admin usage report lists; bounds the query and the response. */
+const ADMIN_APPS_MAX = 1000;
+
 export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
   // ---------------------------------------------------------------------------
   // Stats query (creator-only): aggregates from Workers Analytics Engine via
@@ -236,7 +239,7 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
 
   // ---------------------------------------------------------------------------
   // Admin per-app usage (#417) — every registered app with its page views and
-  // daily series, zero-view apps included, plus platform totals. One AE query
+  // daily series, zero-view apps included, plus platform totals (registered apps only, #444). One AE query
   // grouped by app and day, merged with the `apps` registry. There are no
   // unique-visitor numbers: ingest records no visitor identifier, and #417
   // rules out new tracking.
@@ -251,26 +254,39 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
         Math.max(1, Number(c.req.query('days') ?? STATS_DAYS_DEFAULT) | 0),
       );
       const effectiveTime = EFFECTIVE_TIME;
-      const q = `SELECT blob1 AS app, toStartOfDay(${effectiveTime}) AS t, SUM(_sample_interval) AS views FROM ${STATS_DATASET} WHERE blob2 = 'pageview' AND ${effectiveTime} > NOW() - INTERVAL '${days}' DAY GROUP BY app, t ORDER BY t ASC`;
+
+      // #444: ingest accepts any well-formed app id on a direct POST, so Analytics Engine can hold
+      // ids no app owns. Only registered apps are listed and totalled, and the query is bounded to
+      // them; everything else is summarised once, as `unregistered`. The registry read is capped.
+      const { results: registry } = await c.env.DB.prepare('SELECT id FROM apps ORDER BY id LIMIT ?')
+        .bind(ADMIN_APPS_MAX + 1).all<{ id: string }>();
+      const truncated = registry.length > ADMIN_APPS_MAX;
+      const ids = registry.slice(0, ADMIN_APPS_MAX).map((r) => r.id).filter((id) => APP_ID_RE.test(id)); // safe to inline: [a-z0-9-] only
+      const inList = ids.map((id) => `'${id}'`).join(', ');
+      const since = `blob2 = 'pageview' AND ${effectiveTime} > NOW() - INTERVAL '${days}' DAY`;
 
       const env = c.env as Env & { CF_ACCOUNT_ID?: string; CF_ANALYTICS_API_TOKEN?: string };
-      let rows: Array<{ app: string; t: string; views: number | string }>;
+      let rows: Array<{ app: string; t: string; views: number | string }> = [];
+      let strays: Array<{ views: number | string; ids: number | string }> = [];
       try {
-        rows = await cfAnalyticsSql(env, q);
+        [rows, strays] = await Promise.all([
+          ids.length
+            ? cfAnalyticsSql<{ app: string; t: string; views: number | string }>(env, `SELECT blob1 AS app, toStartOfDay(${effectiveTime}) AS t, SUM(_sample_interval) AS views FROM ${STATS_DATASET} WHERE ${since} AND blob1 IN (${inList}) GROUP BY app, t ORDER BY t ASC`)
+            : Promise.resolve([]),
+          cfAnalyticsSql<{ views: number | string; ids: number | string }>(env, `SELECT SUM(_sample_interval) AS views, COUNT(DISTINCT blob1) AS ids FROM ${STATS_DATASET} WHERE ${since}${ids.length ? ` AND blob1 NOT IN (${inList})` : ''}`),
+        ]);
       } catch (err) {
         if (err instanceof HttpError) throw err;
         throw new HttpError(err instanceof Error ? err.message : 'app usage query failed', 502);
       }
-      const { results: registered } = await c.env.DB.prepare('SELECT id FROM apps').all<{ id: string }>();
 
-      const apps = new Map<string, { app_id: string; registered: boolean; views: number; series: Array<{ t: string; views: number }> }>();
-      for (const { id } of registered) apps.set(id, { app_id: id, registered: true, views: 0, series: [] });
+      const apps = new Map<string, { app_id: string; registered: true; views: number; series: Array<{ t: string; views: number }> }>();
+      for (const id of ids) apps.set(id, { app_id: id, registered: true, views: 0, series: [] });
       const platformSeries = new Map<string, number>();
       for (const r of rows) {
+        const app = apps.get(r.app);
+        if (!app) continue; // the query is filtered to registered ids; belt and braces
         const views = Number(r.views) || 0;
-        let app = apps.get(r.app);
-        // Views for an id no longer in the registry (a deleted app) still count.
-        if (!app) apps.set(r.app, (app = { app_id: r.app, registered: false, views: 0, series: [] }));
         app.views += views;
         app.series.push({ t: r.t, views });
         platformSeries.set(r.t, (platformSeries.get(r.t) ?? 0) + views);
@@ -286,6 +302,9 @@ export function registerStatsRoutes(analyticsRoutes: Hono<{ Bindings: Env }>) {
           apps_with_views: withViews,
           apps_without_views: list.length - withViews,
         },
+        // Page views recorded for ids that are not registered apps (fabricated or since deleted): counted, never listed.
+        unregistered: { app_ids: Number(strays[0]?.ids ?? 0) || 0, views: Number(strays[0]?.views ?? 0) || 0 },
+        truncated,
         series: [...platformSeries].map(([t, views]) => ({ t, views })),
         apps: list,
       });
