@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -11,6 +12,25 @@ import { describe, expect, it } from 'vitest';
 const ROOT = resolve(__dirname, '..');
 
 describe('skills release gate', () => {
+  it('refuses to generate a release with a skill targeting a different standard', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'pas-skills-version-'));
+    try {
+      for (const dir of ['scripts', 'docs/standard', 'docs/skills']) mkdirSync(join(fixture, dir), { recursive: true });
+      for (const path of ['skills', '.claude-plugin', 'marketplace.json', 'scripts/build-skills-manifest.mjs', 'docs/standard/standard.json', 'docs/skills/evaluations.md']) {
+        cpSync(join(ROOT, path), join(fixture, path), { recursive: true });
+      }
+      const skill = join(fixture, 'skills/audit-proappstore-app/SKILL.md');
+      writeFileSync(skill, readFileSync(skill, 'utf8').replace(/standard-version: "[^"]+"/, 'standard-version: "0.0"'));
+      // Generation itself must refuse the mismatch; a drift-only --check would
+      // allow an incoherent manifest to be regenerated and then pass.
+      const result = spawnSync(process.execPath, [join(fixture, 'scripts/build-skills-manifest.mjs')], { cwd: fixture, encoding: 'utf8' });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('audit-proappstore-app: metadata.standard-version "0.0" differs from current standard');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('scripts/build-skills-manifest.mjs --check passes (bundles valid, manifest and summary up to date)', () => {
     const out = execFileSync('node', [join(ROOT, 'scripts/build-skills-manifest.mjs'), '--check'], { cwd: ROOT, encoding: 'utf8' });
     expect(out).toMatch(/✓ \d+ skill bundle\(s\) valid/);

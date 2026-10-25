@@ -74,6 +74,9 @@ for (const dir of readdirSync(SKILLS).filter((d) => statSync(join(SKILLS, d)).is
   const { fm, metadata } = parsed;
   if (fm.name !== dir) fail(`${dir}: frontmatter name "${fm.name}" ≠ directory`);
   if (!metadata.version) fail(`${dir}: metadata.version missing`);
+  if (metadata['standard-version'] !== standard.version) {
+    fail(`${dir}: metadata.standard-version ${JSON.stringify(metadata['standard-version'])} differs from current standard ${standard.version}`);
+  }
   const fileEntries = [];
   let bytes = 0;
   const digest = createHash('sha256');

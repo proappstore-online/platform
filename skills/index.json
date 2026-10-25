@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.proappstore.online/skills/index.schema.json",
   "format": "agentskills.io/specification",
-  "standard_version": "1.9",
+  "standard_version": "1.10",
   "mcp_endpoint": "https://mcp.proappstore.online/mcp",
   "plugin": ".claude-plugin/plugin.json",
   "marketplace": "marketplace.json",
@@ -11,7 +11,7 @@
       "version": "1.0",
       "description": "Audit a ProAppStore app repository against the current public Recommended Application Standard — fetch standard.json and the finding contract, decide applicability clause by clause, inspect code, configuration, tests and (optionally) the deployed app, and emit pass / fail / not-applicable / manual-review findings; every failure carries the standard version, the exact clause URL, file and line evidence, impact, a bounded remediation, acceptance tests, confidence, the human-validation flag and a deduplication key. Read-only by default (a report); creates GitHub issues only in issue-creation mode after a duplicate check, with defect-oriented titles. Use when a user asks to audit, check compliance or conformance of, find findings in, or review clause by clause a ProAppStore app on proappstore.online. Not for fixing the app, creating it, releasing it, or choosing its architecture.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#172",
       "allowed-tools": [
         "whoami",
@@ -23,8 +23,8 @@
         "platform_guide"
       ],
       "mutating": false,
-      "bytes": 45306,
-      "digest": "df9d627c06c32d8fd6422e9295c578239c98adc31ca00beb24212bff7a8641f2",
+      "bytes": 45307,
+      "digest": "1895c947638d28ced61a0e096835f88645dc11dec30b2d3ce01f787f63eb5084",
       "files": [
         {
           "path": "evals/cases.json",
@@ -93,8 +93,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 9248,
-          "sha256": "10bdc6fba39ee85c9e4ad54108ce026cb50e6aeeb56cfd687c21008bf6fc11a4"
+          "bytes": 9249,
+          "sha256": "43453f695031f7b77fde715f0cd4a5a14d5efd3462a556afdff03a8856e3985f"
         }
       ],
       "evaluations": {
@@ -114,9 +114,9 @@
           "bundle_bytes": 65536
         },
         "actual": {
-          "skill_md_bytes": 9248,
+          "skill_md_bytes": 9249,
           "references_bytes": 17481,
-          "bundle_bytes": 45306
+          "bundle_bytes": 45307
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -137,7 +137,7 @@
       "version": "1.0",
       "description": "Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#171",
       "allowed-tools": [
         "whoami",
@@ -150,8 +150,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 42324,
-      "digest": "885d68ad1fa3362172487829770bef3ecece0243686696de1efdd032ff5f4e6d",
+      "bytes": 42326,
+      "digest": "3de75e470b49c904a192218dc19f76fed46c1f3583f2bc45df61b11545c218bf",
       "files": [
         {
           "path": "evals/cases.json",
@@ -185,8 +185,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 1185,
-          "sha256": "86ac8c4fa2b7ce9517e5c36150b28942cb74ffa737febf42ffa6062aa9f689c2"
+          "bytes": 1186,
+          "sha256": "a725a0946d49d6ca0bffc543986969f57cbee7a878d16f3679b35179b44245c4"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -200,8 +200,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 9546,
-          "sha256": "385fa824fd3ba4480384627c8c5fa0fd000805dbe4cb4a5d75580954f2b6e7c7"
+          "bytes": 9547,
+          "sha256": "4bd7dcd4ee6c02afceccee4e1013004a12659faf50c0ef0768775ca6f75daa80"
         }
       ],
       "evaluations": {
@@ -221,9 +221,9 @@
           "bundle_bytes": 49152
         },
         "actual": {
-          "skill_md_bytes": 9546,
-          "references_bytes": 23636,
-          "bundle_bytes": 42324
+          "skill_md_bytes": 9547,
+          "references_bytes": 23637,
+          "bundle_bytes": 42326
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -244,7 +244,7 @@
       "version": "1.0",
       "description": "Create, scaffold and provision a new ProAppStore app end to end through the ProAppStore MCP server — gather the app name, id, category, visibility and data needs, pick an approved template from the catalogue and explain the choice, dry-run provision_pas_app, get explicit confirmation, provision live, then verify the GitHub repository, R2 route, D1 database and data worker, deploy configuration, registered actions and live status. Use when the user asks to create a new ProAppStore app, scaffold a Pro app, provision an app on proappstore.online, set up a new PAS app, or start a new app from the ProAppStore template. Not for editing, deploying or auditing an existing app.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#170",
       "allowed-tools": [
         "whoami",
@@ -263,8 +263,8 @@
         "scaffold_app"
       ],
       "mutating": true,
-      "bytes": 31691,
-      "digest": "2a1ee0d7dc2ca760958c8c9647d8ca0b40b7f8527f346904217c172d4c780279",
+      "bytes": 31693,
+      "digest": "fa5bc303e9107d457c5e65a4c661eac13ec1d4a1aca89a27d62480db691f04de",
       "files": [
         {
           "path": "evals/cases.json",
@@ -293,8 +293,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 1795,
-          "sha256": "320f29d08f56a5d44518260ea8dfb7ff4e6e8bb7df5fe79b3aadfa3ffdcddd74"
+          "bytes": 1796,
+          "sha256": "9d002fec1ebb0e68d99542ace13f6595b45f58e0f34e65428cf8173f8f4fa62d"
         },
         {
           "path": "references/provisioning-tools.md",
@@ -308,8 +308,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 11049,
-          "sha256": "d99bde621d5236942793f25041ea888d11ef80f0827276d006c3832f3610a337"
+          "bytes": 11050,
+          "sha256": "289c15ee0b22f5708f89a2004492bb5224297002c183efc8907832c4ee1ebad9"
         }
       ],
       "evaluations": {
@@ -332,9 +332,9 @@
           "bundle_bytes": 36864
         },
         "actual": {
-          "skill_md_bytes": 11049,
-          "references_bytes": 9415,
-          "bundle_bytes": 31691
+          "skill_md_bytes": 11050,
+          "references_bytes": 9416,
+          "bundle_bytes": 31693
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -356,7 +356,7 @@
       "version": "1.0",
       "description": "Add or correct authentication, cookie sessions, roles and permissions in a ProAppStore app — platform-cookie sessions for hosted apps, sign-in / sign-out / session hydration through the SDK, app roles for in-app RBAC with manifest gates and SQL scoping, a gated permissions UI, and negative authorization tests. Detects and remediates localStorage token handling, app.auth.token coupling, home-grown sign-in or session tables, membership-only privileged gates, unsafe return URLs, incomplete sign-out and missing negative tests, citing the Application Standard's AUTH clauses. Use when a user asks how to sign users in, keep sessions, protect routes or actions, define roles or permissions, build a permissions screen, or review the auth of an app on proappstore.online. Not for creating, provisioning, deploying or fully auditing an app, and not for platform or team roles.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#173",
       "allowed-tools": [
         "whoami",
@@ -368,8 +368,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 50750,
-      "digest": "0858b2d9944a336bb47c5e50a3c27f65cfbb0d0bd9e3b2ff755b80e2d384365b",
+      "bytes": 50752,
+      "digest": "3c3037f30736360991acccbad93045ce2c6420e1de2c21b0a879cb4a34802ad4",
       "files": [
         {
           "path": "evals/cases.json",
@@ -408,8 +408,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 1714,
-          "sha256": "1deaf405252e48fbb28acebeecb55644f239d76035a7f29ea315a024c368b86b"
+          "bytes": 1715,
+          "sha256": "489897d96275ac5c6ff926e19ec56e74cba0e40c244d9f29abd4bc0304f2a094"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -423,8 +423,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 9397,
-          "sha256": "64cd627c56d43188515dee8881a531e6b58c72999d32201de117818869227442"
+          "bytes": 9398,
+          "sha256": "78023d5a73b9ed096141151b6bb08594405bdd89a3b539ec2de1700b1041d31c"
         }
       ],
       "evaluations": {
@@ -444,9 +444,9 @@
           "bundle_bytes": 61440
         },
         "actual": {
-          "skill_md_bytes": 9397,
-          "references_bytes": 30991,
-          "bundle_bytes": 50750
+          "skill_md_bytes": 9398,
+          "references_bytes": 30992,
+          "bundle_bytes": 50752
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -467,7 +467,7 @@
       "version": "1.0",
       "description": "Design and implement a ProAppStore app's data layer — choose D1 versus KV, storage, counters or rooms, write additive migrations in migrations.json, define registered actions in mcp.json with declared typed parameters and the server-owned magic parameters, scope every statement to the caller, project or tenant in SQL, put write invariants and server-derived grants in the statement, use atomic batch actions, keep writes idempotent, and produce negative authorization tests, migration verification and deployment checks. Reviews schemas and manifests for cross-tenant access, guessed identifiers, replayable grants, unsafe writes and migration or action drift, citing the Application Standard's DATA clauses. Use when a user asks how to model tables, write a migration, add or fix a registered action, scope queries to a tenant, make a write safe under retry, or review the data access of an app on proappstore.online. Not for creating an app, overall architecture, authentication, or a full audit.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#175",
       "allowed-tools": [
         "whoami",
@@ -479,8 +479,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 60710,
-      "digest": "b0e2ceef318c47795c4ad90a383cfec0dec19890c34b4ed0f12116d20533563e",
+      "bytes": 60712,
+      "digest": "61ce14538d53beda41a7e1cd3a11eb9a561b94364309c934a13d0978396547f2",
       "files": [
         {
           "path": "evals/cases.json",
@@ -519,8 +519,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 2199,
-          "sha256": "a574ef85ce04b21484fb1ca18cedb744aee7be7bef8bba9631ceb6918d17d5a8"
+          "bytes": 2200,
+          "sha256": "1e957c270375e1f5fe296afc2a822544d928ba24688e58dd394ee1e60b530d5f"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -534,8 +534,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 10196,
-          "sha256": "b8b9d4557a5080fb82201f016308e28ac4d56f42ed38ec6c9724ef828b74f269"
+          "bytes": 10197,
+          "sha256": "37940cf6e2ad47203635a00c9ea029547141094b195ee2eb01dacd0d68ffbd39"
         }
       ],
       "evaluations": {
@@ -555,9 +555,9 @@
           "bundle_bytes": 69632
         },
         "actual": {
-          "skill_md_bytes": 10196,
-          "references_bytes": 39202,
-          "bundle_bytes": 60710
+          "skill_md_bytes": 10197,
+          "references_bytes": 39203,
+          "bundle_bytes": 60712
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -578,7 +578,7 @@
       "version": "1.0",
       "description": "Publish, deploy, verify and roll back a ProAppStore app through the supported path — check the preconditions and repository policy, run the canonical gates (frozen lockfile, typecheck, tests, pas check), inspect the migrations and registered actions the release will apply, preview consequential changes, deploy by pushing to main so the keyless OIDC workflow runs, monitor the deploy run and the live status, confirm the smoke or QA run, check the served build is not stale, capture the evidence bundle, and stop or roll back with a git revert on failure. Covers idempotent retry, partial-deployment recovery, migration failures and the final release report. Use when a user asks to publish, deploy, release, ship, verify a deploy of, or roll back a ProAppStore app on proappstore.online. Not for creating or provisioning a new app, designing its data or auth, or a full audit.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#174",
       "allowed-tools": [
         "whoami",
@@ -596,8 +596,8 @@
         "platform_guide"
       ],
       "mutating": false,
-      "bytes": 49476,
-      "digest": "895899774adc59ef55cb246fac6d7f1b2a4621261981bf1f54933a33df3a24b3",
+      "bytes": 49477,
+      "digest": "330b5027a6214ae5690bb3dd922d869112d3d8532271bf2af44a1d4f10faad9d",
       "files": [
         {
           "path": "evals/cases.json",
@@ -651,8 +651,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 11886,
-          "sha256": "47267be205c6978f4a3630b0ca88be508c17d7a9f7a66af0dfafae9b111bc88f"
+          "bytes": 11887,
+          "sha256": "173c48169f27a6b35eb445f9e88ffe47e6691f1c796303a4c8e0e0c9aec94d2c"
         }
       ],
       "evaluations": {
@@ -672,9 +672,9 @@
           "bundle_bytes": 61440
         },
         "actual": {
-          "skill_md_bytes": 11886,
+          "skill_md_bytes": 11887,
           "references_bytes": 28638,
-          "bundle_bytes": 49476
+          "bundle_bytes": 49477
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",
@@ -695,7 +695,7 @@
       "version": "1.1",
       "description": "Upgrade an existing ProAppStore app to the current SDK, template and Application Standard without overwriting its product code — inventory the app, compare its dependencies, configuration and workflows with the supported baseline (SDK and CLI versions, Node and pnpm, the approved template revision, the canonical deploy, CI and compliance workflows), find template drift, and prepare a staged upgrade plan covering the platform-cookie session migration, registered actions and migrations, the UI/PWA baseline, MCP tools, tests and rollback. Runs in dry-run report mode by default and in a bounded implementation mode that changes one stage at a time, preserves customer customisations, and requires explicit review before any destructive or broad rewrite. Use when a user asks to upgrade, update, modernise or re-align an existing app on proappstore.online with the latest SDK, template or standard. Not for creating a new app, a release, or a full audit.",
       "license": "MIT",
-      "standard-version": "1.9",
+      "standard-version": "1.10",
       "issue": "proappstore-online/platform#177",
       "allowed-tools": [
         "whoami",
@@ -710,8 +710,8 @@
         "qa_list_runs"
       ],
       "mutating": false,
-      "bytes": 56782,
-      "digest": "ec8a5afdb8641ad13778f898c2c522c3063cf81a055281f78a92a465de5662c5",
+      "bytes": 56785,
+      "digest": "2444c9b70d3f421f1954dd4c7b311e99ffa70b812d733a12eaf4d93eea14d619",
       "files": [
         {
           "path": "evals/cases.json",
@@ -740,8 +740,8 @@
         },
         {
           "path": "references/decision-tables.md",
-          "bytes": 11162,
-          "sha256": "867d11f56d62af6bbc7c64ad0a3696eb9bff2e09e9a5531df50884c3779bb063"
+          "bytes": 11163,
+          "sha256": "286d4fd83972d6dff495c8ec87ef12ec28d2f0a77f45e52674da3dc247df9f43"
         },
         {
           "path": "references/negative-cases.md",
@@ -750,8 +750,8 @@
         },
         {
           "path": "references/output-template.md",
-          "bytes": 2630,
-          "sha256": "43f13dc2b56c34dbc23358c0d27fa90cc7cacd0a60fb7ad5562b684c107914f9"
+          "bytes": 2631,
+          "sha256": "770f5c27b552e3cf4c82b8433ccb64121deadb45c1d35b39187b1bdd6b956664"
         },
         {
           "path": "references/unsupported-requirements.md",
@@ -765,8 +765,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 10757,
-          "sha256": "3c0239d23e7e62ac19a9216a34274e278fe5141774018cb6f7ac8d5fe662e947"
+          "bytes": 10758,
+          "sha256": "0c9ab5edbc54dd0356aa6435ef385b16794b61ef76e1cacb07c4bcb07f9b5b85"
         }
       ],
       "evaluations": {
@@ -786,9 +786,9 @@
           "bundle_bytes": 69632
         },
         "actual": {
-          "skill_md_bytes": 10757,
-          "references_bytes": 35478,
-          "bundle_bytes": 56782
+          "skill_md_bytes": 10758,
+          "references_bytes": 35480,
+          "bundle_bytes": 56785
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

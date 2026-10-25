@@ -7,7 +7,17 @@ name: Publish Platform Docs
 on:
   push:
     branches: [main]
-    paths: ['docs/**', '.github/workflows/publish-docs.yml']
+    paths:
+      - 'docs/**'
+      - 'skills/**'
+      - 'scripts/build-standard-data.mjs'
+      - 'scripts/build-compliance-map.mjs'
+      - 'scripts/build-skills-manifest.mjs'
+      - 'packages/compliance/src/clause-map.ts'
+      - 'marketplace.json'
+      - '.claude-plugin/plugin.json'
+      - '.claude-plugin/marketplace.json'
+      - '.github/workflows/publish-docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +39,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify standard and skill release artifacts
+        run: |
+          node scripts/build-standard-data.mjs --check
+          node --experimental-strip-types scripts/build-compliance-map.mjs --check
+          node scripts/build-skills-manifest.mjs --check
       - name: Build Zensical site
         run: |
           python -m pip install --quiet zensical

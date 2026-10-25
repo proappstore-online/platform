@@ -40,9 +40,21 @@ recorded in the log below, and a bundle with no logged human review is
 | audit-proappstore-app | 1.0 | `1685216f9e4ef6c1ff77dc270b9b38233d783a531ab8358c4ca1afb54553bc83` | platform-bot | 2026-09-25 | approved |
 
 A reviewer fills in their name and the date against the digest shown, and
-changes the result to `approved`. The digest column is the bundle's current
-content digest from `index.json`, pinned here so a signature is bound to
-exact content. A later change to the bundle changes the digest; the release
-gate (`test/skills-manifest.test.ts`) then fails until the row is updated —
-a `approved` row must be re-reviewed (name, date, new digest), a pending row
-just takes the new digest — so a stale review can never pass CI silently.
+changes the result to `approved`. The digest binds that review to exact
+content. Preserve historical rows; changed content does not inherit approval
+for its new digest.
+
+The automated release gate validates bundle files and the content digests in
+`index.json`; it does not verify human approval against this log. A green gate
+therefore establishes automated validation, not a current human security review.
+
+## Editorial maintenance — 25 October 2026
+
+Codex checked the #485 diff: all seven bundles update only their declared
+standard version and reference/output-template version labels from 1.9 to 1.10.
+Workflow instructions, tool allow-lists, credential handling and mutation/consent
+boundaries are unchanged. The repository validator and focused evaluation suite
+pass with regenerated digests in `index.json`.
+
+This is an agent review of an editorial update, not a new human approval. The
+historical review rows above retain their original digests and dates.
