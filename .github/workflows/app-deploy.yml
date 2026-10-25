@@ -114,6 +114,17 @@ jobs:
       - name: Install
         run: if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install --no-frozen-lockfile; fi
 
+      # Later steps (token exchange, migrations, deploy) need jq. GitHub-hosted runners ship it;
+      # self-hosted ones may not (#435), so install it here or fail before anything is built.
+      - name: Ensure jq on self-hosted macOS
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            command -v brew >/dev/null 2>&1 || { echo "::error::jq is missing and brew is not available to install it"; exit 1; }
+            brew install jq
+          fi
+          command -v jq >/dev/null 2>&1 || { echo "::error::jq is still missing after install"; exit 1; }
+
       - name: Build
         env:
           VITE_COMMIT_SHA: ${{ github.sha }}
@@ -121,7 +132,8 @@ jobs:
           # Fail closed (#204): a failing build script — its tsc, or the pas check
           # prebuild — fails the deploy, and nothing is uploaded. Only a bundle with
           # no build script at all falls back to a bare vite build.
-          if jq -e '.scripts.build' package.json >/dev/null 2>&1; then pnpm build
+          # node is guaranteed by setup-node; jq is NOT guaranteed on self-hosted runners (#435).
+          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then pnpm build
           else (cd web 2>/dev/null || true; npx vite build); fi
 
       - name: Locate build output
