@@ -1303,7 +1303,7 @@ describe('console endpoints coexist with code tools (#155)', () => {
     expect(res.status).toBe(200);
     const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
     const del = sqls.find((s) => s.startsWith('DELETE FROM app_tools'))!;
-    expect(del).toBe("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'");
+    expect(del).toContain("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'"); // only code rows, and only those no longer submitted (#443)
     const { db: db2 } = await put([validTool]);
     const ins = db2.prepare.mock.calls.map((c) => String(c[0])).find((s) => s.startsWith('INSERT INTO app_tools'))!;
     expect(ins).toContain("'code'");

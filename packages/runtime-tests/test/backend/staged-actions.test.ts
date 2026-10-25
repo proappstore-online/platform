@@ -1,6 +1,7 @@
 import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
+import { replaceAppTools } from '../../../backend/src/routes/tools';
 import { disableAppWorker } from '../../../backend/src/lib/app-worker-host';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
@@ -130,6 +131,53 @@ describe('staged actions (#428)', () => {
 
   // #429: "live" was derived from the current rows, so clearing a live app's tools
   // (DELETE …/tools, or a deploy without mcp.json) made its next deploy all staged.
+  it('#443: a promote that lands between registration reading the states and writing them survives', async () => {
+    expect((await register([listMine, addNote])).status).toBe(200);
+    expect(await states()).toEqual({ add_note: 'staged', list_mine: 'staged' });
+
+    // The same deploy again, with the owner's promote of list_mine landing after registration
+    // has read the current states and before its batch is written.
+    const racing = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === 'batch') {
+          return async (stmts: D1PreparedStatement[]) => {
+            await env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = 'club' AND name = 'list_mine'").run();
+            return target.batch(stmts);
+          };
+        }
+        const v = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    }) as D1Database;
+    dataWorker().intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    const res = await replaceAppTools(racing, 'club', [listMine, addNote], env);
+    expect(res.status).toBe(200);
+    expect(await states()).toEqual({ add_note: 'staged', list_mine: 'live' });
+  });
+
+  it('#443: a promote racing a deploy that CHANGES the action is not carried over to the new statement; removed actions are dropped', async () => {
+    expect((await register([listMine, addNote])).status).toBe(200);
+    const racing = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === 'batch') {
+          return async (stmts: D1PreparedStatement[]) => {
+            await env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = 'club' AND name = 'list_mine'").run();
+            return target.batch(stmts);
+          };
+        }
+        const v = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    }) as D1Database;
+    dataWorker().intercept({ path: '/validate', method: 'POST' })
+      .reply(200, (req) => ({ results: (JSON.parse(String(req.body)) as { statements: { id: string }[] }).statements.map((st) => ({ id: st.id, ok: true })) }));
+    // list_mine's SQL changes (a new action as far as staging goes); add_note is removed.
+    const changed = { ...listMine, sql: 'SELECT id, body FROM notes WHERE user_id = :__user_id LIMIT 10' };
+    expect((await replaceAppTools(racing, 'club', [changed], env)).status).toBe(200);
+    expect(await states()).toEqual({ list_mine: 'staged' }); // the promote covered the OLD statement, not this one
+  });
+
   it('a live app stays live after its tools are cleared: the next deploy registers live (migration 0109)', async () => {
     await register([listMine]);
     await SELF.fetch(`${BASE}/v1/apps/club/tools/promote`, json('POST', {}, await owner()));

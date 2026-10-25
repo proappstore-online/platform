@@ -1079,15 +1079,24 @@ export async function replaceAppTools(
   // push with no mcp.json clears the code set and leaves the console's work.
   const now = Date.now();
   const stmts = [
-    db.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code'").bind(appId),
+    // #443: upsert, not delete-and-reinsert (console endpoints are api_*, which code tools may not use, so no clash). A promote (or worker enable) that landed after
+    // `registered` was read must survive, so for an action whose shape is unchanged the row's
+    // state is decided here at write time: staged only if it is still staged now.
+    db.prepare("DELETE FROM app_tools WHERE app_id = ? AND source = 'code' AND name NOT IN (SELECT value FROM json_each(?))")
+      .bind(appId, JSON.stringify((tools as ToolManifest[]).map((t) => t.name))),
     // Re-registration is the explicit breaker reset: a deploy confirms that
     // the owner reviewed the manifest before unattended work resumes.
     db.prepare("DELETE FROM scheduled_action_state WHERE app_id = ? AND source = 'code'").bind(appId),
-    ...(tools as ToolManifest[]).map(tool =>
-      db.prepare(
-        "INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source, state) VALUES (?, ?, ?, ?, ?, 'code', ?)",
-      ).bind(appId, tool.name, JSON.stringify(tool), now, now, states.get(tool.name) ?? 'staged'),
-    ),
+    ...(tools as ToolManifest[]).map(tool => {
+      const before = registered.get(tool.name);
+      const unchanged = before !== undefined && actionShape(before.manifest) === actionShape(tool);
+      return db.prepare(
+        `INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source, state) VALUES (?1, ?2, ?3, ?4, ?4, 'code', ?5)
+         ON CONFLICT(app_id, name) DO UPDATE SET manifest = excluded.manifest, created_at = excluded.created_at, updated_at = excluded.updated_at,
+           state = CASE WHEN ?6 = 1 AND excluded.state = 'staged' AND app_tools.state = 'live' THEN 'live' ELSE excluded.state END
+           WHERE app_tools.source = 'code'`,
+      ).bind(appId, tool.name, JSON.stringify(tool), now, states.get(tool.name) ?? 'staged', unchanged ? 1 : 0);
+    }),
     // Page meta and sitemap are part of the manifest (#210): replaced with it,
     // so they can never name an action the app no longer registers.
     db.prepare('DELETE FROM app_page_meta WHERE app_id = ?').bind(appId),
