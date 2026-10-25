@@ -1308,9 +1308,13 @@ describe('safety: dry-run', () => {
     expect(mockGh.deleteFile).not.toHaveBeenCalled();
   });
 
-  it('provision_app dry_run previews without calling the provision API', async () => {
+  it('provision_app dry_run discloses an existing worker refresh without calling the provision API', async () => {
     const result = await tools.get('provision_app')!({ app_id: 'app', dry_run: true });
-    expect(getText(result)).toContain('DRY RUN');
+    const preview = getText(result);
+    expect(preview).toContain('DRY RUN');
+    expect(preview).toContain('reuse existing D1 data without resetting it');
+    expect(preview).toContain('refresh the data-worker script and bindings for pas-data-app, including an existing worker');
+    expect(preview).not.toContain('skips existing resources');
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
