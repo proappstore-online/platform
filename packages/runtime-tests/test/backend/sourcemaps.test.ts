@@ -195,4 +195,20 @@ describe('browser source maps (#393)', () => {
     expect(logs.map((l) => l.symbolication.status)).toEqual(['ok', 'ok', 'ok', 'skipped']);
     expect(logs[3]!.symbolication.reason).toBe('per_request_limit');
   });
+
+  it('#442: one logs request stops loading releases past the byte budget; the one that does not fit reads unavailable', async () => {
+    // Three ~9 MB releases (sourcesContent-style padding): 18 MB fits in 24 MB, the third would make 27 MB.
+    const pad = 'x'.repeat(9 * 1024 * 1024);
+    const fat = JSON.stringify({ files: { 'assets/index-abc.js': { version: 3, sources: ['src/App.tsx'], sourcesContent: [pad], names: [], mappings: 'AASI' } } });
+    const shas = ['5', '6', '7'].map((d) => d.repeat(40));
+    for (const sha of shas) expect((await upload(sha, fat)).status).toBe(201);
+    const now = Date.now();
+    const stack = `Error\n    at f (https://${APP}.proappstore.online/assets/index-abc.js:1:1)`;
+    await env.DB.batch(shas.map((sha, i) => env.DB.prepare(
+      "INSERT INTO app_logs (app_id, ts, level, category, message, data, build_meta, source, ingested_at) VALUES (?, ?, 'error', 'runtime', 'e', ?, ?, 'mediated', ?)",
+    ).bind(APP, now - i, JSON.stringify({ stack }), JSON.stringify({ sha }), now)));
+    const { logs } = await (await SELF.fetch(`${BASE}/v1/apps/${APP}/logs?symbolicate=true`, json('GET', undefined, await session('gh:1')))).json() as { logs: { symbolication: { status: string; frames: Record<string, unknown>[] } }[] };
+    expect(logs.map((l) => l.symbolication.status)).toEqual(['ok', 'ok', 'unavailable']);
+    expect(logs[2]!.symbolication.frames[0]).toMatchObject({ unresolved: true });
+  });
 });

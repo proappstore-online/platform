@@ -38,7 +38,7 @@ import {
   type RawLogEntry,
 } from '../lib/log-ingest.js';
 import { dataFaultOf } from '../lib/data-worker-url.js';
-import { COMMIT_SHA_RE, loadRelease, mapFrames, parseStack, type Release } from '../lib/sourcemap.js';
+import { COMMIT_SHA_RE, MAX_REQUEST_BUNDLE_BYTES, loadRelease, mapFrames, parseStack, type Release } from '../lib/sourcemap.js';
 import { recordDataPlaneFailure } from '../lib/operation-log.js';
 import { incrementMetrics } from '../lib/metric-aggregates.js';
 import { checkLogQuota, d1LogUsageStore, publicLogBurstKey, SERVER_FAILURE_DAILY_LIMIT, serverFailureUsageStore } from '../lib/log-quota.js';
@@ -536,11 +536,13 @@ const MAX_SYMBOLICATED_RELEASES = 3;
  * Attach `symbolication` to each row that has a stack (`data.stack`): its frames
  * mapped through the release its own `build.sha` names — never another — and an
  * explicit status. A release is loaded once per request; past the row or release
- * limit a row says `skipped`, and a row without a build SHA says `missing`.
+ * limit a row says `skipped`, and a row without a build SHA says `missing`. Releases
+ * are loaded against a shared byte budget (#442); one that no longer fits reads `unavailable`.
  * The raw stack stays in `data`.
  */
 async function symbolicateLogs<T extends { data?: unknown; build?: unknown }>(env: Env, appId: string, logs: T[]): Promise<T[]> {
   const releases = new Map<string, Release>();
+  const budget = { remaining: MAX_REQUEST_BUNDLE_BYTES }; // #442
   let done = 0;
   const out: T[] = [];
   for (const row of logs) {
@@ -557,7 +559,7 @@ async function symbolicateLogs<T extends { data?: unknown; build?: unknown }>(en
       continue;
     }
     let release = releases.get(sha);
-    if (!release) { release = await loadRelease(env, appId, sha); releases.set(sha, release); }
+    if (!release) { release = await loadRelease(env, appId, sha, Date.now(), budget); releases.set(sha, release); }
     done += 1;
     out.push({ ...row, symbolication: { ...mapFrames(release, frames), commitSha: sha } });
   }

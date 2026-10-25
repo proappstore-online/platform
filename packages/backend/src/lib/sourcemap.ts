@@ -19,6 +19,12 @@ const SOURCEMAP_PREFIX = '_sourcemaps';
 export const SOURCEMAP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** One release's bundle. Parsed whole on read, so bounded well inside a Worker's memory. */
 export const MAX_BUNDLE_BYTES = 20 * 1024 * 1024;
+/**
+ * #442: total bundle bytes one request may hold. Each loaded release is fully read, hashed,
+ * decoded and parsed (several copies of its size at once) and stays in memory for the whole
+ * request, so three 20 MB releases could exceed the Worker's 128 MB limit.
+ */
+export const MAX_REQUEST_BUNDLE_BYTES = 24 * 1024 * 1024;
 const MAX_BUNDLE_FILES = 500;
 export const MAX_FRAMES = 50;
 export const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
@@ -99,7 +105,11 @@ export type Release = { status: 'ok'; files: Record<string, unknown>; maps: Map<
  * `missing` (no such release), `unavailable` (expired, or its bundle is gone),
  * `mismatched` (stored bytes differ from the manifest digest), `ok`.
  */
-export async function loadRelease(env: Env, appId: string, commitSha: string, nowMs: number = Date.now()): Promise<Release> {
+export async function loadRelease(
+  env: Env, appId: string, commitSha: string, nowMs: number = Date.now(),
+  /** Shared across one request's loads: a release whose stored size no longer fits is `unavailable` and never read. */
+  budget?: { remaining: number },
+): Promise<Release> {
   const row = await env.DB.prepare(
     'SELECT asset_digest, storage_key, expires_at, status FROM release_sourcemap_manifests WHERE app_id = ? AND commit_sha = ?',
   ).bind(appId, commitSha).first<{ asset_digest: string; storage_key: string; expires_at: number; status: string }>();
@@ -108,6 +118,10 @@ export async function loadRelease(env: Env, appId: string, commitSha: string, no
 
   const object = await env.STORAGE.get(row.storage_key);
   if (!object) return { status: 'unavailable' };
+  if (budget) {
+    if (object.size > budget.remaining) { await object.body.cancel().catch(() => {}); return { status: 'unavailable' }; }
+    budget.remaining -= object.size;
+  }
   const bytes = await object.arrayBuffer();
   if (bytes.byteLength > MAX_BUNDLE_BYTES || (await sha256Hex(bytes)) !== row.asset_digest) return { status: 'mismatched' };
   try {
