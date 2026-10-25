@@ -21,7 +21,7 @@ type Row = {
 };
 
 /** Minimal D1 model for the receipt endpoints; it never creates app data. */
-function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
+function operationDb(opts: { quotaUnavailable?: boolean; beforeAdmissionStage?: () => Promise<void> } = {}) {
   const byApp = new Map<string, Row>();
   const byReceipt = new Map<string, Row>();
   const admissions = new Map<string, { operation_id: string; creator_id: string; app_id: string; intent_hash: string; attempt_id: string; lease_expires_at: number; created_at: number; claimed_at: number | null; status: string; status_updated_at: number }>();
@@ -57,6 +57,7 @@ function operationDb(opts: { quotaUnavailable?: boolean } = {}) {
             return { meta: { changes: 1 } };
           }
           if (/INSERT OR IGNORE INTO provision_admissions/i.test(sql)) {
+            await opts.beforeAdmissionStage?.();
             const [operationId, creatorId, appId, intentHash, attemptId, leaseExpiresAt, createdAt, statusUpdatedAt] = values as [string, string, string, string, string, number, number, number];
             if (admissions.has(operationId)) return { meta: { changes: 0 } };
             admissions.set(operationId, {
@@ -99,17 +100,41 @@ const intent = { templateId: 'template-app', options: { verify: true } };
 
 describe('durable provision receipts (#358)', () => {
   it('creates one receipt for concurrent retries, retains evidence, and completes after the interrupted response', async () => {
-    const env = makeEnv({}, operationDb());
+    let stageReached!: () => void;
+    let releaseStage!: () => void;
+    const reached = new Promise<void>((resolve) => { stageReached = resolve; });
+    const released = new Promise<void>((resolve) => { releaseStage = resolve; });
+    const env = makeEnv({}, operationDb({
+      beforeAdmissionStage: async () => {
+        stageReached();
+        await released;
+      },
+    }));
     const request = () => app.request('/v1/provision-operations', {
       method: 'POST', headers: headers(ownerToken), body: JSON.stringify({ appId: 'interrupted-app', intent, bootstrapIntent: intent }),
     }, env);
-    const [first, retry] = await Promise.all([request(), request()]);
-    const firstData = await first.json() as { receipt: string; status: string };
+    // Hold the creator after its durable receipt exists, before its admission
+    // is staged. A simultaneous retry must fail closed, then converge once
+    // admission succeeds; crypto scheduling must not select our assertions.
+    const creating = request();
+    try {
+      await reached;
+      const earlyRetry = await request();
+      expect(earlyRetry.status).toBe(503);
+      expect(earlyRetry.headers.get('Retry-After')).toBe('60');
+      expect(await earlyRetry.text()).toBe('provisioning admission is not executable yet — retry later');
+    } finally {
+      releaseStage();
+    }
+    const first = await creating;
+    expect(first.status).toBe(201);
+    const firstData = await first.json() as { receipt: string; status: string; attemptId: string };
+    const retry = await request();
+    expect(retry.status).toBe(200);
     const retryData = await retry.json() as { receipt: string; status: string; joined: boolean };
-    expect([first.status, retry.status].sort()).toEqual([200, 201]);
     expect(firstData.receipt).toBe(retryData.receipt);
     expect(retryData.status).toBe('pending');
-    expect(retryData.joined || first.status === 200).toBe(true);
+    expect(retryData.joined).toBe(true);
 
     const patched = await app.request('/v1/provision-operations/interrupted-app', {
       method: 'PATCH', headers: headers(ownerToken),
