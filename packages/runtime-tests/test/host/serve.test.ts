@@ -100,6 +100,26 @@ describe('host: per-route page meta and sitemap (#210)', () => {
       .bind(slug, position, path, action, param, Date.now()).run();
   const shell = '<!doctype html><html><head><title>Trade Port</title><meta property="og:title" content="Trade Port"></head><body></body></html>';
 
+  it('replaces copied homepage og:url with one identity for each declared public record', async () => {
+    await seedRoute('record-social');
+    const base = shell.replace('</head>', '<meta property="og:url" content="https://record-social.proappstore.online/"><meta property="og:url" content="https://old.example/"></head>');
+    await env.APPS.put('apps/record-social/index.html', base);
+    await pageMeta('record-social', '/p/:id', 'fixture_product_meta', 'id');
+    for (const id of ['first', 'second']) {
+      const url = `https://record-social.proappstore.online/p/${id}`;
+      const response = await SELF.fetch(url);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html.match(/property="og:url"/g)).toHaveLength(1);
+      expect(html).toContain(`property="og:url" content="${url}"`);
+      expect(html).toContain(`rel="canonical" href="${url}"`);
+      expect(html).toContain(`<title>Product ${id}</title>`);
+    }
+    const root = await (await SELF.fetch('https://record-social.proappstore.online/')).text();
+    expect(root).toContain('<title>Trade Port</title>');
+    expect(root).not.toContain('Product first');
+  });
+
   it('rewrites title and og tags for a matching path; the root keeps the app title', async () => {
     await seedRoute('pm1');
     await env.APPS.put('apps/pm1/index.html', shell);
@@ -279,7 +299,7 @@ it('adds canonical and listing fallback only to approved public roots and declar
 
 it('preserves explicit app canonical and noindex instructions without advertising a noindex root', async () => {
   await seedRoute('seo-public');
-  await env.APPS.put('apps/seo-public/index.html', '<html><head><meta name="robots" content="noindex"><link rel="canonical" href="https://custom.example/"><meta name="description" content="Custom description"></head><body></body></html>');
+  await env.APPS.put('apps/seo-public/index.html', '<html><head><meta name="robots" content="noindex"><link rel="canonical" href="https://custom.example/"><meta property="og:url" content="https://custom.example/"><meta name="description" content="Custom description"></head><body></body></html>');
   const html = await (await SELF.fetch('https://seo-public.proappstore.online/')).text();
   expect(html).toContain('name="robots" content="noindex"');
   expect(html).toContain('href="https://custom.example/"');

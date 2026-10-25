@@ -13,6 +13,8 @@ export interface SocialMeta extends ListingMeta {
   fallbackDescription?: string | null;
   /** Only an approved public root or declared public page_meta path qualifies. */
   canonical?: boolean;
+  /** A successful declared public page_meta record owns its link-preview identity. */
+  publicRecord?: boolean;
   /** The app is private (#259): stamp VISIBILITY_META_TAG so the SDK keeps file URLs same-origin. */
   private?: boolean;
 }
@@ -356,7 +358,13 @@ export function rewriteMetaTags(
       );
   }
 
-  rewriter = meta.canonical
+  rewriter = meta.publicRecord && meta.canonical && !meta.private
+    ? rewriter.on('meta[property="og:url"]', {
+        // Remove copied SPA identities (including duplicates). The head-end
+        // injector emits one URL after it has observed any app canonical.
+        element(el: Element) { el.remove(); },
+      })
+    : meta.canonical
     ? rewriter.on('meta[property="og:url"]', new FoundTagMarker("og:url", tracker))
     : rewriter.on(
         'meta[property="og:url"]',

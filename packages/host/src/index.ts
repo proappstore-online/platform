@@ -371,6 +371,7 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
         fallbackTitle: approved?.name,
         fallbackDescription: approved?.description,
         canonical: !privateApp && !operatorPath && (Boolean(approved) || Boolean(page)),
+        publicRecord: !privateApp && !operatorPath && Boolean(page),
       },
       `${url.origin}${root ? "/" : url.pathname}`,
     );
