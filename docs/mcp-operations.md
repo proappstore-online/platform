@@ -1,8 +1,9 @@
 # PAS MCP operations
 
-The general PAS server is `https://mcp.proappstore.online/mcp`. It provides 68
-platform tools. App endpoints use `/mcp/apps/<app_id>` and expose that app's
-registered actions plus identity and audit tools. See [connection setup and app
+The general PAS server is `https://mcp.proappstore.online/mcp`. Its live tool
+catalogue describes the available platform tools. App endpoints use
+`/mcp/apps/<app_id>` and expose that app's registered actions plus identity and
+audit tools. See [connection setup and app
 tools](mcp-app-tools.md) for client instructions.
 
 ## Action rejection contract
@@ -16,6 +17,15 @@ with `stale_revision` and `operation_conflict` respectively. Apps can use those
 signals for optimistic concurrency and idempotency conflicts. Rejected D1 batches
 roll back every statement. Schema defects and infrastructure failures remain
 safe 5xx errors; their outcome may require reconciliation before retrying.
+
+The classifier accepts D1's primary constraint code, a direct named extended
+code, and the newer workerd suffix such as
+`SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)`. It still requires a
+complete D1 error wrapper and an exact allowlisted conflict signal. Our pinned
+local D1 runtime emits the older form, so parser regressions cover both formats
+in addition to real D1 rollback tests. Verify rejected actions on the deployed
+worker before closing a rollout issue; local runtime success alone does not
+prove production error-format compatibility.
 
 The data-worker script is embedded into the platform deployment. Existing app
 workers need an owner-authorised `provision_app` preview and execution to receive

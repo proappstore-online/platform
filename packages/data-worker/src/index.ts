@@ -417,12 +417,20 @@ function traceIdOf(header: string | undefined): string | null {
  * D1/trigger text: it may contain SQL, schema names or caller values. Only exact
  * standard conflict signals get a more specific, fixed response. */
 function constraintResponse(err: Error): { status: 409 | 422; error: string; errorCode: string } | null {
-  const match = /^D1_ERROR: ([\s\S]+): SQLITE_CONSTRAINT(?:_[A-Z]+)?$/.exec(err.message);
-  if (!match) return null;
-  if (match[1] === 'stale revision' || match[1] === 'stale organisation revision') {
+  const prefix = 'D1_ERROR: ';
+  if (!err.message.startsWith(prefix)) return null;
+  const codeAt = err.message.indexOf(': SQLITE_', prefix.length);
+  if (codeAt < 0) return null;
+  // workerd dbErrorMessage() may append a named extended code. Parse the
+  // suffix separately so a malformed suffix cannot become part of the signal
+  // by backtracking to an embedded SQLITE_CONSTRAINT marker.
+  // https://github.com/cloudflare/workerd/blob/67e852e6968348985c3c7806e777ff850dc723da/src/workerd/util/sqlite.c++
+  if (!/^: SQLITE_CONSTRAINT(?:_[A-Z]+)?(?: \(extended: SQLITE_CONSTRAINT_[A-Z]+\))?$/.test(err.message.slice(codeAt))) return null;
+  const signal = err.message.slice(prefix.length, codeAt);
+  if (signal === 'stale revision' || signal === 'stale organisation revision') {
     return { status: 409, error: 'stale revision', errorCode: 'stale_revision' };
   }
-  if (match[1] === 'operation key conflict') {
+  if (signal === 'operation key conflict') {
     return { status: 409, error: 'operation key conflict', errorCode: 'operation_conflict' };
   }
   return { status: 422, error: 'action rejected by database constraint', errorCode: 'constraint_violation' };

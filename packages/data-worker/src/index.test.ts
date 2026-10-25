@@ -574,11 +574,32 @@ describe("fault verdict and trace context (#394)", () => {
     ['employment periods overlap', 422, 'action rejected by database constraint', 'constraint_violation'],
     ['private user value: stale revision', 422, 'action rejected by database constraint', 'constraint_violation'],
   ])('safely returns the expected rejection for %s', async (message, status, error, errorCode) => {
-    const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(`D1_ERROR: ${message}: SQLITE_CONSTRAINT`) as never, INTERNAL_TOKEN));
-    expect(res.status).toBe(status);
-    expect(await res.json()).toEqual({ error, errorCode });
-    expect(res.headers.get('Cache-Control')).toBe('no-store');
-    expect(res.headers.get('X-PAS-Fault')).toBeNull();
+    // workerd's newer dbErrorMessage includes the named extended code. The
+    // pinned local D1 runtime emits only the primary code; cover both forms.
+    for (const suffix of ['', '_TRIGGER', ' (extended: SQLITE_CONSTRAINT_TRIGGER)']) {
+      const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(`D1_ERROR: ${message}: SQLITE_CONSTRAINT${suffix}`) as never, INTERNAL_TOKEN));
+      expect(res.status, suffix).toBe(status);
+      expect(await res.json()).toEqual({ error, errorCode });
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(res.headers.get('X-PAS-Fault')).toBeNull();
+    }
+  });
+
+  it.each([
+    'D1_ERROR: stale revision: SQLITE_ERROR (extended: SQLITE_CONSTRAINT_TRIGGER)',
+    'D1_ERROR: stale revision: SQLITE_CONSTRAINT (extended: SQLITE_IOERR_WRITE)',
+    'D1_ERROR: stale revision: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER) private trailing value',
+    'D1_ERROR: stale revision: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER',
+    'D1_ERROR: stale revision: SQLITE_CONSTRAINT_UNKNOWN(19)',
+  ])('does not interpret a malformed or non-constraint D1 error as a caller rejection: %s', async (message) => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(message) as never, INTERNAL_TOKEN));
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'internal server error' });
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("a body that is not JSON is a client fault", async () => {
