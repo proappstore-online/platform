@@ -599,3 +599,7 @@ request totals and 5xx counts. The response lists each rule with `firing`,
   `monitoring_degraded`;
 - each owner's `app.alert` destination and responder actually receiving and
   acting on a delivery.
+
+## Data workers with no `apps` row (#446)
+
+Fleet operations (`redeploy-data-workers.yml`, the #394 observability rollout) iterate the `apps` registry, so a `pas-data-<id>` worker without a row is never redeployed. `reconcile-data-workers.yml` runs daily and fails, naming each orphan, when the Cloudflare account has one (`scripts/data-worker-drift.mjs`). Resolve it by registering the app (`redeploy-data-workers.yml` with `app_id` and `creator_id`) or deleting the worker. `DATA_WORKER_ALLOWLIST` acknowledges a deliberate exception.
