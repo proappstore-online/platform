@@ -347,6 +347,20 @@ on an app with no user behind them. They run with platform identities that are
   new grant, switching the workflow's `exchange/oidc` call (same endpoint, same audience), then
   revoking the old grant. Console UI lives in `proappstore-online/console`.
 
+  **Lifecycle API (#434)**, platform admins only (401 unauthenticated, 403 non-admin, 404 unknown id,
+  422 invalid input, 409 state conflict): `GET /v1/admin/test-principals` (`?status=&limit=&cursor=`),
+  `GET …/:id` (principal plus only its own grants), `PATCH …/:id` (`description` only; slug, user id
+  and status are immutable here), `POST …/:id/disable` (deactivate; revokes all live grants and lists
+  them in the audit event) and `…/enable` (restores the principal, never its revoked grants),
+  `GET|POST /v1/admin/oidc-session-grants`, `GET …/:id`, `DELETE …/:id` (revoke). Lists page with
+  `limit` (1–100) and an opaque `next_cursor`. Every mutation accepts an optional `reason` and records
+  actor, time, `X-Request-Id` (else `CF-Ray`, else generated) and before/after metadata in
+  `test_principal_events`, which migration 0114 makes append-only by trigger. Nothing is deleted;
+  revoke/deactivate is the lifecycle.
+  **Rollback:** the API is additive. Drop triggers `trg_test_principal_events_no_update`/`_no_delete`
+  and the 0114 indexes to undo the schema; added columns are nullable and safe to leave. Legacy #146
+  grants have NULL principal bindings and are untouched by either migration.
+
 - **Host context (`X-PAS-App`, `X-PAS-Host`)** (#315) is the host worker's word
   about which app origin (and which app hostname) a request came from. It is not
   an identity, and it authorizes nothing on its own: it is an *input* to checks

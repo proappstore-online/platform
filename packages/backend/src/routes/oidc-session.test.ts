@@ -198,8 +198,8 @@ describe('admin grant management', () => {
     const list = await app.request('/v1/admin/oidc-session-grants', json(ADMIN, 'GET'), makeEnv(mockD1(mockStmt({ all: { results: [grant()] } }))));
     expect(((await list.json()) as { grants: { id: string; mint_count: number }[] }).grants).toEqual([expect.objectContaining({ id: 'g1', mint_count: 3 })]);
 
-    expect((await app.request('/v1/admin/oidc-session-grants/g1', json(ADMIN, 'DELETE'), makeEnv(mockD1(mockStmt({ run: { meta: { changes: 1 } } }))))).status).toBe(200);
-    expect((await app.request('/v1/admin/oidc-session-grants/g1', json(ADMIN, 'DELETE'), makeEnv(mockD1(mockStmt({ run: { meta: { changes: 0 } } }))))).status).toBe(404);
+    expect((await app.request('/v1/admin/oidc-session-grants/g1', json(ADMIN, 'DELETE'), makeEnv(mockD1(mockStmt({ first: { principal_id: null } }), mockStmt({ run: { meta: { changes: 1 } } }))))).status).toBe(200);
+    expect((await app.request('/v1/admin/oidc-session-grants/g1', json(ADMIN, 'DELETE'), makeEnv(mockD1(mockStmt(), mockStmt({ run: { meta: { changes: 0 } } }))))).status).toBe(404);
   });
 });
 
@@ -257,7 +257,7 @@ describe('managed test principals (#432)', () => {
   describe('admin lifecycle', () => {
     const req = async (method: string, path: string, db: ReturnType<typeof mockD1>, body?: unknown, who = 'admin') => {
       const token = await testToken('gh:1', { roles: who === 'admin' ? ['user', 'creator', 'admin'] : ['user', 'creator'] });
-      return app.request(path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body && method === 'POST' ? { body: JSON.stringify(body) } : {}) }, makeEnv(db));
+      return app.request(path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body && method !== 'GET' ? { body: JSON.stringify(body) } : {}) }, makeEnv(db));
     };
 
     it('is admin-only', async () => {
@@ -273,12 +273,12 @@ describe('managed test principals (#432)', () => {
       expect(((await res.json()) as { principal: Record<string, unknown> }).principal).toMatchObject({ slug: 'smoke-e2e', user_id: 'test:smoke-e2e', status: 'active' });
       expect(db.batch).toHaveBeenCalledTimes(1);
       expect((db.batch.mock.calls[0]![0] as unknown[]).length).toBe(3);
-      expect((await req('POST', '/v1/admin/test-principals', mockD1(), { slug: 'Bad Slug' })).status).toBe(400);
+      expect((await req('POST', '/v1/admin/test-principals', mockD1(), { slug: 'Bad Slug' })).status).toBe(422);
       expect((await req('POST', '/v1/admin/test-principals', mockD1(mockStmt({ first: { id: 'x' } })), { slug: 'smoke-e2e' })).status).toBe(409);
     });
 
     it('disabling revokes the principal’s grants and is audited; enabling re-activates', async () => {
-      const db = mockD1(mockStmt({ run: { meta: { changes: 1 } } }));
+      const db = mockD1(mockStmt({ all: { results: [{ id: 'g9' }] } }), mockStmt({ run: { meta: { changes: 1 } } }));
       expect((await req('POST', '/v1/admin/test-principals/tp_1/disable', db)).status).toBe(200);
       const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
       expect(sqls.some((s) => s.includes('UPDATE oidc_session_grants SET revoked_at') && s.includes('principal_id'))).toBe(true);
@@ -290,14 +290,97 @@ describe('managed test principals (#432)', () => {
     it('issues a least-privilege grant: workflow and future expiry required, ttl bounded, principal must be active', async () => {
       const base = { repository: REPO, principal_id: 'tp_1', workflow: '.github/workflows/e2e-full.yml', expires_at: Date.now() + 86_400_000, environment: 'prod-smoke', session_ttl_seconds: 600 };
       const principal = () => mockStmt({ first: { id: 'tp_1', user_id: 'test:smoke', status: 'active' } });
-      const res = await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal(), mockStmt(), mockStmt()), base);
+      const res = await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal()), base);
       expect(res.status).toBe(201);
       expect(((await res.json()) as { grant: Record<string, unknown> }).grant).toMatchObject({ user_id: 'test:smoke', principal_id: 'tp_1', environment: 'prod-smoke', scope: 'user', session_ttl_seconds: 600 });
       for (const bad of [{ ...base, workflow: undefined }, { ...base, expires_at: undefined }, { ...base, expires_at: 1 }, { ...base, session_ttl_seconds: 10 }, { ...base, session_ttl_seconds: 999999 }, { ...base, scope: 'admin' }]) {
-        expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal()), bad)).status, JSON.stringify(bad)).toBe(400);
+        expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal()), bad)).status, JSON.stringify(bad)).toBe(422);
       }
       expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(mockStmt({ first: { id: 'tp_1', user_id: 'test:smoke', status: 'disabled' } })), base)).status).toBe(409);
       expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(mockStmt()), base)).status).toBe(404);
+    });
+
+    it('reads one principal with only its own grants; 404 for an unknown id', async () => {
+      const db = mockD1(mockStmt({ first: { id: 'tp_1', slug: 'smoke', status: 'active' } }), mockStmt({ all: { results: [pgrant()] } }));
+      const res = await req('GET', '/v1/admin/test-principals/tp_1', db);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { principal: { id: string }; grants: { id: string }[] };
+      expect(body.principal.id).toBe('tp_1');
+      expect(body.grants.map((g) => g.id)).toEqual(['g9']);
+      expect(db.prepare.mock.calls.some((c) => String(c[0]).includes('WHERE principal_id = ?'))).toBe(true);
+      expect((await req('GET', '/v1/admin/test-principals/nope', mockD1())).status).toBe(404);
+    });
+
+    it('paginates principals with an opaque cursor and validates limit, cursor and status as 422', async () => {
+      const rows = [3, 2, 1].map((n) => ({ id: `tp_${n}`, slug: `p-${n}`, created_at: n * 1000, status: 'active' }));
+      const res = await req('GET', '/v1/admin/test-principals?limit=2', mockD1(mockStmt({ all: { results: rows } })));
+      const page = (await res.json()) as { principals: { id: string }[]; next_cursor: string | null };
+      expect(page.principals.map((p) => p.id)).toEqual(['tp_3', 'tp_2']);
+      expect(page.next_cursor).toEqual(expect.any(String));
+      const db = mockD1(mockStmt({ all: { results: [rows[2]] } }));
+      const next = await req('GET', `/v1/admin/test-principals?limit=2&cursor=${page.next_cursor}`, db);
+      expect(((await next.json()) as { next_cursor: string | null }).next_cursor).toBeNull();
+      expect(db.prepare.mock.calls[0]![0]).toContain('created_at < ?');
+      for (const q of ['limit=0', 'limit=101', 'limit=x', 'cursor=!!', 'status=bogus']) {
+        expect((await req('GET', `/v1/admin/test-principals?${q}`, mockD1())).status, q).toBe(422);
+      }
+    });
+
+    it('updates bounded metadata only, recording before/after, reason and request id', async () => {
+      const before = { id: 'tp_1', slug: 'smoke', description: 'old', status: 'active' };
+      const db = mockD1(mockStmt({ first: before }));
+      const res = await req('PATCH', '/v1/admin/test-principals/tp_1', db, { description: 'new', reason: 'rename' });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { principal: Record<string, unknown> }).principal).toMatchObject({ slug: 'smoke', description: 'new' });
+      const audit = db.prepare.mock.results.map((r) => r.value).find((_, i) => String(db.prepare.mock.calls[i]![0]).includes('INSERT INTO test_principal_events'))!;
+      const [, , action, actor, detail, , requestId, reason] = audit.bind.mock.calls.at(-1)!;
+      expect([action, actor, reason]).toEqual(['principal.update', 'gh:1', 'rename']);
+      expect(JSON.parse(detail)).toEqual({ before: { description: 'old' }, after: { description: 'new' } });
+      expect(requestId).toEqual(expect.any(String));
+      for (const bad of [{ slug: 'x' }, { status: 'disabled' }, { description: 5 }, { description: 'x'.repeat(241) }, {}, { description: 'ok', reason: 5 }]) {
+        expect((await req('PATCH', '/v1/admin/test-principals/tp_1', mockD1(mockStmt({ first: before })), bad)).status, JSON.stringify(bad)).toBe(422);
+      }
+      expect((await req('PATCH', '/v1/admin/test-principals/nope', mockD1(), { description: 'x' })).status).toBe(404);
+      expect((await req('PATCH', '/v1/admin/test-principals/tp_1', mockD1(), { description: 'x' }, 'creator')).status).toBe(403);
+    });
+
+    it('disable audits the grants it revoked; the audit row carries no token material', async () => {
+      const db = mockD1(mockStmt({ all: { results: [{ id: 'g9' }, { id: 'g10' }] } }), mockStmt({ run: { meta: { changes: 1 } } }));
+      const res = await req('POST', '/v1/admin/test-principals/tp_1/disable', db, { reason: 'leaked' });
+      expect(await res.json()).toEqual({ ok: true, revoked_grants: 2 });
+      const batch = db.batch.mock.calls[0]![0] as { bind: { mock: { calls: unknown[][] } } }[];
+      const [, , action, , detail, , , reason] = batch[1]!.bind.mock.calls.at(-1)!;
+      expect([action, reason]).toEqual(['principal.disable', 'leaked']);
+      expect(JSON.parse(detail as string)).toMatchObject({ before: { status: 'active' }, after: { status: 'disabled' }, revokedGrants: ['g9', 'g10'] });
+      expect(String(detail)).not.toMatch(/token|secret|jwt/i);
+      expect((await req('POST', '/v1/admin/test-principals/tp_1/disable', mockD1(), { reason: 'x'.repeat(300) })).status).toBe(422);
+    });
+
+    it('revoking a principal grant attributes the audit event to its principal', async () => {
+      const db = mockD1(mockStmt({ first: { principal_id: 'tp_1' } }), mockStmt({ run: { meta: { changes: 1 } } }));
+      expect((await req('DELETE', '/v1/admin/oidc-session-grants/g9', db)).status).toBe(200);
+      const audit = db.prepare.mock.results.map((r) => r.value)[2];
+      expect(audit.bind.mock.calls.at(-1)!.slice(0, 4)).toEqual(['tp_1', 'g9', 'grant.revoke', 'gh:1']);
+    });
+
+    it('reads one grant and paginates/filter grants by principal', async () => {
+      expect((await req('GET', '/v1/admin/oidc-session-grants/g9', mockD1(mockStmt({ first: pgrant() })))).status).toBe(200);
+      expect((await req('GET', '/v1/admin/oidc-session-grants/nope', mockD1())).status).toBe(404);
+      const db = mockD1(mockStmt({ all: { results: [pgrant()] } }));
+      const res = await req('GET', '/v1/admin/oidc-session-grants?principal_id=tp_1&limit=10', db);
+      expect(((await res.json()) as { grants: unknown[]; next_cursor: null }).next_cursor).toBeNull();
+      expect(db.prepare.mock.calls[0]![0]).toContain('principal_id = ?');
+    });
+
+    it('events filter by principal and paginate', async () => {
+      const db = mockD1(mockStmt({ all: { results: [{ id: 9, at: 5 }, { id: 8, at: 5 }] } }));
+      const res = await req('GET', '/v1/admin/test-principal-events?principal_id=tp_1&limit=1', db);
+      const body = (await res.json()) as { events: { id: number }[]; next_cursor: string };
+      expect(body.events.map((e) => e.id)).toEqual([9]);
+      expect(db.prepare.mock.calls[0]![0]).toContain('principal_id = ?');
+      const db2 = mockD1(mockStmt());
+      await req('GET', `/v1/admin/test-principal-events?cursor=${body.next_cursor}`, db2);
+      expect(db2.prepare.mock.calls[0]![0]).toContain('at < ?');
     });
 
     it('lists audit events', async () => {

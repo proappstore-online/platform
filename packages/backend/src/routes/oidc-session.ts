@@ -152,7 +152,9 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
 });
 
 // ── Grant management: platform admins only ─────────────────────────
-async function requireGrantAdmin(c: Parameters<typeof requireUser>[0]) {
+type Ctx = Parameters<typeof requireUser>[0];
+
+async function requireGrantAdmin(c: Ctx) {
   const user = await requireUser(c);
   const trustedMcpAdmin = internalTokenOk(c.req.header('X-Internal-Token'), c.env.INTERNAL_TOKEN)
     && isAdminId(user.id, c.env);
@@ -167,29 +169,93 @@ const grantView = (g: GrantRow) => ({
   session_ttl_seconds: g.session_ttl_seconds ?? null, scope: g.scope ?? null,
 });
 
+/** Correlation id for the audit trail: the caller's own, else Cloudflare's, else a fresh one. */
+const requestIdOf = (c: Ctx) => (c.req.header('X-Request-Id') ?? c.req.header('CF-Ray') ?? crypto.randomUUID()).slice(0, 80);
+
+/** Optional free-text `reason` for a mutation; 422 when present but not a bounded string. */
+function reasonOf(body: { reason?: unknown } | null): string | null {
+  if (body?.reason === undefined || body.reason === null) return null;
+  if (typeof body.reason !== 'string' || body.reason.length > 240) throw new HttpError('reason must be a string of at most 240 characters', 422);
+  return body.reason.trim() || null;
+}
+
+const optionalBody = async (c: Ctx) => (await c.req.json<Record<string, unknown>>().catch(() => null)) ?? {};
+
+/** Append-only audit row. `detail` carries before/after metadata only — never a token or secret. */
+const auditEvent = (c: Ctx, principalId: string | null, grantId: string | null, action: string, actor: string, detail: Record<string, unknown> = {}, reason: string | null = null) =>
+  c.env.DB.prepare('INSERT INTO test_principal_events (principal_id, grant_id, action, actor, detail, at, request_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(principalId, grantId, action, actor, JSON.stringify(detail), Date.now(), requestIdOf(c), reason);
+
+// ── Pagination: `?limit=` (1..100, default 50) and an opaque `?cursor=` over (time DESC, id DESC) ──
+const PAGE_DEFAULT = 50;
+const PAGE_MAX = 100;
+
+function pageParams(c: Ctx): { limit: number; cursor: { t: number; id: string } | null } {
+  const rawLimit = c.req.query('limit');
+  let limit = PAGE_DEFAULT;
+  if (rawLimit !== undefined) {
+    limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > PAGE_MAX) throw new HttpError(`limit must be 1..${PAGE_MAX}`, 422);
+  }
+  const raw = c.req.query('cursor');
+  if (raw === undefined) return { limit, cursor: null };
+  try {
+    const [t, ...rest] = atob(raw.replace(/-/g, '+').replace(/_/g, '/')).split('|');
+    const id = rest.join('|');
+    if (!/^\d+$/.test(t ?? '') || !id) throw new Error('bad');
+    return { limit, cursor: { t: Number(t), id } };
+  } catch {
+    throw new HttpError('cursor is not valid', 422);
+  }
+}
+
+const cursorOf = (t: number, id: string | number) => btoa(`${t}|${id}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/** Trim the limit+1 probe row and build the next cursor. */
+function paged<T>(rows: T[], limit: number, key: (r: T) => [number, string | number]): { items: T[]; next_cursor: string | null } {
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return { items, next_cursor: rows.length > limit && last ? cursorOf(...key(last)) : null };
+}
+
 oidcSessionRoutes.get('/admin/oidc-session-grants', async (c) => {
   await requireGrantAdmin(c);
+  const { limit, cursor } = pageParams(c);
+  const principalId = c.req.query('principal_id');
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  if (principalId) { where.push('principal_id = ?'); binds.push(principalId); }
+  if (cursor) { where.push('(created_at < ? OR (created_at = ? AND id < ?))'); binds.push(cursor.t, cursor.t, cursor.id); }
   const rows = await c.env.DB.prepare(
-    `SELECT ${GRANT_COLUMNS} FROM oidc_session_grants ORDER BY created_at DESC LIMIT 500`,
-  ).all<GrantRow>();
+    `SELECT ${GRANT_COLUMNS} FROM oidc_session_grants${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).bind(...binds, limit + 1).all<GrantRow>();
+  const { items, next_cursor } = paged(rows.results ?? [], limit, (g) => [g.created_at, g.id]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ grants: (rows.results ?? []).map(grantView) });
+  return c.json({ grants: items.map(grantView), next_cursor });
 });
 
-const auditEvent = (c: Parameters<typeof requireUser>[0], principalId: string | null, grantId: string | null, action: string, actor: string, detail: Record<string, unknown> = {}) =>
-  c.env.DB.prepare('INSERT INTO test_principal_events (principal_id, grant_id, action, actor, detail, at) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(principalId, grantId, action, actor, JSON.stringify(detail), Date.now());
+oidcSessionRoutes.get('/admin/oidc-session-grants/:id', async (c) => {
+  await requireGrantAdmin(c);
+  const row = await c.env.DB.prepare(`SELECT ${GRANT_COLUMNS} FROM oidc_session_grants WHERE id = ?`).bind(c.req.param('id')!).first<GrantRow>();
+  if (!row) throw new HttpError('grant not found', 404);
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ grant: grantView(row) });
+});
 
 oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
   const admin = await requireGrantAdmin(c);
-  const body = await c.req.json<{ repository?: unknown; user_id?: unknown; principal_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown; environment?: unknown; expires_at?: unknown; session_ttl_seconds?: unknown; scope?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ repository?: unknown; user_id?: unknown; principal_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown; environment?: unknown; expires_at?: unknown; session_ttl_seconds?: unknown; scope?: unknown; reason?: unknown }>().catch(() => null);
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
-  if (typeof body.repository !== 'string' || (!REPO_RE.test(body.repository) && body.repository !== CHESS_REPOSITORY)) throw new HttpError(`repository must be ${ORG}/<repo> or ${CHESS_REPOSITORY}`, 400);
+  const isPrincipalGrant = body.principal_id !== undefined && body.principal_id !== null;
+  // Legacy (#146) grants keep their historic 400; the managed-principal model reports validation as 422.
+  const invalid = isPrincipalGrant ? 422 : 400;
+  if (typeof body.repository !== 'string' || (!REPO_RE.test(body.repository) && body.repository !== CHESS_REPOSITORY)) throw new HttpError(`repository must be ${ORG}/<repo> or ${CHESS_REPOSITORY}`, invalid);
   const workflow = body.workflow === undefined || body.workflow === null ? null : String(body.workflow);
-  if (workflow !== null && !WORKFLOW_RE.test(workflow)) throw new HttpError('workflow must be a .github/workflows/<file>.yml path', 400);
+  if (workflow !== null && !WORKFLOW_RE.test(workflow)) throw new HttpError('workflow must be a .github/workflows/<file>.yml path', invalid);
   const ref = body.ref === undefined || body.ref === null ? 'refs/heads/main' : String(body.ref);
-  if (!REF_RE.test(ref)) throw new HttpError('ref must be a full git ref, e.g. refs/heads/main', 400);
+  if (!REF_RE.test(ref)) throw new HttpError('ref must be a full git ref, e.g. refs/heads/main', invalid);
   const label = body.label === undefined || body.label === null ? null : String(body.label).slice(0, 120);
+  const reason = reasonOf(body);
 
   let userId: string;
   let principalId: string | null = null;
@@ -197,28 +263,28 @@ oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
   let expiresAt: number | null = null;
   let ttlSeconds: number | null = null;
   let scope: string | null = null;
-  if (body.principal_id !== undefined && body.principal_id !== null) {
+  if (isPrincipalGrant) {
     // #432 least-privilege grant: workflow and an expiry are mandatory.
-    if (typeof body.principal_id !== 'string') throw new HttpError('principal_id must be a string', 400);
-    if (workflow === null) throw new HttpError('a test-principal grant must name a workflow', 400);
+    if (typeof body.principal_id !== 'string') throw new HttpError('principal_id must be a string', 422);
+    if (workflow === null) throw new HttpError('a test-principal grant must name a workflow', 422);
+    if (typeof body.expires_at !== 'number' || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now()) throw new HttpError('expires_at (epoch ms, in the future) is required', 422);
+    if (body.environment !== undefined && body.environment !== null) {
+      if (typeof body.environment !== 'string' || !/^[A-Za-z0-9._-]{1,60}$/.test(body.environment)) throw new HttpError('environment must be a GitHub environment name', 422);
+      environment = body.environment;
+    }
+    if (body.session_ttl_seconds !== undefined && body.session_ttl_seconds !== null) {
+      if (typeof body.session_ttl_seconds !== 'number' || !Number.isInteger(body.session_ttl_seconds) || body.session_ttl_seconds < 60 || body.session_ttl_seconds > OIDC_SESSION_TTL_SECONDS) throw new HttpError(`session_ttl_seconds must be 60..${OIDC_SESSION_TTL_SECONDS}`, 422);
+      ttlSeconds = body.session_ttl_seconds;
+    }
+    if (body.scope !== undefined && body.scope !== null && body.scope !== 'user' && body.scope !== 'creator') throw new HttpError("scope must be 'user' or 'creator'", 422);
+    scope = (body.scope as string | undefined) ?? 'user';
+    expiresAt = body.expires_at;
     const principal = await c.env.DB.prepare('SELECT id, user_id, status FROM test_principals WHERE id = ?')
       .bind(body.principal_id).first<{ id: string; user_id: string; status: string }>();
     if (!principal) throw new HttpError('test principal not found', 404);
     if (principal.status !== 'active') throw new HttpError('test principal is disabled', 409);
     userId = principal.user_id;
     principalId = principal.id;
-    if (typeof body.expires_at !== 'number' || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now()) throw new HttpError('expires_at (epoch ms, in the future) is required', 400);
-    expiresAt = body.expires_at;
-    if (body.environment !== undefined && body.environment !== null) {
-      if (typeof body.environment !== 'string' || !/^[A-Za-z0-9._-]{1,60}$/.test(body.environment)) throw new HttpError('environment must be a GitHub environment name', 400);
-      environment = body.environment;
-    }
-    if (body.session_ttl_seconds !== undefined && body.session_ttl_seconds !== null) {
-      if (typeof body.session_ttl_seconds !== 'number' || !Number.isInteger(body.session_ttl_seconds) || body.session_ttl_seconds < 60 || body.session_ttl_seconds > OIDC_SESSION_TTL_SECONDS) throw new HttpError(`session_ttl_seconds must be 60..${OIDC_SESSION_TTL_SECONDS}`, 400);
-      ttlSeconds = body.session_ttl_seconds;
-    }
-    if (body.scope !== undefined && body.scope !== null && body.scope !== 'user' && body.scope !== 'creator') throw new HttpError("scope must be 'user' or 'creator'", 400);
-    scope = (body.scope as string | undefined) ?? 'user';
   } else {
     if (typeof body.user_id !== 'string' || !/^(?:gh|google):\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> or google:<id> account', 400);
     const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(body.user_id).first<{ id: string }>();
@@ -231,40 +297,74 @@ oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
     created_by: admin.id, created_at: Date.now(), revoked_at: null, last_minted_at: null, mint_count: 0,
     principal_id: principalId, environment, expires_at: expiresAt, session_ttl_seconds: ttlSeconds, scope,
   };
-  await c.env.DB.prepare(
-    'INSERT INTO oidc_session_grants (id, repository, workflow, ref, user_id, label, created_by, created_at, principal_id, environment, expires_at, session_ttl_seconds, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(grant.id, grant.repository, grant.workflow, grant.ref, grant.user_id, grant.label, grant.created_by, grant.created_at, principalId, environment, expiresAt, ttlSeconds, scope).run();
-  await auditEvent(c, principalId, grant.id, 'grant.create', admin.id, { repository: grant.repository, workflow, ref, environment, expiresAt, scope }).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      'INSERT INTO oidc_session_grants (id, repository, workflow, ref, user_id, label, created_by, created_at, principal_id, environment, expires_at, session_ttl_seconds, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(grant.id, grant.repository, grant.workflow, grant.ref, grant.user_id, grant.label, grant.created_by, grant.created_at, principalId, environment, expiresAt, ttlSeconds, scope),
+    auditEvent(c, principalId, grant.id, 'grant.create', admin.id, { after: { repository: grant.repository, workflow, ref, environment, expiresAt, ttlSeconds, scope } }, reason),
+  ]);
   return c.json({ grant: grantView(grant) }, 201);
 });
 
+// Revoke is durable and one-way: the row stays, `revoked_at` is set, the audit trail records who and why.
 oidcSessionRoutes.delete('/admin/oidc-session-grants/:id', async (c) => {
   const admin = await requireGrantAdmin(c);
+  const id = c.req.param('id')!;
+  const reason = reasonOf(await optionalBody(c));
+  const existing = await c.env.DB.prepare('SELECT principal_id FROM oidc_session_grants WHERE id = ? AND revoked_at IS NULL').bind(id).first<{ principal_id: string | null }>();
   const result = await c.env.DB.prepare('UPDATE oidc_session_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
-    .bind(Date.now(), c.req.param('id')!).run();
-  if (!result.meta?.changes) throw new HttpError('grant not found', 404);
-  await auditEvent(c, null, c.req.param('id')!, 'grant.revoke', admin.id).run();
+    .bind(Date.now(), id).run();
+  if (!existing || !result.meta?.changes) throw new HttpError('grant not found', 404);
+  await auditEvent(c, existing.principal_id ?? null, id, 'grant.revoke', admin.id, { before: { revoked: false }, after: { revoked: true } }, reason).run();
   return c.json({ ok: true });
 });
 
-// ── Test principals (#432) ─────────────────────────────────────────
-interface PrincipalRow { id: string; slug: string; user_id: string; description: string | null; status: string; created_by: string; created_at: number; disabled_at: number | null }
+// ── Test principals (#432, #434) ───────────────────────────────────
+interface PrincipalRow { id: string; slug: string; user_id: string; description: string | null; status: string; created_by: string; created_at: number; disabled_at: number | null; updated_at?: number | null }
+
+const PRINCIPAL_COLUMNS = 'id, slug, user_id, description, status, created_by, created_at, disabled_at, updated_at';
+const principalView = (p: PrincipalRow) => ({ ...p, updated_at: p.updated_at ?? null });
+const PRINCIPAL_STATUSES = ['active', 'disabled'];
 
 oidcSessionRoutes.get('/admin/test-principals', async (c) => {
   await requireGrantAdmin(c);
-  const rows = await c.env.DB.prepare('SELECT id, slug, user_id, description, status, created_by, created_at, disabled_at FROM test_principals ORDER BY created_at DESC LIMIT 200').all<PrincipalRow>();
+  const { limit, cursor } = pageParams(c);
+  const status = c.req.query('status');
+  if (status !== undefined && !PRINCIPAL_STATUSES.includes(status)) throw new HttpError("status must be 'active' or 'disabled'", 422);
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  if (status) { where.push('status = ?'); binds.push(status); }
+  if (cursor) { where.push('(created_at < ? OR (created_at = ? AND id < ?))'); binds.push(cursor.t, cursor.t, cursor.id); }
+  const rows = await c.env.DB.prepare(
+    `SELECT ${PRINCIPAL_COLUMNS} FROM test_principals${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).bind(...binds, limit + 1).all<PrincipalRow>();
+  const { items, next_cursor } = paged(rows.results ?? [], limit, (p) => [p.created_at, p.id]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ principals: rows.results ?? [] });
+  return c.json({ principals: items.map(principalView), next_cursor });
+});
+
+oidcSessionRoutes.get('/admin/test-principals/:id', async (c) => {
+  await requireGrantAdmin(c);
+  const id = c.req.param('id')!;
+  const principal = await c.env.DB.prepare(`SELECT ${PRINCIPAL_COLUMNS} FROM test_principals WHERE id = ?`).bind(id).first<PrincipalRow>();
+  if (!principal) throw new HttpError('test principal not found', 404);
+  // Scoped by principal_id: a principal's page only ever shows its own grants.
+  const grants = await c.env.DB.prepare(`SELECT ${GRANT_COLUMNS} FROM oidc_session_grants WHERE principal_id = ? ORDER BY created_at DESC, id DESC LIMIT ${PAGE_MAX}`)
+    .bind(id).all<GrantRow>();
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ principal: principalView(principal), grants: (grants.results ?? []).map(grantView) });
 });
 
 oidcSessionRoutes.post('/admin/test-principals', async (c) => {
   const admin = await requireGrantAdmin(c);
-  const body = await c.req.json<{ slug?: unknown; description?: unknown }>().catch(() => null);
-  if (!body || typeof body.slug !== 'string' || !SLUG_RE.test(body.slug)) throw new HttpError('slug must match [a-z0-9-]{3,40}', 400);
-  const description = typeof body.description === 'string' ? body.description.slice(0, 240) : null;
+  const body = await c.req.json<{ slug?: unknown; description?: unknown; reason?: unknown }>().catch(() => null);
+  if (!body || typeof body.slug !== 'string' || !SLUG_RE.test(body.slug)) throw new HttpError('slug must match [a-z0-9-]{3,40}', 422);
+  if (body.description !== undefined && body.description !== null && (typeof body.description !== 'string' || body.description.length > 240)) throw new HttpError('description must be a string of at most 240 characters', 422);
+  const reason = reasonOf(body);
+  const description = typeof body.description === 'string' ? body.description : null;
   const principal: PrincipalRow = {
     id: `tp_${crypto.randomUUID()}`, slug: body.slug, user_id: `test:${body.slug}`, description, status: 'active',
-    created_by: admin.id, created_at: Date.now(), disabled_at: null,
+    created_by: admin.id, created_at: Date.now(), disabled_at: null, updated_at: null,
   };
   const existing = await c.env.DB.prepare('SELECT id FROM test_principals WHERE slug = ?').bind(body.slug).first();
   if (existing) throw new HttpError('a test principal with that slug already exists', 409);
@@ -273,37 +373,78 @@ oidcSessionRoutes.post('/admin/test-principals', async (c) => {
       .bind(principal.user_id, 'test', body.slug, `test-${body.slug}`, principal.created_at, principal.created_at),
     c.env.DB.prepare('INSERT INTO test_principals (id, slug, user_id, description, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(principal.id, principal.slug, principal.user_id, description, 'active', admin.id, principal.created_at),
-    auditEvent(c, principal.id, null, 'principal.create', admin.id, { slug: body.slug }),
+    auditEvent(c, principal.id, null, 'principal.create', admin.id, { after: { slug: body.slug, description, status: 'active' } }, reason),
   ]);
-  return c.json({ principal }, 201);
+  return c.json({ principal: principalView(principal) }, 201);
 });
 
-// Disabling revokes every live grant bound to the principal in the same batch.
+// Bounded metadata only: `description`. Identity (slug, user id) and status are never editable here.
+oidcSessionRoutes.patch('/admin/test-principals/:id', async (c) => {
+  const admin = await requireGrantAdmin(c);
+  const id = c.req.param('id')!;
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError('JSON body required', 400);
+  const unknown = Object.keys(body).filter((k) => k !== 'description' && k !== 'reason');
+  if (unknown.length) throw new HttpError(`field not editable: ${unknown.join(', ')}`, 422);
+  if (!('description' in body)) throw new HttpError('nothing to update: description is required', 422);
+  if (body.description !== null && (typeof body.description !== 'string' || body.description.length > 240)) throw new HttpError('description must be a string of at most 240 characters or null', 422);
+  const reason = reasonOf(body);
+  const before = await c.env.DB.prepare(`SELECT ${PRINCIPAL_COLUMNS} FROM test_principals WHERE id = ?`).bind(id).first<PrincipalRow>();
+  if (!before) throw new HttpError('test principal not found', 404);
+  const description = body.description as string | null;
+  const now = Date.now();
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE test_principals SET description = ?, updated_at = ? WHERE id = ?').bind(description, now, id),
+    auditEvent(c, id, null, 'principal.update', admin.id, { before: { description: before.description }, after: { description } }, reason),
+  ]);
+  return c.json({ principal: principalView({ ...before, description, updated_at: now }) });
+});
+
+// Deactivate: disabling revokes every live grant bound to the principal in the same batch.
 oidcSessionRoutes.post('/admin/test-principals/:id/disable', async (c) => {
   const admin = await requireGrantAdmin(c);
   const id = c.req.param('id')!;
+  const reason = reasonOf(await optionalBody(c));
   const now = Date.now();
+  const live = await c.env.DB.prepare('SELECT id FROM oidc_session_grants WHERE principal_id = ? AND revoked_at IS NULL').bind(id).all<{ id: string }>();
   const result = await c.env.DB.prepare("UPDATE test_principals SET status = 'disabled', disabled_at = ? WHERE id = ? AND status = 'active'").bind(now, id).run();
   if (!result.meta?.changes) throw new HttpError('active test principal not found', 404);
+  const revokedGrants = (live.results ?? []).map((g) => g.id);
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE oidc_session_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL').bind(now, id),
-    auditEvent(c, id, null, 'principal.disable', admin.id),
+    auditEvent(c, id, null, 'principal.disable', admin.id, { before: { status: 'active' }, after: { status: 'disabled' }, revokedGrants }, reason),
   ]);
-  return c.json({ ok: true });
+  return c.json({ ok: true, revoked_grants: revokedGrants.length });
 });
 
+// Re-enabling restores the principal only; revoked grants stay revoked (no automatic privilege expansion).
 oidcSessionRoutes.post('/admin/test-principals/:id/enable', async (c) => {
   const admin = await requireGrantAdmin(c);
   const id = c.req.param('id')!;
+  const reason = reasonOf(await optionalBody(c));
   const result = await c.env.DB.prepare("UPDATE test_principals SET status = 'active', disabled_at = NULL WHERE id = ? AND status = 'disabled'").bind(id).run();
   if (!result.meta?.changes) throw new HttpError('disabled test principal not found', 404);
-  await auditEvent(c, id, null, 'principal.enable', admin.id).run();
+  await auditEvent(c, id, null, 'principal.enable', admin.id, { before: { status: 'disabled' }, after: { status: 'active' } }, reason).run();
   return c.json({ ok: true });
 });
 
 oidcSessionRoutes.get('/admin/test-principal-events', async (c) => {
   await requireGrantAdmin(c);
-  const rows = await c.env.DB.prepare('SELECT id, principal_id, grant_id, action, actor, detail, at FROM test_principal_events ORDER BY at DESC, id DESC LIMIT 500').all();
+  const { limit, cursor } = pageParams(c);
+  const where: string[] = [];
+  const binds: unknown[] = [];
+  for (const [param, col] of [['principal_id', 'principal_id'], ['grant_id', 'grant_id']] as const) {
+    const v = c.req.query(param);
+    if (v) { where.push(`${col} = ?`); binds.push(v); }
+  }
+  if (cursor) {
+    if (!/^\d+$/.test(cursor.id)) throw new HttpError('cursor is not valid', 422);
+    where.push('(at < ? OR (at = ? AND id < ?))'); binds.push(cursor.t, cursor.t, Number(cursor.id));
+  }
+  const rows = await c.env.DB.prepare(
+    `SELECT id, principal_id, grant_id, action, actor, detail, at, request_id, reason FROM test_principal_events${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY at DESC, id DESC LIMIT ?`,
+  ).bind(...binds, limit + 1).all<{ id: number; at: number }>();
+  const { items, next_cursor } = paged(rows.results ?? [], limit, (e) => [e.at, e.id]);
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ events: rows.results ?? [] });
+  return c.json({ events: items, next_cursor });
 });
