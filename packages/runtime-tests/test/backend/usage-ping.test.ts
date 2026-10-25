@@ -11,6 +11,7 @@ const env = providedEnv as unknown as Env;
 // parallel pings cannot record 50x the time. #381: payouts are archived, so no
 // ping writes a payout meter event any more.
 
+let now: number;
 let meter: ReturnType<typeof vi.spyOn>;
 const ping = async (deltaSeconds = 90, deltaApiCalls = 0) => viaHostApi(`${BASE}/v1/usage/ping`, {
   method: 'POST',
@@ -20,6 +21,10 @@ const ping = async (deltaSeconds = 90, deltaApiCalls = 0) => viaHostApi(`${BASE}
 const row = () => env.DB.prepare("SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = 'meetup' AND user_id = 'gh:1'").first<{ session_seconds: number; api_calls: number; last_seen: number }>();
 
 beforeEach(async () => {
+  // The entrypoint and tests share workerd's global context. Freeze only Date.now:
+  // storage, I/O and request interleaving remain real, even on a loaded runner.
+  now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
   mockNetwork();
   await resetTables();
   for (const t of ['usage_daily', 'subscriptions']) await env.DB.prepare(`DELETE FROM ${t}`).run();
@@ -35,18 +40,17 @@ describe('usage pings claim each interval once (#320)', () => {
     const answers = await Promise.all(Array.from({ length: 50 }, () => ping(90)));
     expect(answers.filter((a) => a.recorded)).toHaveLength(1);
     expect(answers.filter((a) => !a.recorded).every((a) => a.reason === 'no-elapsed-time')).toBe(true);
-    expect(await row()).toMatchObject({ session_seconds: 90 });
+    expect(await row()).toMatchObject({ session_seconds: 90, last_seen: now });
     expect(meter).not.toHaveBeenCalled();
   });
 
   it('50 parallel pings 90 s later record that 90 s once, not 4,500 s', async () => {
     await ping(90);
-    await env.DB.prepare("UPDATE usage_daily SET last_seen = last_seen - 90000 WHERE app_id = 'meetup'").run();
+    now += 90_000;
     const answers = await Promise.all(Array.from({ length: 50 }, () => ping(90)));
     expect(answers.filter((a) => a.recorded)).toHaveLength(1);
     const r = (await row())!;
-    expect(r.session_seconds).toBeGreaterThanOrEqual(180);
-    expect(r.session_seconds).toBeLessThanOrEqual(181); // 90 + the 90 s that passed, give or take the ceil of a second
+    expect(r).toMatchObject({ session_seconds: 180, last_seen: now });
     expect(meter).not.toHaveBeenCalled();
   });
 
@@ -58,8 +62,24 @@ describe('usage pings claim each interval once (#320)', () => {
 
   it('normal sequential use still accrues real elapsed time', async () => {
     await ping(90);
-    await env.DB.prepare("UPDATE usage_daily SET last_seen = last_seen - 60000 WHERE app_id = 'meetup'").run();
+    now += 60_000;
     expect(await ping(60)).toMatchObject({ recorded: true, sessionSeconds: 150 });
+    expect(meter).not.toHaveBeenCalled();
+  });
+
+  it('carries fractional seconds and claims the next full second once across concurrent requests', async () => {
+    await ping(90);
+    const start = now;
+    now += 90_123;
+    const answers = await Promise.all(Array.from({ length: 50 }, () => ping(90)));
+    expect(answers.filter((a) => a.recorded)).toHaveLength(1);
+    expect(await row()).toMatchObject({ session_seconds: 180, last_seen: start + 90_000 });
+    now += 876; // 999 ms since the last claimed second.
+    expect(await ping(90)).toMatchObject({ recorded: false, reason: 'no-elapsed-time' });
+    now += 1;
+    const next = await Promise.all(Array.from({ length: 50 }, () => ping(90)));
+    expect(next.filter((a) => a.recorded)).toHaveLength(1);
+    expect(await row()).toMatchObject({ session_seconds: 181, last_seen: now });
     expect(meter).not.toHaveBeenCalled();
   });
 
