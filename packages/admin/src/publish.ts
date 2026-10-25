@@ -1,5 +1,6 @@
 import { type CfConfig, ensureAnalytics, makeGitHub, type Step } from "@proappstore/build-core";
 import { E2E_SPEC_PREFIX, e2eHarnessFiles } from "./e2e-harness.js";
+import { ensureOidcTestGrant } from "./e2e-grant.js";
 import type { Env } from "./env.js";
 
 const ghFor = (env: Env) => makeGitHub(env.GITHUB_TOKEN, env.PUBLISHERS_ORG);
@@ -689,6 +690,10 @@ async function provisionApp(
   const cf = cfFor(env);
   steps.push(await ensureAnalytics(cf, req.id));
 
+  // 4b. Keyless e2e login: the oidc-session grant the deploy pipeline's e2e job
+  //     exchanges its OIDC token against (#462). Non-fatal and never throws.
+  steps.push(await ensureOidcTestGrant(env, req.id));
+
   // 5. Agent path: ensure a deploy workflow exists, then push the bundle as one
   //    commit. Without an injected workflow a push triggers no CI and the deploy
   //    gate times out with "CI never started".
@@ -943,6 +948,9 @@ export async function runProvisionSteps(
 
   // 4. CF Web Analytics (non-fatal).
   steps.push(await doStep("analytics", () => ensureAnalytics(cfFor(env), req.id)));
+
+  // 4b. Keyless e2e login grant (#462; non-fatal).
+  steps.push(await doStep("oidc-test-grant", () => ensureOidcTestGrant(env, req.id)));
 
   // 5. Agent path: push the bundle as one commit (fatal). Canonical CI is
   //    injected by buildAgentBundle so the push actually triggers a deploy.

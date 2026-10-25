@@ -34,6 +34,11 @@ CF_ACCOUNT_ID = "c1089bfcc43c1c6c2aa89e584e86f0bc"
 PAS_ZONE_ID = "14928daaff60902cc89003a2ebeb99fe"
 PUBLISHERS_ORG = "proappstore-online"
 APPS_DOMAIN_BASE = "proappstore.online"
+# Managed test principal (platform #432) that the oidc-session grant created for every
+# newly provisioned app targets (#462): the account its e2e job signs in as. No real
+# data, no billing. There is NO fallback account: if it does not exist the provisioning
+# step fails loudly and no grant is created.
+E2E_TEST_PRINCIPAL = "e2e-tester"
 # Turnstile widget site key (#26) — PUBLIC, so a var. Together with the
 # TURNSTILE_SECRET_KEY secret it requires a widget token on browser-driven
 # /api/publish-app calls (Origin header present; the console). Leave unset

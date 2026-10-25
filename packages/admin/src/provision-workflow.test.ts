@@ -94,9 +94,23 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
     const { ran, run } = recordingRunner();
     const result = await runProvisionSteps({ req: REQ, addRegistry: true }, ENV, run);
 
-    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "registry", "analytics"]);
-    expect(result.steps).toHaveLength(5);
+    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "registry", "analytics", "oidc-test-grant"]);
+    expect(result.steps).toHaveLength(6);
     expect(result.repoUrl).toBe("https://github.com/proappstore-online/myapp");
+  });
+
+  it("a missing test account fails the grant step loudly but never stops provisioning (#462)", async () => {
+    install();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { ran, run } = recordingRunner();
+    const result = await runProvisionSteps({ req: REQ, addRegistry: true }, ENV, run); // fakeDb finds no principal
+    const grant = result.steps.find((s) => s.name === "OIDC test login");
+    expect(grant).toMatchObject({ status: "fail" });
+    expect(grant!.detail).toContain('test account "e2e-tester" does not exist');
+    expect(ran).toContain("oidc-test-grant");
+    expect(result.repoUrl).toBe("https://github.com/proappstore-online/myapp"); // provisioning still completed
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("[e2e-grant]"));
+    err.mockRestore();
   });
 
   it("omits the registry step when addRegistry is false (agent path shape)", async () => {
@@ -108,7 +122,7 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
       return r;
     };
     await runProvisionSteps({ req: REQ, addRegistry: false }, ENV, run);
-    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics"]);
+    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics", "oidc-test-grant"]);
   });
 
   it("skips the collaborator step when no creator is given", async () => {
@@ -116,7 +130,7 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
     const { ran, run } = recordingRunner();
     const { creatorGithub: _omit, ...noCreator } = REQ;
     await runProvisionSteps({ req: noCreator, addRegistry: true }, ENV, run);
-    expect(ran).toEqual(["github-repo", "r2-route", "registry", "analytics"]);
+    expect(ran).toEqual(["github-repo", "r2-route", "registry", "analytics", "oidc-test-grant"]);
   });
 
   it("runs the agent path (push, no registry) and returns a commit sha", async () => {
@@ -127,7 +141,7 @@ describe("runProvisionSteps (ProvisionWorkflow sequence)", () => {
       ENV,
       run,
     );
-    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics", "push-files"]);
+    expect(ran).toEqual(["github-repo", "collaborator", "r2-route", "analytics", "oidc-test-grant", "push-files"]);
     expect(result.commitSha).toBe("commit-abc");
   });
 

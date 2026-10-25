@@ -8,9 +8,11 @@
  * minted at test time by exchanging the CI job's GitHub OIDC token
  * (`POST /v1/auth/exchange/oidc`, #146) — no stored credential, and NO
  * test-bypass code in apps or the SDK. E2E exercises the exact production
- * sign-in path. When no session can be minted (no grant yet, or a laptop run),
- * signed-in specs skip and the anonymous smoke still runs, so a deploy is never
- * blocked just because the grant isn't provisioned yet.
+ * sign-in path. In CI the deploy pipeline's "Mint the e2e session" step does the
+ * exchange first and passes `E2E_SESSION_TOKEN` (#462: provisioning creates the grant;
+ * a repo without one fails that step loudly). The fixture below still mints for itself
+ * when run without that step; if no session can be had (a laptop run), signed-in specs
+ * skip with the reason and the anonymous smoke still runs.
  *
  * Convention: apps mount to `#root`. QA agents add per-feature specs under
  * `e2e/specs/`; this harness's config + fixtures + baseline smoke are injected
@@ -66,8 +68,8 @@ const FIXTURES = `import { test as base, expect, type Page } from '@playwright/t
 //   Authorization: Bearer <GitHub Actions OIDC token, audience = the API origin>
 //   -> { sessionToken }          a real, revocable, 4-hour platform session
 //
-// A platform admin allows this once per repository by creating an OIDC session
-// grant (docs/publishing-flow.md); revoke the grant and the next run is refused.
+// Provisioning allows this for every new app by creating an OIDC session grant
+// (docs/publishing-flow.md#keyless-e2e-sessions); revoke the grant and the next run is refused.
 // The e2e job runs with 'id-token: write', so GitHub exposes
 // ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN to this process and we can mint below.
 //

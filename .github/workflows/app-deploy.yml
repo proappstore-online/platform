@@ -40,7 +40,7 @@ on:
         description: "Repo-level runner billing token (private repos only); passed by `secrets: inherit`"
         required: false
       PAS_E2E_SESSION_TOKEN:
-        description: "Platform fixture session for auth-gated E2E specs"
+        description: "Optional fallback: a stored session for auth-gated E2E specs. When unset (the default) the e2e job mints one keylessly from its OIDC token (#462)"
         required: false
 
 permissions:
@@ -450,10 +450,13 @@ jobs:
   # Behavioural gate: drive the LIVE app in a real browser (the thing tsc/build
   # can't check). Runs after deploy; a failure fails the run, so the deploy
   # gate routes the ticket back to Dev with the Playwright output. Auth uses a
-  # test session via the SDK's real sign-in path (no test bypass). The harness
-  # mints it itself by exchanging this job's OIDC token (id-token: write, no
-  # stored credential); PAS_E2E_SESSION_TOKEN is an optional override. Signed-in
-  # specs skip when no session can be minted.
+  # test session via the SDK's real sign-in path (no test bypass). The "Mint the
+  # e2e session" step exchanges this job's OIDC token (id-token: write, no stored
+  # credential) for a session of the platform's e2e test account and hands it to
+  # Playwright as E2E_SESSION_TOKEN. Provisioning creates the grant it needs (#462);
+  # a repo without one FAILS the job loudly rather than skipping its signed-in
+  # specs. PAS_E2E_SESSION_TOKEN remains a documented fallback: when that secret is
+  # set it is used as-is and no exchange is made.
   e2e:
     needs: [router, deploy]
     if: needs.deploy.outputs.has_e2e == 'true'
@@ -474,12 +477,47 @@ jobs:
           else cd "$GITHUB_WORKSPACE" && pnpm install --frozen-lockfile; fi
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
+      - name: Mint the e2e session (keyless — GitHub OIDC → platform session grant)
+        env:
+          PAS_E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
+        run: |
+          # The documented fallback: a stored session wins and no exchange is made.
+          if [ -n "${PAS_E2E_SESSION_TOKEN:-}" ]; then
+            echo "::add-mask::$PAS_E2E_SESSION_TOKEN"
+            echo "E2E_SESSION_TOKEN=$PAS_E2E_SESSION_TOKEN" >> "$GITHUB_ENV"
+            echo "Using the stored PAS_E2E_SESSION_TOKEN fallback; no OIDC exchange."
+            exit 0
+          fi
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::no GitHub OIDC token is available to the e2e job: the deploy.yml caller must grant 'permissions: id-token: write'."
+            exit 1
+          fi
+          # Parsed with node, not jq: self-hosted runners do not all have jq (#435).
+          field() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s)[process.argv[1]];process.stdout.write(typeof v==="string"?v:"")}catch{}})' "$1"; }
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.proappstore.online" | field value)
+          if [ -z "$OIDC" ]; then echo "::error::could not obtain a GitHub OIDC token for the e2e session exchange"; exit 1; fi
+          BODY="$RUNNER_TEMP/e2e-exchange.json"
+          CODE=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST "https://api.proappstore.online/v1/auth/exchange/oidc" -H "Authorization: Bearer $OIDC")
+          TOKEN=$(field sessionToken < "$BODY")
+          if [ "$CODE" = "200" ] && [ -n "$TOKEN" ]; then
+            echo "::add-mask::$TOKEN"
+            echo "E2E_SESSION_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "Exchanged this job's OIDC token for an e2e test session."
+            exit 0
+          fi
+          REASON=$(field error < "$BODY")
+          if [ "$CODE" = "403" ]; then
+            echo "::error::this repo has no oidc-session grant (HTTP 403: ${REASON:-refused}). New apps get one when they are provisioned; for an older app ask a platform admin to create one, or set the PAS_E2E_SESSION_TOKEN secret as a fallback. See docs/publishing-flow.md#keyless-e2e-sessions."
+          else
+            echo "::error::the e2e session exchange failed (HTTP $CODE): ${REASON:-no error body}"
+          fi
+          exit 1
       - name: Run E2E
         id: e2e
         continue-on-error: true
         env:
           E2E_BASE_URL: https://${{ github.event.repository.name }}.proappstore.online
-          E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
         run: npx playwright test
       - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
         if: always()

@@ -6,6 +6,8 @@ export type Env = {
   PAS_ZONE_ID: string;
   PUBLISHERS_ORG: string;
   APPS_DOMAIN_BASE: string;
+  /** Slug of the managed test principal auto-created oidc-session grants target (#462). Default `e2e-tester`; never falls back to another account. */
+  E2E_TEST_PRINCIPAL?: string;
 
   /** D1 database — the platform's shared D1 (routes table for host Worker). */
   DB: D1Database;

@@ -40,8 +40,25 @@ SQL is rejected with 422.
 
 A workflow that drives the deployed app as a signed-in user (a nightly e2e
 suite) gets its session the same keyless way it gets its deploy credentials
-(#146). A platform admin grants the repository once through the official PAS
-MCP, after checking `whoami`:
+(#146).
+
+**This is the default for every app (#462).** Provisioning an app creates an
+oidc-session grant for `<org>/<app>`, `.github/workflows/deploy.yml`, `refs/heads/main`,
+bound to the managed test account `e2e-tester` (a test principal, scope `user`:
+no real data, no billing, never `admin`; the `E2E_TEST_PRINCIPAL` setting on the admin
+Worker names it). The deploy pipeline's e2e job has `id-token: write`, mints the
+session in its **Mint the e2e session** step and passes it to Playwright as
+`E2E_SESSION_TOKEN` — no secret to store, no manual admin step. If the repo has no
+grant, that step **fails the job** with "this repo has no oidc-session grant"; signed-in
+specs are never silently skipped in CI. The provisioning step is non-fatal but red
+(`OIDC test login`) when the test account does not exist or is disabled: there is no
+fallback account, and no grant is created. Apps provisioned before #462 have no automatic
+grant; an admin creates one as below. `PAS_E2E_SESSION_TOKEN` stays only as a documented
+fallback: when that repository secret is set the job uses it as-is and makes no exchange.
+
+For anything beyond the default — another workflow (a nightly suite), another ref, or an
+account with creator rights — a platform admin grants the repository through the
+official PAS MCP, after checking `whoami`:
 
 ```
 create_oidc_session_grant {
@@ -70,7 +87,9 @@ SESSION=$(curl -sS -X POST https://api.proappstore.online/v1/auth/exchange/oidc 
 ```
 
 The session is a real platform session for the granted account (four hours,
-`via: 'oidc-e2e'`, roles `user` + `creator`, never `admin`). Every mint is
+`via: 'oidc-e2e'`, roles `user` + `creator`, never `admin`; a grant bound to a test
+principal, like the automatic one, is one hour, `via: 'oidc-test-principal'`, and
+each OIDC token can be exchanged once). Every mint is
 recorded against the grant; revoking the grant stops the next run with 403.
 `POST /v1/auth/exchange` (device-flow token → session) stays for the CLI and
 laptop runs.
