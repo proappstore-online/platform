@@ -334,6 +334,19 @@ on an app with no user behind them. They run with platform identities that are
   `admin`. The grant, not the workflow, is the authority; revoke it and the
   next run gets 403. This is the last stored credential removed from CI: no
   PAT, no device-flow token in a repo secret.
+- **Managed test principals** (#432): the hardened form of the above. An admin creates a
+  principal (`POST /v1/admin/test-principals` → user `test:<slug>`, no provider login, so it
+  cannot sign in interactively) and binds it with `POST /v1/admin/oidc-session-grants`
+  `{principal_id, repository, workflow, expires_at, [environment, ref, session_ttl_seconds, scope]}`.
+  A principal grant *must* name a workflow and an expiry; the token must carry a `jti` and can be
+  exchanged once (`oidc_session_replays`); the principal must be `active`; the session is `via:
+  'oidc-test-principal'`, roles `['user']` unless `scope: 'creator'`, never admin, TTL default 1h
+  (max 4h). Disabling a principal revokes all of its grants. Lifecycle is audited, secret-free, in
+  `test_principal_events` (`GET /v1/admin/test-principal-events`). **Migration from #146:** grants
+  without `principal_id` keep working unchanged; move a consumer by creating a principal and a
+  new grant, switching the workflow's `exchange/oidc` call (same endpoint, same audience), then
+  revoking the old grant. Console UI lives in `proappstore-online/console`.
+
 - **Host context (`X-PAS-App`, `X-PAS-Host`)** (#315) is the host worker's word
   about which app origin (and which app hostname) a request came from. It is not
   an identity, and it authorizes nothing on its own: it is an *input* to checks

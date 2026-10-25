@@ -38,7 +38,19 @@ interface GrantRow {
   revoked_at: number | null;
   last_minted_at: number | null;
   mint_count: number;
+  /** #432: set for grants bound to a managed test principal; NULL for legacy #146 grants. */
+  principal_id?: string | null;
+  environment?: string | null;
+  expires_at?: number | null;
+  session_ttl_seconds?: number | null;
+  scope?: string | null;
 }
+
+const GRANT_COLUMNS = 'id, repository, workflow, ref, user_id, label, created_by, created_at, revoked_at, last_minted_at, mint_count, principal_id, environment, expires_at, session_ttl_seconds, scope';
+/** Principal-backed sessions default to one hour and may never exceed the legacy ceiling. */
+export const PRINCIPAL_SESSION_DEFAULT_TTL_SECONDS = 60 * 60;
+const PRINCIPAL_SESSION_VIA = 'oidc-test-principal';
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{2,39}$/;
 
 /** The workflow file path the token was minted by: `owner/repo/.github/workflows/x.yml@ref` → `.github/workflows/x.yml`. */
 export function workflowPathOf(claims: OidcClaims): string | null {
@@ -51,10 +63,12 @@ export function workflowPathOf(claims: OidcClaims): string | null {
 }
 
 /** The grant this token may use, or null. Revoked grants are never candidates. */
-export function selectGrant(grants: GrantRow[], claims: OidcClaims): GrantRow | null {
+export function selectGrant(grants: GrantRow[], claims: OidcClaims, now: number = Date.now()): GrantRow | null {
   const workflow = workflowPathOf(claims);
   for (const g of grants) {
     if (g.revoked_at !== null) continue;
+    if (g.expires_at != null && g.expires_at <= now) continue;
+    if (g.environment != null && g.environment !== claims.environment) continue;
     if (g.repository !== claims.repository) continue;
     if (g.ref !== claims.ref) continue;
     if (g.workflow !== null && g.workflow !== workflow) continue;
@@ -81,7 +95,7 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
   }
 
   const rows = await c.env.DB.prepare(
-    'SELECT id, repository, workflow, ref, user_id, label, created_by, created_at, revoked_at, last_minted_at, mint_count FROM oidc_session_grants WHERE repository = ? AND revoked_at IS NULL',
+    `SELECT ${GRANT_COLUMNS} FROM oidc_session_grants WHERE repository = ? AND revoked_at IS NULL`,
   ).bind(claims.repository).all<GrantRow>();
   const grant = selectGrant(rows.results ?? [], claims);
   if (!grant) {
@@ -90,14 +104,32 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
     return c.json({ error: `no e2e session grant for ${claims.repository} (${workflowPathOf(claims) ?? 'unknown workflow'} @ ${claims.ref ?? 'no ref'})` }, 403);
   }
 
+  // #432: a principal-backed grant is hardened — the principal must be active,
+  // the token single-use (jti), and the session short and non-creator by default.
+  let ttl = OIDC_SESSION_TTL_SECONDS;
+  let via = OIDC_SESSION_VIA;
+  let roles = ['user', 'creator'];
+  if (grant.principal_id) {
+    const principal = await c.env.DB.prepare('SELECT id, status FROM test_principals WHERE id = ?')
+      .bind(grant.principal_id).first<{ id: string; status: string }>();
+    if (!principal || principal.status !== 'active') return c.json({ error: 'the granted test principal is disabled' }, 403);
+    const jti = typeof claims.jti === 'string' ? claims.jti : '';
+    if (!jti) return c.json({ error: 'OIDC token has no jti; cannot be exchanged for a test-principal session' }, 401);
+    const replay = await c.env.DB.prepare('INSERT OR IGNORE INTO oidc_session_replays (jti, grant_id, seen_at, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(jti, grant.id, Date.now(), (claims.exp + 3600) * 1000).run();
+    if (!replay.meta?.changes) return c.json({ error: 'OIDC token already exchanged' }, 403);
+    ttl = Math.min(grant.session_ttl_seconds ?? PRINCIPAL_SESSION_DEFAULT_TTL_SECONDS, OIDC_SESSION_TTL_SECONDS);
+    via = PRINCIPAL_SESSION_VIA;
+    roles = grant.scope === 'creator' ? ['user', 'creator'] : ['user'];
+  }
+
   const user = await c.env.DB.prepare('SELECT id, login, avatar_url FROM users WHERE id = ?')
     .bind(grant.user_id).first<{ id: string; login: string; avatar_url: string | null }>();
   if (!user) return c.json({ error: 'the granted e2e account no longer exists' }, 403);
 
-  // A creator session — enough to drive an app as its owner in e2e — never admin,
-  // whatever ADMIN_GITHUB_IDS says about the account.
-  const session: NewSession = { uid: user.id, login: user.login, avatarUrl: user.avatar_url ?? null, roles: ['user', 'creator'], via: OIDC_SESSION_VIA };
-  const sessionToken = await mintSession(session, c.env.SESSION_SIGNING_KEY, OIDC_SESSION_TTL_SECONDS);
+  // Never admin, whatever ADMIN_GITHUB_IDS says about the account.
+  const session: NewSession = { uid: user.id, login: user.login, avatarUrl: user.avatar_url ?? null, roles, via };
+  const sessionToken = await mintSession(session, c.env.SESSION_SIGNING_KEY, ttl);
   const now = Date.now();
   const runId = typeof claims.run_id === 'string' || typeof claims.run_id === 'number' ? String(claims.run_id) : null;
   try {
@@ -112,9 +144,9 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
 
   return c.json({
     sessionToken,
-    expiresAt: now + OIDC_SESSION_TTL_SECONDS * 1000,
-    via: OIDC_SESSION_VIA,
-    grant: { id: grant.id, repository: grant.repository, workflow: grant.workflow, ref: grant.ref, label: grant.label },
+    expiresAt: now + ttl * 1000,
+    via,
+    grant: { id: grant.id, repository: grant.repository, workflow: grant.workflow, ref: grant.ref, label: grant.label, principalId: grant.principal_id ?? null },
     user: { id: user.id, login: user.login, avatarUrl: user.avatar_url ?? null },
   });
 });
@@ -131,46 +163,147 @@ async function requireGrantAdmin(c: Parameters<typeof requireUser>[0]) {
 const grantView = (g: GrantRow) => ({
   id: g.id, repository: g.repository, workflow: g.workflow, ref: g.ref, user_id: g.user_id, label: g.label,
   created_by: g.created_by, created_at: g.created_at, revoked_at: g.revoked_at, last_minted_at: g.last_minted_at, mint_count: g.mint_count,
+  principal_id: g.principal_id ?? null, environment: g.environment ?? null, expires_at: g.expires_at ?? null,
+  session_ttl_seconds: g.session_ttl_seconds ?? null, scope: g.scope ?? null,
 });
 
 oidcSessionRoutes.get('/admin/oidc-session-grants', async (c) => {
   await requireGrantAdmin(c);
   const rows = await c.env.DB.prepare(
-    'SELECT id, repository, workflow, ref, user_id, label, created_by, created_at, revoked_at, last_minted_at, mint_count FROM oidc_session_grants ORDER BY created_at DESC LIMIT 500',
+    `SELECT ${GRANT_COLUMNS} FROM oidc_session_grants ORDER BY created_at DESC LIMIT 500`,
   ).all<GrantRow>();
   c.header('Cache-Control', 'private, no-store');
   return c.json({ grants: (rows.results ?? []).map(grantView) });
 });
 
+const auditEvent = (c: Parameters<typeof requireUser>[0], principalId: string | null, grantId: string | null, action: string, actor: string, detail: Record<string, unknown> = {}) =>
+  c.env.DB.prepare('INSERT INTO test_principal_events (principal_id, grant_id, action, actor, detail, at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(principalId, grantId, action, actor, JSON.stringify(detail), Date.now());
+
 oidcSessionRoutes.post('/admin/oidc-session-grants', async (c) => {
   const admin = await requireGrantAdmin(c);
-  const body = await c.req.json<{ repository?: unknown; user_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ repository?: unknown; user_id?: unknown; principal_id?: unknown; workflow?: unknown; ref?: unknown; label?: unknown; environment?: unknown; expires_at?: unknown; session_ttl_seconds?: unknown; scope?: unknown }>().catch(() => null);
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
   if (typeof body.repository !== 'string' || (!REPO_RE.test(body.repository) && body.repository !== CHESS_REPOSITORY)) throw new HttpError(`repository must be ${ORG}/<repo> or ${CHESS_REPOSITORY}`, 400);
-  if (typeof body.user_id !== 'string' || !/^(?:gh|google):\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> or google:<id> account', 400);
   const workflow = body.workflow === undefined || body.workflow === null ? null : String(body.workflow);
   if (workflow !== null && !WORKFLOW_RE.test(workflow)) throw new HttpError('workflow must be a .github/workflows/<file>.yml path', 400);
   const ref = body.ref === undefined || body.ref === null ? 'refs/heads/main' : String(body.ref);
   if (!REF_RE.test(ref)) throw new HttpError('ref must be a full git ref, e.g. refs/heads/main', 400);
   const label = body.label === undefined || body.label === null ? null : String(body.label).slice(0, 120);
 
-  const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(body.user_id).first<{ id: string }>();
-  if (!user) throw new HttpError('user not found — the e2e account must have signed in once', 404);
+  let userId: string;
+  let principalId: string | null = null;
+  let environment: string | null = null;
+  let expiresAt: number | null = null;
+  let ttlSeconds: number | null = null;
+  let scope: string | null = null;
+  if (body.principal_id !== undefined && body.principal_id !== null) {
+    // #432 least-privilege grant: workflow and an expiry are mandatory.
+    if (typeof body.principal_id !== 'string') throw new HttpError('principal_id must be a string', 400);
+    if (workflow === null) throw new HttpError('a test-principal grant must name a workflow', 400);
+    const principal = await c.env.DB.prepare('SELECT id, user_id, status FROM test_principals WHERE id = ?')
+      .bind(body.principal_id).first<{ id: string; user_id: string; status: string }>();
+    if (!principal) throw new HttpError('test principal not found', 404);
+    if (principal.status !== 'active') throw new HttpError('test principal is disabled', 409);
+    userId = principal.user_id;
+    principalId = principal.id;
+    if (typeof body.expires_at !== 'number' || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now()) throw new HttpError('expires_at (epoch ms, in the future) is required', 400);
+    expiresAt = body.expires_at;
+    if (body.environment !== undefined && body.environment !== null) {
+      if (typeof body.environment !== 'string' || !/^[A-Za-z0-9._-]{1,60}$/.test(body.environment)) throw new HttpError('environment must be a GitHub environment name', 400);
+      environment = body.environment;
+    }
+    if (body.session_ttl_seconds !== undefined && body.session_ttl_seconds !== null) {
+      if (typeof body.session_ttl_seconds !== 'number' || !Number.isInteger(body.session_ttl_seconds) || body.session_ttl_seconds < 60 || body.session_ttl_seconds > OIDC_SESSION_TTL_SECONDS) throw new HttpError(`session_ttl_seconds must be 60..${OIDC_SESSION_TTL_SECONDS}`, 400);
+      ttlSeconds = body.session_ttl_seconds;
+    }
+    if (body.scope !== undefined && body.scope !== null && body.scope !== 'user' && body.scope !== 'creator') throw new HttpError("scope must be 'user' or 'creator'", 400);
+    scope = (body.scope as string | undefined) ?? 'user';
+  } else {
+    if (typeof body.user_id !== 'string' || !/^(?:gh|google):\d+$/.test(body.user_id)) throw new HttpError('user_id must be a gh:<id> or google:<id> account', 400);
+    const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(body.user_id).first<{ id: string }>();
+    if (!user) throw new HttpError('user not found — the e2e account must have signed in once', 404);
+    userId = body.user_id;
+  }
 
   const grant: GrantRow = {
-    id: crypto.randomUUID(), repository: body.repository, workflow, ref, user_id: body.user_id, label,
+    id: crypto.randomUUID(), repository: body.repository, workflow, ref, user_id: userId, label,
     created_by: admin.id, created_at: Date.now(), revoked_at: null, last_minted_at: null, mint_count: 0,
+    principal_id: principalId, environment, expires_at: expiresAt, session_ttl_seconds: ttlSeconds, scope,
   };
   await c.env.DB.prepare(
-    'INSERT INTO oidc_session_grants (id, repository, workflow, ref, user_id, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(grant.id, grant.repository, grant.workflow, grant.ref, grant.user_id, grant.label, grant.created_by, grant.created_at).run();
+    'INSERT INTO oidc_session_grants (id, repository, workflow, ref, user_id, label, created_by, created_at, principal_id, environment, expires_at, session_ttl_seconds, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(grant.id, grant.repository, grant.workflow, grant.ref, grant.user_id, grant.label, grant.created_by, grant.created_at, principalId, environment, expiresAt, ttlSeconds, scope).run();
+  await auditEvent(c, principalId, grant.id, 'grant.create', admin.id, { repository: grant.repository, workflow, ref, environment, expiresAt, scope }).run();
   return c.json({ grant: grantView(grant) }, 201);
 });
 
 oidcSessionRoutes.delete('/admin/oidc-session-grants/:id', async (c) => {
-  await requireGrantAdmin(c);
+  const admin = await requireGrantAdmin(c);
   const result = await c.env.DB.prepare('UPDATE oidc_session_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
     .bind(Date.now(), c.req.param('id')!).run();
   if (!result.meta?.changes) throw new HttpError('grant not found', 404);
+  await auditEvent(c, null, c.req.param('id')!, 'grant.revoke', admin.id).run();
   return c.json({ ok: true });
+});
+
+// ── Test principals (#432) ─────────────────────────────────────────
+interface PrincipalRow { id: string; slug: string; user_id: string; description: string | null; status: string; created_by: string; created_at: number; disabled_at: number | null }
+
+oidcSessionRoutes.get('/admin/test-principals', async (c) => {
+  await requireGrantAdmin(c);
+  const rows = await c.env.DB.prepare('SELECT id, slug, user_id, description, status, created_by, created_at, disabled_at FROM test_principals ORDER BY created_at DESC LIMIT 200').all<PrincipalRow>();
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ principals: rows.results ?? [] });
+});
+
+oidcSessionRoutes.post('/admin/test-principals', async (c) => {
+  const admin = await requireGrantAdmin(c);
+  const body = await c.req.json<{ slug?: unknown; description?: unknown }>().catch(() => null);
+  if (!body || typeof body.slug !== 'string' || !SLUG_RE.test(body.slug)) throw new HttpError('slug must match [a-z0-9-]{3,40}', 400);
+  const description = typeof body.description === 'string' ? body.description.slice(0, 240) : null;
+  const principal: PrincipalRow = {
+    id: `tp_${crypto.randomUUID()}`, slug: body.slug, user_id: `test:${body.slug}`, description, status: 'active',
+    created_by: admin.id, created_at: Date.now(), disabled_at: null,
+  };
+  const existing = await c.env.DB.prepare('SELECT id FROM test_principals WHERE slug = ?').bind(body.slug).first();
+  if (existing) throw new HttpError('a test principal with that slug already exists', 409);
+  await c.env.DB.batch([
+    c.env.DB.prepare('INSERT INTO users (id, provider, provider_id, login, email, avatar_url, created_at, last_login_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)')
+      .bind(principal.user_id, 'test', body.slug, `test-${body.slug}`, principal.created_at, principal.created_at),
+    c.env.DB.prepare('INSERT INTO test_principals (id, slug, user_id, description, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(principal.id, principal.slug, principal.user_id, description, 'active', admin.id, principal.created_at),
+    auditEvent(c, principal.id, null, 'principal.create', admin.id, { slug: body.slug }),
+  ]);
+  return c.json({ principal }, 201);
+});
+
+// Disabling revokes every live grant bound to the principal in the same batch.
+oidcSessionRoutes.post('/admin/test-principals/:id/disable', async (c) => {
+  const admin = await requireGrantAdmin(c);
+  const id = c.req.param('id')!;
+  const now = Date.now();
+  const result = await c.env.DB.prepare("UPDATE test_principals SET status = 'disabled', disabled_at = ? WHERE id = ? AND status = 'active'").bind(now, id).run();
+  if (!result.meta?.changes) throw new HttpError('active test principal not found', 404);
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE oidc_session_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL').bind(now, id),
+    auditEvent(c, id, null, 'principal.disable', admin.id),
+  ]);
+  return c.json({ ok: true });
+});
+
+oidcSessionRoutes.post('/admin/test-principals/:id/enable', async (c) => {
+  const admin = await requireGrantAdmin(c);
+  const id = c.req.param('id')!;
+  const result = await c.env.DB.prepare("UPDATE test_principals SET status = 'active', disabled_at = NULL WHERE id = ? AND status = 'disabled'").bind(id).run();
+  if (!result.meta?.changes) throw new HttpError('disabled test principal not found', 404);
+  await auditEvent(c, id, null, 'principal.enable', admin.id).run();
+  return c.json({ ok: true });
+});
+
+oidcSessionRoutes.get('/admin/test-principal-events', async (c) => {
+  await requireGrantAdmin(c);
+  const rows = await c.env.DB.prepare('SELECT id, principal_id, grant_id, action, actor, detail, at FROM test_principal_events ORDER BY at DESC, id DESC LIMIT 500').all();
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ events: rows.results ?? [] });
 });

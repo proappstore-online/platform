@@ -202,3 +202,107 @@ describe('admin grant management', () => {
     expect((await app.request('/v1/admin/oidc-session-grants/g1', json(ADMIN, 'DELETE'), makeEnv(mockD1(mockStmt({ run: { meta: { changes: 0 } } }))))).status).toBe(404);
   });
 });
+
+describe('managed test principals (#432)', () => {
+  const pgrant = (o: Record<string, unknown> = {}) => grant({ id: 'g9', user_id: 'test:smoke', principal_id: 'tp_1', workflow: '.github/workflows/e2e-full.yml', environment: null, expires_at: Date.now() + 3600_000, session_ttl_seconds: 900, scope: 'user', ...o });
+  const active = () => mockStmt({ first: { id: 'tp_1', status: 'active' } });
+  const fresh = () => mockStmt({ run: { meta: { changes: 1 } } });
+  const botUser = () => mockStmt({ first: { id: 'test:smoke', login: 'test-smoke', avatar_url: null } });
+  const jti = (n = 'jti-1') => ({ jti: n });
+
+  it('mints a short, non-creator, non-admin session for an active principal and marks it via oidc-test-principal', async () => {
+    const db = mockD1(mockStmt({ all: { results: [pgrant()] } }), active(), fresh(), botUser());
+    const res = await app.request('/v1/auth/exchange/oidc', exchange(await signToken(jti())), makeEnv(db));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionToken: string; via: string; grant: { principalId: string } };
+    expect(body).toMatchObject({ via: 'oidc-test-principal', grant: { principalId: 'tp_1' } });
+    const claims = await verifySession(body.sessionToken, 'test-signing-key');
+    expect(claims).toMatchObject({ uid: 'test:smoke', roles: ['user'], via: 'oidc-test-principal' });
+    expect(claims!.exp - claims!.iat).toBe(900);
+  });
+
+  it('a creator-scoped grant adds creator, still never admin; ttl is capped at the platform ceiling', async () => {
+    const db = mockD1(mockStmt({ all: { results: [pgrant({ scope: 'creator', session_ttl_seconds: 999999 })] } }), active(), fresh(), botUser());
+    const body = (await (await app.request('/v1/auth/exchange/oidc', exchange(await signToken(jti())), makeEnv(db))).json()) as { sessionToken: string };
+    const claims = await verifySession(body.sessionToken, 'test-signing-key');
+    expect(claims!.roles).toEqual(['user', 'creator']);
+    expect(claims!.exp - claims!.iat).toBe(OIDC_SESSION_TTL_SECONDS);
+  });
+
+  it('refuses a replayed token, a missing jti, a disabled principal, an expired grant and a wrong environment — minting nothing', async () => {
+    const attempts: [Partial<OidcClaims>, ReturnType<typeof mockD1>, number][] = [
+      [jti(), mockD1(mockStmt({ all: { results: [pgrant()] } }), active(), mockStmt()), 403], // replay: 0 rows inserted
+      [{}, mockD1(mockStmt({ all: { results: [pgrant()] } }), active()), 401],
+      [jti(), mockD1(mockStmt({ all: { results: [pgrant()] } }), mockStmt({ first: { id: 'tp_1', status: 'disabled' } })), 403],
+      [jti(), mockD1(mockStmt({ all: { results: [pgrant({ expires_at: Date.now() - 1 })] } })), 403],
+      [jti(), mockD1(mockStmt({ all: { results: [pgrant({ environment: 'prod-smoke' })] } })), 403],
+      [{ ...jti(), environment: 'staging' }, mockD1(mockStmt({ all: { results: [pgrant({ environment: 'prod-smoke' })] } })), 403],
+    ];
+    for (const [claims, db, status] of attempts) {
+      const res = await app.request('/v1/auth/exchange/oidc', exchange(await signToken(claims)), makeEnv(db));
+      expect(res.status, JSON.stringify(claims)).toBe(status);
+      expect(db.batch).not.toHaveBeenCalled();
+    }
+    const ok = mockD1(mockStmt({ all: { results: [pgrant({ environment: 'prod-smoke' })] } }), active(), fresh(), botUser());
+    expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken({ ...jti(), environment: 'prod-smoke' })), makeEnv(ok))).status).toBe(200);
+  });
+
+  it('selectGrant skips expired grants and environment mismatches', () => {
+    const claims = { repository: REPO, repository_owner: 'proappstore-online', ref: 'refs/heads/main', environment: 'e1', workflow_ref: WORKFLOW_REF } as unknown as OidcClaims;
+    expect(selectGrant([pgrant({ expires_at: 5 })], claims, 10)).toBeNull();
+    expect(selectGrant([pgrant({ environment: 'e2' })], claims)).toBeNull();
+    expect(selectGrant([pgrant({ environment: 'e1' })], claims)?.id).toBe('g9');
+  });
+
+  describe('admin lifecycle', () => {
+    const req = async (method: string, path: string, db: ReturnType<typeof mockD1>, body?: unknown, who = 'admin') => {
+      const token = await testToken('gh:1', { roles: who === 'admin' ? ['user', 'creator', 'admin'] : ['user', 'creator'] });
+      return app.request(path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body && method === 'POST' ? { body: JSON.stringify(body) } : {}) }, makeEnv(db));
+    };
+
+    it('is admin-only', async () => {
+      for (const [m, p] of [['GET', '/v1/admin/test-principals'], ['POST', '/v1/admin/test-principals'], ['POST', '/v1/admin/test-principals/tp_1/disable'], ['GET', '/v1/admin/test-principal-events']]) {
+        expect((await req(m!, p!, mockD1(), { slug: 'smoke' }, 'creator')).status, p).toBe(403);
+      }
+    });
+
+    it('creates a principal with a synthetic user row and an audit event in one batch; rejects bad and duplicate slugs', async () => {
+      const db = mockD1(mockStmt());
+      const res = await req('POST', '/v1/admin/test-principals', db, { slug: 'smoke-e2e', description: 'prod smoke' });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { principal: Record<string, unknown> }).principal).toMatchObject({ slug: 'smoke-e2e', user_id: 'test:smoke-e2e', status: 'active' });
+      expect(db.batch).toHaveBeenCalledTimes(1);
+      expect((db.batch.mock.calls[0]![0] as unknown[]).length).toBe(3);
+      expect((await req('POST', '/v1/admin/test-principals', mockD1(), { slug: 'Bad Slug' })).status).toBe(400);
+      expect((await req('POST', '/v1/admin/test-principals', mockD1(mockStmt({ first: { id: 'x' } })), { slug: 'smoke-e2e' })).status).toBe(409);
+    });
+
+    it('disabling revokes the principal’s grants and is audited; enabling re-activates', async () => {
+      const db = mockD1(mockStmt({ run: { meta: { changes: 1 } } }));
+      expect((await req('POST', '/v1/admin/test-principals/tp_1/disable', db)).status).toBe(200);
+      const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
+      expect(sqls.some((s) => s.includes('UPDATE oidc_session_grants SET revoked_at') && s.includes('principal_id'))).toBe(true);
+      expect(sqls.some((s) => s.includes('INSERT INTO test_principal_events'))).toBe(true);
+      expect((await req('POST', '/v1/admin/test-principals/nope/disable', mockD1())).status).toBe(404);
+      expect((await req('POST', '/v1/admin/test-principals/tp_1/enable', mockD1(mockStmt({ run: { meta: { changes: 1 } } })))).status).toBe(200);
+    });
+
+    it('issues a least-privilege grant: workflow and future expiry required, ttl bounded, principal must be active', async () => {
+      const base = { repository: REPO, principal_id: 'tp_1', workflow: '.github/workflows/e2e-full.yml', expires_at: Date.now() + 86_400_000, environment: 'prod-smoke', session_ttl_seconds: 600 };
+      const principal = () => mockStmt({ first: { id: 'tp_1', user_id: 'test:smoke', status: 'active' } });
+      const res = await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal(), mockStmt(), mockStmt()), base);
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { grant: Record<string, unknown> }).grant).toMatchObject({ user_id: 'test:smoke', principal_id: 'tp_1', environment: 'prod-smoke', scope: 'user', session_ttl_seconds: 600 });
+      for (const bad of [{ ...base, workflow: undefined }, { ...base, expires_at: undefined }, { ...base, expires_at: 1 }, { ...base, session_ttl_seconds: 10 }, { ...base, session_ttl_seconds: 999999 }, { ...base, scope: 'admin' }]) {
+        expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(principal()), bad)).status, JSON.stringify(bad)).toBe(400);
+      }
+      expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(mockStmt({ first: { id: 'tp_1', user_id: 'test:smoke', status: 'disabled' } })), base)).status).toBe(409);
+      expect((await req('POST', '/v1/admin/oidc-session-grants', mockD1(mockStmt()), base)).status).toBe(404);
+    });
+
+    it('lists audit events', async () => {
+      const res = await req('GET', '/v1/admin/test-principal-events', mockD1(mockStmt({ all: { results: [{ id: 1, action: 'principal.create' }] } })));
+      expect(((await res.json()) as { events: unknown[] }).events).toHaveLength(1);
+    });
+  });
+});
