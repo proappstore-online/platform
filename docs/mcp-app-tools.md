@@ -12,10 +12,17 @@ story: agents *build* your app, and MCP makes the finished app *callable*.
 
 ## Connect a general PAS client
 
-The general endpoint is `https://mcp.proappstore.online/mcp`, with 68 platform tools
+The general endpoint is `https://mcp.proappstore.online/mcp`, with a live catalogue of platform tools
 for app discovery, source editing, provisioning, deployment, QA, ownership, admin
 authoring and Agent Teams. It is not limited to provisioning. For one app's data
 actions, use `/mcp/apps/<app_id>` or the shared discovery/call pair below.
+
+Platform admins can also inspect, create and revoke workflow-scoped CI test-session
+grants with `list_oidc_session_grants`, `create_oidc_session_grant` and
+`revoke_oidc_session_grant`. Preview mutations first. This narrow admin operation
+does not promote the connection to a general admin session. See
+[keyless e2e sessions](publishing-flow.md#keyless-e2e-sessions) and the
+[current delivery roadmap](platform-roadmap.md).
 
 ```bash
 codex mcp add proappstore --url https://mcp.proappstore.online/mcp

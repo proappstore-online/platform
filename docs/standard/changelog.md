@@ -4,6 +4,20 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.10
+
+Documentation reconciliation, 25 October 2026 (#485).
+
+- **Added** — none.
+- **Changed** — none; existing conformity requirements are retained.
+- **Withdrawn** — none.
+- **Editorial** — PAS-OPS-003 and PAS-OPS-006 now describe the shipped
+  keyless e2e session flow and MCP grant management, rather than presenting
+  #146 as future work. Existing fixture-session migration requirements are
+  retained; automatic grants for every new app remain #462. Version checks now
+  compare numeric components, and historical archetype evidence retains its
+  original audited version instead of being relabelled as a new audit.
+
 ## 1.9
 
 Documentation sweep for the upgraded ProShell (#238).

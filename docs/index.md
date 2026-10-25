@@ -49,6 +49,8 @@ resilience layer. See
 [Getting Started — build your app inside AppShell](./getting-started.md#build-your-app-inside-appshell).
 
 - [Getting Started](./getting-started.md)
+- [Platform delivery roadmap](./platform-roadmap.md) — current capabilities,
+  release acceptance and the remaining testing and background-worker gates
 - [Application Standard and Audit Guide](./standard/index.md) — how an app
   should use the platform, clause by clause, and how a human or an AI copilot
   audits a repository against it

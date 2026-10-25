@@ -1,7 +1,11 @@
 # ProAppStore Strategy
 
-Working strategy doc. Written 2026-05-08 from a conversation about whether
-to port the Rocket Lab CRM into ProAppStore. The doc that came out of it.
+Product direction, originally written 2026-05-08 and reconciled with the PAS
+control plane on 2026-10-25. The product models below describe intent; the
+delivery priorities distinguish shipped capabilities from remaining acceptance
+work. The [architecture](docs/architecture.md), binding ADRs (including
+[app workers](docs/adr/009-app-workers.md))
+and linked issues govern implementation.
 
 ## The bet
 
@@ -66,13 +70,19 @@ ProAppStore is **one subscription tier**. Users pay a single monthly fee to
 the platform and get full access to every app. No per-app purchases, no
 upgrade prompts, no freemium gates inside apps.
 
-Apps never ask users to pay. Signed in = full access.
+Apps never ask users to pay separately. The platform owns subscription
+entitlements; signing in alone is not a promise of an active subscription.
 
-Revenue flows to app developers via **usage-based splits**: the platform
+The intended revenue model pays app developers through **usage-based splits**: the platform
 tracks which apps each subscriber actually uses (time spent, sessions, API
 calls) and distributes the subscription pool proportionally. A subscriber
 who spends 80% of their time in one app sends 80% of their subscription
 fee to that app's developer (minus the platform's 10% commission).
+
+This is the product policy, not a statement that payouts are currently enabled.
+The retired payout implementation has been removed (#450); billing,
+entitlements, usage measurement and payout availability must be assessed
+separately. See [payout metering](docs/payout-metering.md).
 
 This means:
 - **Apps must not gate features behind payments.** All features are included.
@@ -86,27 +96,30 @@ This means:
 The categories share storefront, identity, billing, registry, and SDK
 primitives. They diverge only in:
 
-- What `pas init` scaffolds (fork-template vs multi-tenant skeleton)
-- What `fas/admin` provisions on publish (per-fork repo+Pages+D1 vs
-  single Pages for the publisher)
+- Which approved template and tenancy model the creator selects
+- Whether a customer needs an independently owned app deployment or access to
+  the publisher's existing deployment
 - Which SDK helpers the publisher emphasizes
 
-That's a `category` flag on the registry entry plus two code paths in the
-admin provisioner. Not a second platform.
+These are product models within PAS. Do not assume that every category-specific
+fork or storefront flow is shipped: the approved template catalogue and live
+platform tools define the available creation paths.
 
 ## Architecture: one control plane
 
 | Concern | Component | Differs by category? |
 |---|---|---|
-| Identity, sessions | `fas` Worker (api.freeappstore.online) | No |
-| Registry / catalog | `fas` Worker + storefront registry repo | No (category flag only) |
-| Publish / provision | `fas/admin` Worker | **Yes** (two code paths) |
-| Stripe / entitlements | `pas` Worker (api.proappstore.online) | No |
-| App primitives (KV, rooms) | `fas` Worker | No (apps opt in either way) |
-| Tenant data | App's own DB | **Yes** (own D1 per fork vs publisher BYO) |
+| Identity, sessions | PAS backend (`api.proappstore.online`) | No |
+| Registry / catalog | PAS registry and storefront | Shared infrastructure |
+| Publish / provision | PAS backend/admin and build-core | Template and ownership determine the app |
+| Stripe / entitlements | PAS backend | No per-app checkout |
+| App primitives (KV, rooms, storage, actions) | PAS backend, host and SDK | Shared contracts |
+| Tenant data | Per-app D1 and data worker; registered actions enforce app tenancy | A fork has its own app data; a shared deployment must scope tenants |
+| AI client operations | General PAS MCP (`mcp.proappstore.online/mcp`) | Shared tools; app actions discovered on demand |
 
-No fourth backend. The branch point is one provisioning function in
-`fas/admin`.
+PAS runs its own control plane. FAS is a separate product, not PAS's runtime
+identity, registry or provisioning dependency. Apps are hosted from R2 through
+the PAS host Worker; this is not a Cloudflare Pages provisioning roadmap.
 
 ## Naming
 
@@ -139,38 +152,63 @@ The platform can host:
 
 Don't build #2/#3/#4 until #1 shows demand.
 
-## Sequence (what to build first)
+## Delivery priorities (25 October 2026)
 
-The thinnest version that exercises the two-category model end-to-end:
+App creation, repositories, R2 hosting, per-app D1, action registration, billing
+and entitlements already have implementations. Do not recreate them from the
+original May build sequence. General MCP provisioning has also been exercised
+with a deployed test app; individual capabilities still need their own evidence.
 
-1. **D1 provisioning in `fas/admin`.** Extend `POST /api/provision` to
-   accept `category: 'tailored' | 'ready'` and provision a fresh D1 per
-   fork in the Tailored path. Unblocks any non-toy template.
-2. **Strip Rocket Lab specifics from CRM** to produce a generic
-   `pipeline` Tailored template. Rate card, currency, legal entity,
-   Harvest/ClickUp integrations all become opt-in or removed. Rocket Lab
-   becomes the *publisher* of the public template; the internal CRM
-   continues as a private fork.
-3. **PAS slice 1: Stripe webhook + entitlements.** Already on the
-   roadmap, never started. Unblocks paid Tailored variants and paid Ready
-   apps both.
-4. **Storefront filtering & listing-page differentiation** for
-   Tailored vs Ready. Listing-page templates differ: Tailored shows fork
-   button, AI customization examples, services block; Ready shows
-   pricing tiers, sign-up CTA.
-5. **Free-text services block** on publisher profiles. Test demand for
-   the consulting motion before investing in payments rails.
+1. **Close production acceptance gaps.** Finish the safe action-rejection rollout
+   ([#473](https://github.com/proappstore-online/platform/issues/473)) and the
+   deployed HR history regression
+   ([HR #107](https://github.com/proappstore-online/hr/issues/107)). Keep the
+   broader role/tenant release acceptance separate
+   ([HR #28](https://github.com/proappstore-online/hr/issues/28)); owner-only
+   testing does not prove employee, manager or revoked access.
+2. **Make authenticated tests part of every new app's lifecycle.** Grant
+   management is available through MCP
+   ([#475](https://github.com/proappstore-online/platform/issues/475)). Complete
+   managed principal and CI integration acceptance
+   ([#432](https://github.com/proappstore-online/platform/issues/432)) and default
+   keyless test login during provisioning
+   ([#462](https://github.com/proappstore-online/platform/issues/462)). Missing
+   configuration must fail visibly; do not use a personal account as a silent
+   fallback. Keep grants scoped and synthetic fixtures isolated.
+3. **Complete background-worker rollout before opening it to all apps.** Meet
+   ADR-009's runtime, egress, isolation and rotation gates
+   ([#267](https://github.com/proappstore-online/platform/issues/267)). Calibrate
+   quotas from the required measured usage window
+   ([#306](https://github.com/proappstore-online/platform/issues/306)); a code
+   change cannot replace fourteen days of evidence. Scheduled email/push and
+   GrassKarma reminders have their own permission, opt-out, idempotency and
+   delivery acceptance
+   ([#466](https://github.com/proappstore-online/platform/issues/466)).
+4. **Keep operations, discovery and published guidance consistent.** Resolve
+   orphan-worker ownership/registration decisions
+   ([#446](https://github.com/proappstore-online/platform/issues/446)), classify
+   intended-public apps
+   ([#474](https://github.com/proappstore-online/platform/issues/474)) and improve
+   developer-documentation descriptions
+   ([#483](https://github.com/proappstore-online/platform/issues/483)). A listed
+   capability must state whether it is generally available, limited or pending.
 
-Steps 1, 2, 3 can run in parallel. Step 4 needs 1+3. Step 5 needs 4.
+Use a reference app to prove the complete path: create through MCP, deploy,
+apply schema/register actions, run authenticated tests, inspect failures and
+recover without changing identity or handling credentials manually. Publish a
+storefront listing only when the owner requests publication and the app meets
+the release standard. Ready listings explain access and sign-up under the single
+platform subscription; they must not advertise per-app pricing tiers.
 
 ## Open decisions
 
 - **Category-neutral vs publisher-branded template names.** `pipeline`
   (generic) vs `rl-crm` (publisher-branded). Probably both: publisher
   forks can rename freely.
-- **Whether Ready apps get any platform-provided multi-tenant primitives**
-  (tenant-aware D1 wrapper, RLS helpers) or stay strictly BYO. Default to
-  BYO until a Ready publisher actually asks for help.
+- **How much tenancy scaffolding approved templates should provide.** The SDK
+  already has tenant helpers; registered actions must enforce membership and
+  row scope regardless of browser helpers. Further scaffolding should follow
+  verified app requirements.
 - **Services contract shape.** Marketplace (platform takes cut, holds
   contracts) vs directory (platform lists, hands off). Default to
   directory; revisit when volume justifies marketplace complexity.

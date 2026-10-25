@@ -188,7 +188,12 @@ describe('standard: machine-readable artifacts (#167)', () => {
     const version = /\*\*Standard version (\d+\.\d+)\*\*/.exec(readFileSync(join(STANDARD, 'governance.md'), 'utf8'))![1];
     expect(data.standard.version).toBe(version);
     expect(data.clauses.map((c: { id: string }) => c.id).sort()).toEqual(clauses.map((c) => c.id).sort());
-    for (const c of data.clauses) if (c.status === 'active') expect(c.since <= version, `${c.id} since ${c.since} > ${version}`).toBe(true);
+    const [major, minor] = version.split('.').map(Number);
+    for (const c of data.clauses) if (c.status === 'active') {
+      // Numeric components: string ordering incorrectly puts 1.6 after 1.10.
+      const [sinceMajor, sinceMinor] = c.since.split('.').map(Number);
+      expect(sinceMajor < major || (sinceMajor === major && sinceMinor <= minor), `${c.id} since ${c.since} > ${version}`).toBe(true);
+    }
   });
 
   it('every clause url in standard.json resolves to an existing page and clause anchor', () => {

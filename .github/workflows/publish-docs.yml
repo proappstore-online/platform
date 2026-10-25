@@ -142,6 +142,7 @@ jobs:
             - Approved templates: templates/index.md
             - MCP App Tools: mcp-app-tools.md
             - MCP Operations: mcp-operations.md
+            - Platform Roadmap: platform-roadmap.md
             - App Workers: app-workers.md
             - Agent Customization: agent-customization.md
             - Architecture: architecture.md

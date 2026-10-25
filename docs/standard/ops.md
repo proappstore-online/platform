@@ -1,6 +1,6 @@
 # Testing, deployment, and operations
 
-**Standard version 1.9** · Chapter `OPS` · Part of the [Application Standard](./index.md)
+**Standard version 1.10** · Chapter `OPS` · Part of the [Application Standard](./index.md)
 
 **Scope.** Testing, CI and OIDC deployment, rollback, logging and monitoring, privacy, dependency policy.
 
@@ -138,7 +138,7 @@ it('list_tasks works', async () => { expect((await run('list_tasks', {}, { userI
 
 **Rationale.** These paths cross the host worker, cookie mediation, the data worker and Durable Objects; none of them exists in a unit test. Chess Academy's custom-domain and credential-mode failures were only visible by driving the deployed app.
 
-**Recommended implementation.** Author flows as platform QA flows (`qa_save_flow` / `PUT …/qa/flows/:id`) so they run headless after every deploy and on the 15-minute cron, or as Playwright specs with a fixture session (`PAS_E2E_SESSION_TOKEN` today; keyless per #146 when shipped).
+**Recommended implementation.** Author flows as platform QA flows (`qa_save_flow` / `PUT …/qa/flows/:id`) so they run headless after every deploy and on the 15-minute cron, or as Playwright specs using [keyless e2e sessions](../publishing-flow.md#keyless-e2e-sessions). GitHub Actions OIDC exchanges a repository/workflow-scoped grant for a short-lived test session; the process receives it as `E2E_SESSION_TOKEN`. Grant management is available through the official PAS MCP. Automatic grant provisioning for every new app remains [#462](https://github.com/proappstore-online/platform/issues/462); a skipped signed-in test is not evidence that this requirement passed.
 
 **Conforming example.**
 
@@ -235,7 +235,7 @@ $ aws s3 sync web/dist s3://pas-apps/apps/my-app/ --endpoint-url …   # from a 
 
 **Severity:** Critical · **Verification:** Manual · **Enforcement:** automated — compliance check *No .env.production*; the deploy exchanges an OIDC token for short-lived, prefix-scoped R2 credentials · **Since:** 1.5
 
-**Rule.** Third-party credentials MUST be stored with `pas secret set` and used through the proxy ([PAS-STACK-015](./stack.md#pas-stack-015)); `.env*` files MUST be git-ignored; the repository MUST hold no infrastructure token. The only repository secret an app MAY hold today is an e2e fixture session (`PAS_E2E_SESSION_TOKEN`), which MUST be a zero-permission account and MUST be rotated on a schedule until keyless e2e sessions (#146) replace it. Legacy `R2_*` repository secrets fanned out by the platform's reconcile job are inert on the keyless path and SHOULD be removed.
+**Rule.** Third-party credentials MUST be stored with `pas secret set` and used through the proxy ([PAS-STACK-015](./stack.md#pas-stack-015)); `.env*` files MUST be git-ignored; the repository MUST hold no infrastructure token. The only repository secret an app MAY hold during migration is a legacy e2e fixture session (`PAS_E2E_SESSION_TOKEN`), which MUST be for a dedicated zero-permission test account and MUST be rotated on a schedule until removed. [Keyless e2e sessions](../publishing-flow.md#keyless-e2e-sessions) are shipped; use scoped OIDC grants to replace legacy fixture-session secrets. Legacy `R2_*` repository secrets fanned out by the platform's reconcile job are inert on the keyless path and SHOULD be removed.
 
 **Applicability.** All apps.
 

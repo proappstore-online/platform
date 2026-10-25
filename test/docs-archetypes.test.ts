@@ -28,7 +28,12 @@ const SDK_MODULES = new Set([...readFileSync(resolve(__dirname, '../packages/sdk
 
 describe('template archetype evidence (#179)', () => {
   it('matrix is well-formed: unique app ids, valid reuse verdicts with reasons, archetype references resolve', () => {
-    expect(matrix.standard_version).toBe(standard.standard.version);
+    // Historical observations keep the version they were investigated against;
+    // an editorial release must not silently relabel them as a new audit.
+    const [auditedMajor, auditedMinor] = matrix.standard_version.split('.').map(Number);
+    const [currentMajor, currentMinor] = standard.standard.version.split('.').map(Number);
+    expect(auditedMajor).toBe(currentMajor);
+    expect(auditedMinor).toBeLessThanOrEqual(currentMinor);
     expect(matrix.investigated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(new Set(matrix.apps.map((a) => a.id)).size).toBe(matrix.apps.length);
     expect(matrix.apps.length).toBeGreaterThanOrEqual(20);
