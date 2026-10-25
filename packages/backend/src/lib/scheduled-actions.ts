@@ -7,7 +7,7 @@
 import type { Env } from '../types.js';
 import { prepareActionBatch, prepareActionQuery, type ToolManifest } from './action-sql.js';
 import { forwardToDataWorker } from '../routes/actions.js';
-import { scheduledCronMatches } from '../routes/tools.js';
+import { scheduledCronMatches } from './manifest/cron.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { SCHEDULER_TICK_MINUTES } from './scheduler-tick.js';
 import { appWorkerHost, type AppWorkerExports } from './app-worker-host.js';

@@ -21,7 +21,8 @@ import {
   type ColumnInfo,
   type EndpointConfig,
 } from '../lib/endpoint-sql.js';
-import { checkSchemaCoherence, validateToolSet, type ToolManifest } from './tools.js';
+import { checkSchemaCoherence, validateToolSet } from '../lib/manifest/tool-set.js';
+import type { ToolManifest } from '../lib/action-sql.js';
 
 export const endpointsRoutes = new Hono<{ Bindings: Env }>();
 

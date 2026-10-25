@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolManifest } from './action-sql.js';
 import { ROOM_ID, ruleFor, workerRoomPublish, MAX_ROOM_EVENT_BYTES } from './room-access.js';
 import { WorkerCallError } from './app-worker-calls.js';
-import { validateRooms } from '../routes/tools.js';
+import { validateRooms } from './manifest/rooms.js';
 import type { Env } from '../types.js';
 
 // #351: the `rooms` manifest section, rule matching, and the publish input checks that run before any D1 or room work.

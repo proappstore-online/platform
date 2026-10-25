@@ -6,7 +6,8 @@ import type { Env } from '../types.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
 import { HttpError, requireAdmin, requireAppOwner } from '../lib/auth.js';
 import { dataWorkerUrl } from '../lib/data-worker-url.js';
-import { replaceAppTools, siteManifestFrom, type SiteManifest } from './tools.js';
+import { replaceAppTools } from './tools.js';
+import { siteManifestFrom, type SiteManifest } from '../lib/manifest/site.js';
 import { isAppRepository } from '../lib/app-deploy-oidc.js';
 
 /**

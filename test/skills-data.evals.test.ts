@@ -45,7 +45,7 @@ const RECIPES = new Set(
   [...readFileSync(join(ROOT, 'packages/agent-teams/src/recipes.ts'), 'utf8').matchAll(/^  ['"]?([a-z]+(?:-[a-z]+)+)['"]?:\s*\{/gm)].map((m) => m[1]!),
 );
 /** The manifest validator + executor: every manifest key the platform understands appears here as a literal. */
-const MANIFEST_SRC = readFileSync(join(ROOT, 'packages/backend/src/routes/tools.ts'), 'utf8') + readFileSync(join(ROOT, 'packages/backend/src/routes/actions.ts'), 'utf8');
+const MANIFEST_SRC = ['routes/tools.ts', 'lib/manifest/tool.ts', 'routes/actions.ts'].map((f) => readFileSync(join(ROOT, 'packages/backend/src', f), 'utf8')).join('');
 /** Manifest keys the skill may name (top-level, `auth.*`, and per-param). */
 const MANIFEST_KEY_RE = /`(?:auth\.)?(requires_auth|app_roles|platform_roles|caller_unscoped|required|statements|operation|params|optional|default|max|type|description|name|sql|reason)`/g;
 const MAGIC = new Set([...MANIFEST_SRC.matchAll(/__(?:user_id|now|uuid)\b/g)].map((m) => `:${m[0]}`));

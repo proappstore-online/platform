@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { app } from '../index.js';
 import { selectsColumn } from '../lib/action-sql.js';
-import { siteManifestFrom, stagedStates, mainStatementVerb, scheduledCronError, scheduledCronMatches, measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from './tools.js';
+import { stagedStates } from './tools.js';
+import { siteManifestFrom } from '../lib/manifest/site.js';
+import { measureManifestCost, MANIFEST_BYTES_SOFT_LIMIT, MAX_SCHEDULED_ACTIONS_PER_APP, MAX_TOOLS_PER_APP, TOOLS_WARN_THRESHOLD } from '../lib/manifest/tool.js';
 import { testToken, TEST_SK, mockStmt, makeEnv as sharedMakeEnv } from '../test-helpers.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -1416,37 +1418,6 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
 
 // #120: a leading WITH / WITH RECURSIVE clause is a prefix, not a verb. The
 // registrar must validate the statement the CTE prefixes.
-describe('mainStatementVerb (#120)', () => {
-  it('returns the first token when there is no CTE', () => {
-    expect(mainStatementVerb('SELECT 1')).toBe('SELECT');
-    expect(mainStatementVerb('  insert into t values (1)')).toBe('INSERT');
-    expect(mainStatementVerb('')).toBeNull();
-  });
-
-  it('skips a single CTE and a recursive one', () => {
-    expect(mainStatementVerb('WITH a AS (SELECT 1) SELECT * FROM a')).toBe('SELECT');
-    expect(mainStatementVerb(
-      'WITH RECURSIVE tok(i, head, rest) AS (SELECT 0, NULL, :line UNION ALL SELECT i+1, substr(rest,1,4), substr(rest,6) FROM tok WHERE rest <> \'\') INSERT INTO puzzle_attempt_moves (attempt_id, ply, san) SELECT :attempt_id, i, head FROM tok WHERE i = :ply',
-    )).toBe('INSERT');
-  });
-
-  it('skips several CTEs, nested parens, column lists and MATERIALIZED hints', () => {
-    expect(mainStatementVerb(
-      'WITH a(x) AS NOT MATERIALIZED (SELECT count(*) FROM (SELECT 1)), b AS MATERIALIZED (SELECT x FROM a WHERE x IN (1,2)) UPDATE t SET n = (SELECT x FROM b) WHERE id = :id',
-    )).toBe('UPDATE');
-  });
-
-  it('is not fooled by parentheses or keywords inside string literals or comments', () => {
-    expect(mainStatementVerb("WITH a AS (SELECT ')' AS s, 'it''s (' AS t) DELETE FROM t WHERE s = 'AS (' AND id = :id")).toBe('DELETE');
-    expect(mainStatementVerb('WITH a AS (SELECT 1 -- ) SELECT\n) /* ) DROP */ INSERT INTO t SELECT * FROM a')).toBe('INSERT');
-  });
-
-  it('returns null for an unterminated CTE', () => {
-    expect(mainStatementVerb('WITH a AS (SELECT 1 SELECT * FROM a')).toBeNull();
-    expect(mainStatementVerb('WITH a AS SELECT 1')).toBeNull();
-  });
-});
-
 describe('PUT /v1/apps/:appId/tools — CTE-prefixed statements (#120)', () => {
   const put = (tool: Record<string, unknown>) => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
@@ -1825,41 +1796,6 @@ describe('large manifests (#109)', () => {
     for (const [n, ms] of Object.entries(timings)) expect(ms, `registering ${n} tools took ${ms.toFixed(0)} ms`).toBeLessThan(4_000);
     // eslint-disable-next-line no-console
     console.info(`[#109] registration timings ms: ${Object.entries(timings).map(([n, ms]) => `${n}=${ms.toFixed(0)}`).join(' ')}`);
-  });
-});
-
-describe('scheduled cron grammar (#281)', () => {
-  const firingMinutes = (cron: string) => Array.from({ length: 60 }, (_, m) => m)
-    .filter((m) => scheduledCronMatches(cron, Date.UTC(2026, 0, 5, 3, m)));
-
-  it('reads a bare start before a step as start..max, like standard cron', () => {
-    expect(firingMinutes('5/15 * * * *')).toEqual([5, 20, 35, 50]);
-    expect(firingMinutes('0/5 * * * *')).toEqual(firingMinutes('*/5 * * * *'));
-    expect(firingMinutes('0/5 * * * *')).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
-    // Hours follow the same rule: 1/6 is 1, 7, 13, 19.
-    const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => scheduledCronMatches('0 1/6 * * *', Date.UTC(2026, 0, 5, h, 0)));
-    expect(hours).toEqual([1, 7, 13, 19]);
-    // A bare number with no step is still that single value.
-    expect(firingMinutes('5 * * * *')).toEqual([5]);
-  });
-
-  it('accepts only decimal digits as a step', () => {
-    for (const cron of ['*/1e1 * * * *', '*/0x5 * * * *', '*/5.0 * * * *', '*/+5 * * * *', '*/ 5 * * *']) {
-      expect(scheduledCronError(cron), cron).not.toBeNull();
-      expect(scheduledCronMatches(cron, Date.UTC(2026, 0, 5, 3, 10)), cron).toBe(false);
-    }
-  });
-
-  it('checks the tick before anything else that could be wrong with the minutes', () => {
-    expect(scheduledCronError('*/7 * * * *')).toBe('minutes must be multiples of 5 (the platform ticks every 5 minutes)');
-    expect(scheduledCronError('0,3 * * * *')).toBe('minutes must be multiples of 5 (the platform ticks every 5 minutes)');
-  });
-
-  it('rejects a day-of-month no listed month has, but not when day-of-week can fire it', () => {
-    expect(scheduledCronError('0 0 31 2 *')).toMatch(/never fires/);
-    expect(scheduledCronError('0 0 30 2 *')).toMatch(/never fires/);
-    expect(scheduledCronError('0 0 29 2 *')).toBeNull();
-    expect(scheduledCronError('0 0 31 2 1')).toBeNull();
   });
 });
 

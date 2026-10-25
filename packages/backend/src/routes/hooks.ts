@@ -33,7 +33,7 @@ import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify, t
 import { AppWorkerQuotaError, quotasFrom, reserveHookDelivery } from '../lib/app-worker-usage.js';
 import { enqueueHookDelivery } from '../lib/app-event-queue.js';
 import { forwardToDataWorker, loadManifest } from './actions.js';
-import type { HookTarget } from './tools.js';
+import type { HookTarget } from '../lib/manifest/hooks.js';
 
 export const MAX_HOOK_BODY_BYTES = 5 * 1024 * 1024;
 /** ADR-009 §4 hook budget: 60 s, in the queue consumer (#257), which waitUntil's 30 s cap does not bind. */
