@@ -557,6 +557,43 @@ Every uncached HTML hit on a matching path costs one action call, so declare
 Host calls use a service binding and are not subject to the anonymous rate
 limit.
 
+## Embedding (`embed`)
+
+Off by default. A hosted app's `Content-Security-Policy: frame-ancestors` lists only the
+app itself and PAS's own surfaces (storefront, console, dashboard, admin, agents), so no
+other site can put it in an `<iframe>`. A creator who wants an embeddable widget or booking
+form on their own website, in Notion or on a partner page opts in, naming the sites:
+
+```json
+{
+  "embed": { "allow": ["https://example.com", "https://*.partner.com"] }
+}
+```
+
+The host appends exactly those origins to `frame-ancestors` for **this app only**; every other
+app, and an app with no `embed`, is unchanged. Registered with the tools and replaced by the
+next registration, so removing the field closes the app to other sites again on the next deploy.
+
+| Rule | |
+|---|---|
+| Origins | `https://` only, written as an origin: no path, query, credentials or other scheme. Lowercased. Non-ASCII hosts as punycode. Optional `:port`. |
+| Count | At most 10 distinct origins. An empty `allow` is the same as no `embed`. |
+| Wildcards | One, as the first label (`https://*.partner.com`). Never a bare `*`, never on a public suffix (`*.co.uk`) or a shared-hosting domain (`*.github.io`, `*.pages.dev`, `*.vercel.app`, `*.notion.site`, …), where any stranger's page would match, and never on `proappstore.online`: that is the cross-app wildcard #436 removed. Name the origin instead. |
+| Errors | A bad entry fails registration with `embed.allow[i] …`; nothing is written and the previous list stays. |
+
+**The trade-off: clickjacking.** A site that can frame your app can lay a transparent overlay
+over it so that a signed-in user clicks one of your real buttons thinking it is something
+else. Only list sites you control or trust, and prefer exact origins to a wildcard. For an
+embedded flow, confirm anything sensitive (a payment, a deletion, a change of email) with a
+second step inside the app, such as a typed confirmation or a separate confirm page, and do
+not rely on the frame alone to prove the user meant it.
+
+Notes: `X-Frame-Options: SAMEORIGIN` stays on every response for browsers that predate CSP
+`frame-ancestors`; every current browser applies `frame-ancestors` instead, which is what lets
+the listed sites embed the app. The list reaches HTML pages only, and a page already in the edge
+cache can carry the previous list for up to 60 seconds after a deploy. The host re-checks every
+stored origin before writing it into the header.
+
 ## Operator console gate (`operator`)
 
 An app with an operator or admin console declares the path prefix it lives under

@@ -31,3 +31,42 @@ describe("securityHeaders frame-ancestors (F3 — no cross-app framing)", () => 
     expect(fa).toContain("'self'");
   });
 });
+
+describe("securityHeaders frame-ancestors opt-in embedding (#453)", () => {
+  const frameAncestors = (embed?: readonly string[]) =>
+    (securityHeaders(true, false, embed).get("Content-Security-Policy") ?? "").split("; ").find((d) => d.startsWith("frame-ancestors")) ?? "";
+  const DEFAULT = "frame-ancestors 'self' https://proappstore.online https://console.proappstore.online https://dashboard.proappstore.online https://admin.proappstore.online https://agents.proappstore.online";
+
+  it("is byte-for-byte the default when the app names no origins", () => {
+    expect(frameAncestors()).toBe(DEFAULT);
+    expect(frameAncestors([])).toBe(DEFAULT);
+  });
+
+  it("appends exactly the named origins after the defaults", () => {
+    expect(frameAncestors(["https://example.com", "https://*.partner.com"])).toBe(`${DEFAULT} https://example.com https://*.partner.com`);
+  });
+
+  it("never lets a bad value reach the header, whatever the stored row says", () => {
+    const fa = frameAncestors([
+      "https://ok.example.com",
+      "http://plain.example.com",
+      "https://example.com; script-src *",
+      "https://example.com\nX-Injected: 1",
+      "https://a.com https://b.com",
+      "*",
+      "https://*",
+      "https://*.*.example.com",
+    ]);
+    expect(fa).toBe(`${DEFAULT} https://ok.example.com`);
+  });
+
+  it("leaves every other directive and the other headers alone", () => {
+    const plain = securityHeaders(true);
+    const embedded = securityHeaders(true, false, ["https://example.com"]);
+    const rest = (h: Headers) => (h.get("Content-Security-Policy") ?? "").split("; ").filter((d) => !d.startsWith("frame-ancestors"));
+    expect(rest(embedded)).toEqual(rest(plain));
+    expect(embedded.get("X-Frame-Options")).toBe("SAMEORIGIN"); // old browsers without frame-ancestors still refuse
+    expect(embedded.get("Permissions-Policy")).toBe(plain.get("Permissions-Policy"));
+    expect(embedded.get("Cache-Control")).toBe(plain.get("Cache-Control"));
+  });
+});

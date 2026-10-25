@@ -4,6 +4,7 @@
  */
 
 import { openPermissionsPolicy } from "./capabilities.js";
+import { sanitiseEmbedOrigins } from "./embed-origins.js";
 
 const ZONE = ".proappstore.online";
 const PLATFORM_ZONE = "proappstore.online";
@@ -452,7 +453,22 @@ export function isContentAddressed(pathname: string): boolean {
 }
 
 /** Security + cache headers. HTML and update-sensitive files get short cache; hashed assets get immutable. */
-export function securityHeaders(isHtml: boolean, updateSensitive = false): Headers {
+/** Who may frame an app by default: itself and PAS's own surfaces. */
+const DEFAULT_FRAME_ANCESTORS = [
+  "'self'",
+  "https://proappstore.online",
+  "https://console.proappstore.online",
+  "https://dashboard.proappstore.online",
+  "https://admin.proappstore.online",
+  "https://agents.proappstore.online",
+] as const;
+
+/**
+ * `embedOrigins` (#453) are the https origins the app's creator opted in to; they are appended to
+ * `frame-ancestors` for this response only. They are re-validated here (sanitiseEmbedOrigins), so a
+ * bad row can never put anything but a plain origin in the header.
+ */
+export function securityHeaders(isHtml: boolean, updateSensitive = false, embedOrigins: readonly string[] = []): Headers {
   const h = new Headers();
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "SAMEORIGIN");
@@ -477,8 +493,9 @@ export function securityHeaders(isHtml: boolean, updateSensitive = false): Heade
       "connect-src 'self' https: wss: data: blob:",
       // SECURITY: do NOT allow the `*.proappstore.online` wildcard here — it let
       // any published app frame any other app (cross-app clickjacking). Allow
-      // only self + first-party surfaces that legitimately embed app previews.
-      "frame-ancestors 'self' https://proappstore.online https://console.proappstore.online https://dashboard.proappstore.online https://admin.proappstore.online https://agents.proappstore.online",
+      // only self + first-party surfaces that legitimately embed app previews,
+      // plus the origins this app's creator named in `embed.allow` (#453).
+      `frame-ancestors ${[...DEFAULT_FRAME_ANCESTORS, ...sanitiseEmbedOrigins(embedOrigins)].join(" ")}`,
       "base-uri 'self'",
       "form-action 'self' https:",
     ].join("; "),

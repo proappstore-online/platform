@@ -21,11 +21,13 @@ export interface SiteManifest {
   approved_unscoped?: unknown;
   /** Browser permissions the app asks for (#437): `[{ id, reason? }]` — compliance lib/permissions.ts. */
   permissions?: unknown;
+  /** Opt-in embedding (#453): `{ allow: ["https://example.com"] }` — lib/manifest/embed.ts. */
+  embed?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions, embed: body?.embed };
 }
 
 export interface PageMetaRoute { path: string; action: string; param: string; not_found?: 404 }

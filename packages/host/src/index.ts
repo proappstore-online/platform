@@ -34,6 +34,7 @@ import {
 import { serveMarketingSite } from "./marketing-site.js";
 import { rewriteMetaTags } from "./meta-rewriter.js";
 import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
+import { getEmbedOrigins } from "./embed-origins.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
 import { getPublicCatalogueApp } from "./public-catalogue.js";
 import { handleQaRunner } from "./qa-runner.js";
@@ -309,7 +310,8 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   const isHtml = key.endsWith(".html");
   // #378: only a content-addressed build output is immutable; every other key revalidates.
   const updateSensitive = isUpdateSensitivePath(key) || !isContentAddressed(key);
-  const headers = securityHeaders(isHtml, updateSensitive);
+  // #453: only a page can be framed, so only an HTML answer pays for the embed lookup.
+  const headers = securityHeaders(isHtml, updateSensitive, isHtml ? await getEmbedOrigins(env.DB, route.slug) : []);
   headers.set("Content-Type", contentType(key));
   if (!isHtml) headers.set("ETag", etag);
   else headers.set("Cache-Control", privateApp || operatorPath ? "private, no-store" : "no-store");

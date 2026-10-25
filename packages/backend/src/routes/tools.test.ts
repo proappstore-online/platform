@@ -1385,12 +1385,12 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules / embed reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null, rooms: [], permissions: [] });
-    // #437: the declared permissions are replaced with the rest (here: cleared).
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(13);
+    // #437: the declared permissions, and #453: the embed list, are replaced with the rest (here: cleared).
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(14);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -2174,5 +2174,66 @@ describe('mcp.json permissions (#437)', () => {
       expect(body.error).toMatch(/permissions/);
       expect(db.batch).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('PUT /v1/apps/:appId/tools — embed (#453)', () => {
+  const put = (body: Record<string, unknown>) => {
+    const db = mockD1();
+    db.prepare.mockReset();
+    db.prepare.mockReturnValueOnce(mockStmt({ first: { creator_id: 'gh:1' } })).mockImplementation(() => mockStmt());
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [validTool], ...body }) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string } }));
+  };
+  const writes = (db: ReturnType<typeof mockD1>) =>
+    (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call, i) => ({
+      sql: call[0] as string,
+      args: ((db.prepare as ReturnType<typeof vi.fn>).mock.results[i]!.value.bind as ReturnType<typeof vi.fn>).mock.calls[0] ?? [],
+    }));
+
+  it('stores the normalised origins in the same batch as the tools, replacing any previous list', async () => {
+    const { res, db, body } = await put({ embed: { allow: ['https://Example.com', 'https://*.partner.com'] } });
+    expect(res.status, body.error).toBe(200);
+    expect(db.batch).toHaveBeenCalledOnce();
+    const all = writes(db);
+    const del = all.findIndex((w) => w.sql === 'DELETE FROM app_embed WHERE app_id = ?');
+    const ins = all.findIndex((w) => w.sql.startsWith('INSERT INTO app_embed'));
+    expect(del).toBeGreaterThan(-1);
+    expect(ins).toBeGreaterThan(del);
+    expect(all[ins]!.args.slice(0, 2)).toEqual(['test-app', '["https://example.com","https://*.partner.com"]']);
+  });
+
+  it('a manifest without embed clears the list, so the app is closed to other sites again', async () => {
+    const { res, db } = await put({});
+    expect(res.status).toBe(200);
+    const all = writes(db);
+    expect(all.some((w) => w.sql === 'DELETE FROM app_embed WHERE app_id = ?')).toBe(true);
+    expect(all.some((w) => w.sql.startsWith('INSERT INTO app_embed'))).toBe(false);
+  });
+
+  it('an empty allow list is the same as none', async () => {
+    const { res, db } = await put({ embed: { allow: [] } });
+    expect(res.status).toBe(200);
+    expect(writes(db).some((w) => w.sql.startsWith('INSERT INTO app_embed'))).toBe(false);
+  });
+
+  it.each([
+    ['a non-https origin', { allow: ['http://example.com'] }, 'embed.allow[0] must be an https origin'],
+    ['a path', { allow: ['https://example.com/x'] }, 'embed.allow[0] must be an https origin'],
+    ['a header-injecting value', { allow: ["https://example.com; frame-ancestors *"] }, 'embed.allow[0]'],
+    ['a bare wildcard', { allow: ['*'] }, 'embed.allow[0]'],
+    ['a wildcard on the platform zone', { allow: ['https://*.proappstore.online'] }, 'would let any published app frame yours'],
+    ['a wildcard on a public suffix', { allow: ['https://*.co.uk'] }, 'would admit unrelated sites'],
+    ['more than ten origins', { allow: Array.from({ length: 11 }, (_, i) => `https://s${i}.example.com`) }, 'at most 10 origins'],
+    ['an unknown field', { allow: ['https://example.com'], all: true }, 'unknown field "all"'],
+    ['a string instead of an object', 'https://example.com', 'embed must be an object'],
+  ])('rejects %s with 400 and writes nothing', async (_label, embed, message) => {
+    const { res, db, body } = await put({ embed });
+    expect(res.status).toBe(400);
+    expect(body.error).toContain(message);
+    expect(db.batch).not.toHaveBeenCalled();
   });
 });

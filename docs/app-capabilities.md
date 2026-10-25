@@ -64,7 +64,7 @@ the same user prompts.
 | `frame-src` | `'self' https:` | embeds: maps (`app.maps.embedUrl`), video, payment widgets |
 | `style-src` / `font-src` | `'self' 'unsafe-inline' https:` / `'self' data: https:` | any HTTPS stylesheet or font |
 | `form-action` | `'self' https:` | forms may post to an HTTPS endpoint |
-| `frame-ancestors` | `'self'` + PAS's own surfaces | **who may frame your app**: off for other sites by default |
+| `frame-ancestors` | `'self'` + PAS's own surfaces, plus the origins in your `embed.allow` | **who may frame your app**: off for other sites by default; opt in per origin with [`embed`](./mcp-app-tools.md#embedding-embed) |
 | `base-uri` | `'self'` | |
 
 Plain `http:` is not allowed anywhere (the app is served over HTTPS; a browser
@@ -75,7 +75,7 @@ blocks mixed content regardless).
 | Capability | Why | Status |
 |---|---|---|
 | `SharedArrayBuffer` / cross-origin isolation (COOP + COEP) | `Cross-Origin-Embedder-Policy: require-corp` breaks every cross-origin image, font or script that does not send CORP/CORS headers, which most apps use | opt-in proposed: #452 |
-| Being framed by other sites | clickjacking protection for your users | `frame-ancestors` lists PAS surfaces only; opt-in for named sites proposed: #453 |
+| Being framed by other sites | clickjacking protection for your users | `frame-ancestors` lists PAS surfaces only. **Opt-in per app, for named origins:** declare `embed: { "allow": [...] }` in `mcp.json` ([#453](https://github.com/proappstore-online/platform/issues/453); [how, and the clickjacking trade-off](./mcp-app-tools.md#embedding-embed)) |
 
 ## An app's own `_headers` file
 

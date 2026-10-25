@@ -29,6 +29,7 @@ import { validateWorkerManifest } from '../lib/manifest/worker.js';
 import { validateHooks } from '../lib/manifest/hooks.js';
 import { validateConnectors } from '../lib/manifest/connectors.js';
 import { validateRooms } from '../lib/manifest/rooms.js';
+import { validateEmbed } from '../lib/manifest/embed.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -148,6 +149,8 @@ export async function replaceAppTools(
   if ('error' in roomsResult) return { status: 400, payload: { error: roomsResult.error } };
   const permissionsResult = validatePermissions(site.permissions);
   if ('error' in permissionsResult) return { status: 400, payload: { error: permissionsResult.error } };
+  const embedResult = validateEmbed(site.embed);
+  if ('error' in embedResult) return { status: 400, payload: { error: embedResult.error } };
   // `to: "worker"` needs app workers turned on for this app — the flag, not a
   // finished deploy, so registration never depends on the worker step's order.
   if (hooksResult.hooks.some((h) => h.to === 'worker')) {
@@ -217,6 +220,11 @@ export async function replaceAppTools(
     db.prepare('DELETE FROM app_visibility WHERE app_id = ?').bind(appId),
     ...(visibilityResult.visibility
       ? [db.prepare('INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES (?, ?, ?, ?)').bind(appId, visibilityResult.visibility.mode, JSON.stringify(visibilityResult.visibility.roles), now)]
+      : []),
+    // And opt-in embedding (#453): a manifest that no longer declares it closes the app to other sites again.
+    db.prepare('DELETE FROM app_embed WHERE app_id = ?').bind(appId),
+    ...(embedResult.embed
+      ? [db.prepare('INSERT INTO app_embed (app_id, origins, created_at) VALUES (?, ?, ?)').bind(appId, JSON.stringify(embedResult.embed.allow), now)]
       : []),
     // And the worker section (#254): a manifest without it leaves the worker no secrets.
     db.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
