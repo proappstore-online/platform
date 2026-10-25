@@ -492,7 +492,7 @@ describe('token exchange resource binding', () => {
 
 // #418: MCP sign-ins should survive more than 24h without a browser visit.
 // Refresh tokens rotate on every use, are single-use, bound to client_id and
-// to the resource/appId they were issued for, and last 90 days by default —
+// to the resource/appId they were issued for, and last 30 days by default —
 // a replayed (already-rotated) token kills the whole family.
 describe('refresh tokens (#418)', () => {
   function config(kv: KVNamespace, extra: Record<string, unknown> = {}) {
@@ -550,6 +550,11 @@ describe('refresh tokens (#418)', () => {
   // slides), so an admin removed from ADMIN_GITHUB_IDS kept admin over MCP. A
   // privileged role now lasts no longer than the session it was signed in with.
   describe('privileged roles do not outlive the authorizing session (#429)', () => {
+    // This group deliberately exercises a refresh after the original 30-day
+    // session lifetime. Keep its grant alive longer than that independent
+    // security property; the platform default is covered separately below.
+    const privilegedConfig = (kv: KVNamespace) => config(kv, { refreshTokenTtlSeconds: 90 * 86_400 });
+
     async function adminFamily(kv: KVNamespace) {
       const verifier = 'verifier-adminxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
       await kv.put('code:code-1', JSON.stringify({
@@ -559,10 +564,10 @@ describe('refresh tokens (#418)', () => {
         clientId: 'client-1',
         appId: null,
       }));
-      return exchangeAuthCode(kv, verifier, config(kv));
+      return exchangeAuthCode(kv, verifier, privilegedConfig(kv));
     }
     async function rolesAfterRefresh(kv: KVNamespace, refreshToken: string) {
-      const res = await handleOAuthRoute(refreshRequest(refreshToken), config(kv));
+      const res = await handleOAuthRoute(refreshRequest(refreshToken), privilegedConfig(kv));
       expect(res?.status).toBe(200);
       const body = (await res!.json()) as { access_token: string; refresh_token: string };
       const { session } = JSON.parse((await kv.get(`token:${body.access_token}`))!) as { session: string };
@@ -592,7 +597,7 @@ describe('refresh tokens (#418)', () => {
       const record = JSON.parse((await kv.get(`refresh:${issued.refresh_token}`))!);
       vi.useFakeTimers();
       vi.setSystemTime((record.privilegedUntil - 10) * 1000);
-      const response = await handleOAuthRoute(refreshRequest(issued.refresh_token!), config(kv));
+      const response = await handleOAuthRoute(refreshRequest(issued.refresh_token!), privilegedConfig(kv));
       const body = await response!.json() as { access_token: string; refresh_token: string; expires_in: number };
       expect(body.expires_in).toBe(10);
       const access = JSON.parse((await kv.get(`token:${body.access_token}`))!);
@@ -703,7 +708,7 @@ describe('refresh tokens (#418)', () => {
     await expect(res?.json()).resolves.toEqual({ error: 'invalid_grant' });
   });
 
-  it('defaults the refresh token deadline to 90 days out', async () => {
+  it('defaults the refresh token deadline to 30 days out', async () => {
     const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));
@@ -712,11 +717,11 @@ describe('refresh tokens (#418)', () => {
     const raw = await kv.get(`refresh:${issued.refresh_token}`);
     const record = JSON.parse(raw!) as { expiresAt: number };
     const now = Math.floor(Date.now() / 1000);
-    expect(record.expiresAt).toBeGreaterThan(now + 89 * 24 * 60 * 60);
-    expect(record.expiresAt).toBeLessThanOrEqual(now + 90 * 24 * 60 * 60);
+    expect(record.expiresAt).toBeGreaterThan(now + 29 * 24 * 60 * 60);
+    expect(record.expiresAt).toBeLessThanOrEqual(now + 30 * 24 * 60 * 60);
   });
 
-  it('honours a configured refresh-token TTL instead of the 90-day default', async () => {
+  it('honours a configured refresh-token TTL instead of the 30-day default', async () => {
     const verifier = 'verifier-1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const kv = makeKv();
     await seedAuthCode(kv, await pkceChallenge(verifier));

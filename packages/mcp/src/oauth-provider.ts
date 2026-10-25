@@ -10,8 +10,8 @@ import type { NewSession } from "./session.js";
 const AUTH_NONCE_COOKIE = "pas_mcp_oauth_nonce";
 const AUTH_PROVIDERS = ["github", "google"] as const;
 const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
-/** Refresh-token lifetime default (#418): "sign-ins should last 90 days". */
-const DEFAULT_REFRESH_TTL_SECONDS = 90 * 86_400;
+/** Shared MCP connection-retention default. Deployments may set a bounded override. */
+const DEFAULT_REFRESH_TTL_SECONDS = 30 * 86_400;
 /** Return the same rotation for a brief lost-response/concurrent-refresh retry.
  * A retry never creates a second successor. Reuse after this window revokes the family. */
 export const REFRESH_RETRY_SECONDS = 30;
@@ -100,7 +100,7 @@ export interface OAuthConfig {
   /** HMAC signing key for session verification */
   sessionSigningKey: string;
   /**
-   * Refresh-token lifetime in seconds (#418). Defaults to 90 days. Every
+   * Refresh-token lifetime in seconds. Defaults to 30 days. Every
    * successful refresh rotates to a new token and resets this window, so a
    * client that keeps its access token renewed never has to send the user
    * back through the browser.
@@ -381,7 +381,7 @@ function authConfirmPage(config: OAuthConfig, nonce: string, clientName: string 
     <p>${appName
       ? "This authorizes the app's registered read and write actions, subject to your app permissions."
       : "This authorizes platform tools for your PAS apps: app data, source changes, provisioning, deployment, QA, ownership and Agent Teams. Starting agents can incur usage charges."}</p>
-    <p>Access remains subject to PAS permissions. Refresh access lasts up to 90 days of inactivity. Revoke the connection through your MCP client; app-scoped grants can also be revoked from the app's MCP settings. Choose the account you intend to authorize.</p>
+    <p>Access remains subject to PAS permissions. Refresh access lasts up to 30 days of inactivity by default. Revoke the connection through your MCP client; app-scoped grants can also be revoked from the app's MCP settings. Choose the account you intend to authorize.</p>
     <div class="actions">
       ${providerLinks}
     </div>
@@ -861,7 +861,7 @@ async function refreshTokenGrant(body: URLSearchParams, config: OAuthConfig): Pr
   }
 
   // Re-mint the session fresh (#418): this is what makes the refresh work for
-  // the full 90 days even though the underlying session JWT's own TTL is 30
+  // the full refresh-grant lifetime even though the underlying session JWT's own TTL is 30
   // days — we never read its exp, only the claims it was minted with.
   const claims = refreshClaims(record, now);
   const privileged = (claims.roles ?? []).some((role) => !UNPRIVILEGED_ROLES.has(role));

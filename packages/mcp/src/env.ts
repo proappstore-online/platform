@@ -32,7 +32,7 @@ export interface Env {
   /** Comma-separated OAuth providers exposed on the MCP login page. */
   AUTH_PROVIDERS?: string;
   OAUTH_CIMD_HOSTS?: string;
-  /** Refresh-token lifetime override, in seconds (#418). Defaults to 90 days. */
+  /** Refresh-token lifetime override, in seconds. Defaults to 30 days. */
   OAUTH_REFRESH_TTL_SECONDS?: string;
 }
 

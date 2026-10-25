@@ -169,9 +169,9 @@ to one app. Tool annotations describe behavior and are not authorization control
 - **Refresh tokens (#418)** — issued alongside the access token on both the
   `authorization_code` and `refresh_token` grants. Opaque, durably stored, rotate on
   every use (retries within 30 seconds return the same successor; reuse after the window revokes the family), bound to `client_id` and to the appId/resource they were issued for.
-  Lifetime is a sliding 90-day window by default (`OAUTH_REFRESH_TTL_SECONDS` to
+  Lifetime is a sliding 30-day window by default (`OAUTH_REFRESH_TTL_SECONDS` to
   override), reset on every successful rotation — a client that keeps renewing retains its grant unless it is revoked or its credentials are lost. Each refresh re-mints the underlying PAS
-  session from its original claims, so it keeps working for the full 90 days
+  session from its original claims, so it keeps working for the full configured retention window (30 days by default)
   even though a session JWT's own TTL is 30 days.
   Privileged roles (anything beyond `user`/`creator`, i.e. `admin`) are
   granted at sign-in and never re-checked, so they last only as long as the

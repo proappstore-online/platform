@@ -47,7 +47,7 @@ OAUTH_CIMD_HOSTS = "chatgpt.com,claude.ai"
 #
 # Optional refresh-token lifetime override, in seconds (#418). Defaults to 90
 # days (7776000) when unset.
-#   OAUTH_REFRESH_TTL_SECONDS = "7776000"
+#   OAUTH_REFRESH_TTL_SECONDS = "2592000"
 
 [[routes]]
 pattern = "mcp.proappstore.online/*"
