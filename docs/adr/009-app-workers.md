@@ -341,7 +341,10 @@ envelope and the same `PAS` contract.
     so the cap applies to a batch too: a consumer either sets
     `max_batch_size` ≤ 4 or handles a batch's messages sequentially. #257 sets
     `max_batch_size = 1` (one message per consumer invocation), which satisfies
-    both.
+    both. The loader host also enforces the cap itself (#449,
+    `LOADER_MAX_CONCURRENT`): invocations under one request context share four
+    slots and a fifth waits for one to free, so a caller that fans out gets
+    slower, not an error.
   - `get()` caches isolates by ID but guarantees nothing about reuse; the
     shim and app must not assume warm state.
   Not established by the docs and therefore **open for the spike**: whether

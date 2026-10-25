@@ -28,6 +28,7 @@ import { toUint8 } from './bytes.js';
 import { quotasFrom, recordInvocationUsage, reserveInvocation } from './app-worker-usage.js';
 import { SIGNATURE_HEADER, signatureHeader } from '../app-worker-shim/signature.js';
 import { APP_WORKER_SHIM } from '../generated/app-worker-shim.js';
+import { createConcurrencyLimit, limitForScope } from './loader-concurrency.js';
 
 export type AppWorkerBackend = 'account' | 'loader' | 'dispatch';
 
@@ -41,7 +42,7 @@ export const KEPT_BUNDLES = 3;
 export const ROTATION_OVERLAP_MS = 10 * 60 * 1000;
 /** The first bytes of a non-2xx response kept on the invocation record. */
 export const BODY_EXCERPT_BYTES = 1024;
-/** ADR-009 §5: at most 4 Dynamic Workers in flight per request. Callers that fan out (#255, #257) stay under it. */
+/** ADR-009 §5: at most 4 Dynamic Workers in flight per request. The loader host enforces it (#449): a fifth waits for a slot. */
 export const LOADER_MAX_CONCURRENT = 4;
 /** Platform-pinned, as for data workers (lib/deploy-worker.ts); `env.APP_WORKER_COMPATIBILITY_DATE` overrides it. */
 export const APP_WORKER_COMPATIBILITY_DATE = '2026-01-01';
@@ -373,6 +374,8 @@ export function loaderId(appId: string, bundleSha: string, configVersion: number
 }
 
 function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): AppWorkerHost {
+  // Invocations under one request share the cap; with no request context (tests, tools) the host is the scope.
+  const slots = ctx ? limitForScope(ctx, LOADER_MAX_CONCURRENT) : createConcurrencyLimit(LOADER_MAX_CONCURRENT);
   return {
     backend: 'loader',
 
@@ -488,6 +491,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
       let error: string | null = null;
       // #308: one Workers Logs line per invocation start and end, each carrying its id.
       console.log(`[app-worker] invoke ${appId} ${event.type}${event.name ? ` ${event.name}` : ''} ${invocationId}`);
+      // #449: the slot is held while the worker runs. A timeout stops us waiting for it, not the worker, so the slot frees then.
+      const release = await slots.acquire();
       try {
         const res = await withTimeout(
           worker.getEntrypoint().fetch(new Request('https://app-worker.invalid/', {
@@ -501,6 +506,8 @@ function loaderHost(env: Env, loader: WorkerLoader, ctx?: AppWorkerExports): App
       } catch (e) {
         status = e instanceof InvokeTimeout ? 'timeout' : 'failed';
         error = String((e as Error)?.message ?? e).slice(0, 500);
+      } finally {
+        release();
       }
       const finishedAt = Date.now();
       console.log(`[app-worker] ${invocationId} ${status}${httpStatus === null ? '' : ` ${httpStatus}`} ${finishedAt - now}ms`);

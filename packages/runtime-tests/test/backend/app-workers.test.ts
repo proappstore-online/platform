@@ -3,7 +3,7 @@ import { mintSession } from '@proappstore/build-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { _resetJwksCache } from '../../../backend/src/lib/github-oidc';
-import { appWorkerHost, appWorkerShimSha, disableAppWorker, loaderId, rotateAppWorkerCredentials, ROTATION_OVERLAP_MS } from '../../../backend/src/lib/app-worker-host';
+import { appWorkerHost, appWorkerShimSha, type AppWorkerExports, disableAppWorker, loaderId, rotateAppWorkerCredentials, ROTATION_OVERLAP_MS } from '../../../backend/src/lib/app-worker-host';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -292,6 +292,59 @@ describe('invocation through the platform shim on the Worker Loader (#253)', () 
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe('loader concurrency cap (ADR-009 §5, #449)', () => {
+    /** The real loader, with every entrypoint fetch counted while it is in flight. */
+    function countingEnv() {
+      const counter = { inFlight: 0, peak: 0 };
+      const loader = env.LOADER!;
+      const wrapped = {
+        get: (id: string, getCode: Parameters<WorkerLoader['get']>[1]) => {
+          const worker = loader.get(id, getCode);
+          return {
+            ...worker,
+            getEntrypoint: (...args: Parameters<typeof worker.getEntrypoint>) => {
+              const entry = worker.getEntrypoint(...args);
+              return { fetch: async (...a: Parameters<Fetcher['fetch']>) => {
+                counter.inFlight++;
+                counter.peak = Math.max(counter.peak, counter.inFlight);
+                try {
+                  await new Promise((r) => setTimeout(r, 25)); // make concurrent loads actually overlap
+                  return await entry.fetch(...a);
+                } finally { counter.inFlight--; }
+              } };
+            },
+          };
+        },
+      } as unknown as WorkerLoader;
+      return { counter, countedEnv: { ...env, LOADER: wrapped } as unknown as Env };
+    }
+
+    it('keeps at most 4 workers in flight for one request and lets every invocation finish', async () => {
+      const { counter, countedEnv } = countingEnv();
+      const ctx = {} as AppWorkerExports; // one request
+      const results = await Promise.all(Array.from({ length: 7 }, () => appWorkerHost(countedEnv, ctx).invoke('first', event({}), { timeoutMs: 10_000 })));
+      expect(results.map((r) => r.status)).toEqual(Array(7).fill('succeeded'));
+      expect(counter.peak).toBe(4);
+      expect(counter.inFlight).toBe(0);
+    });
+
+    it('does not make separate requests share a cap', async () => {
+      const { counter, countedEnv } = countingEnv();
+      const results = await Promise.all(Array.from({ length: 6 }, () => appWorkerHost(countedEnv, {} as AppWorkerExports).invoke('first', event({}), { timeoutMs: 10_000 })));
+      expect(results.every((r) => r.status === 'succeeded')).toBe(true);
+      expect(counter.peak).toBe(6);
+    });
+
+    it('frees the slot when an invocation fails, so the queue behind it still drains', async () => {
+      const { counter, countedEnv } = countingEnv();
+      const ctx = {} as AppWorkerExports;
+      const results = await Promise.all(Array.from({ length: 6 }, (_, i) => appWorkerHost(countedEnv, ctx).invoke('first', event({ fail: i % 2 === 0 }), { timeoutMs: 10_000 })));
+      expect(results.map((r) => r.status)).toEqual(['failed', 'succeeded', 'failed', 'succeeded', 'failed', 'succeeded']);
+      expect(counter.peak).toBeLessThanOrEqual(4);
+      expect(counter.inFlight).toBe(0);
+    });
   });
 
   it('a worker returning 500 with a 3 KB body is recorded failed with the first 1 KB', async () => {
