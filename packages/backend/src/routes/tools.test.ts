@@ -1385,12 +1385,12 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules / embed reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules / embed / isolation reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null, rooms: [], permissions: [] });
-    // #437: the declared permissions, and #453: the embed list, are replaced with the rest (here: cleared).
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(14);
+    // #437: the declared permissions, and #453: the embed list, and #452: the isolation mode, are replaced with the rest (here: cleared).
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(15);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });
@@ -2234,6 +2234,53 @@ describe('PUT /v1/apps/:appId/tools — embed (#453)', () => {
     const { res, db, body } = await put({ embed });
     expect(res.status).toBe(400);
     expect(body.error).toContain(message);
+    expect(db.batch).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /v1/apps/:appId/tools — isolation (#452)', () => {
+  const put = (body: Record<string, unknown>) => {
+    const db = mockD1();
+    db.prepare.mockReset();
+    db.prepare.mockReturnValueOnce(mockStmt({ first: { creator_id: 'gh:1' } })).mockImplementation(() => mockStmt());
+    return app.request(
+      '/v1/apps/test-app/tools',
+      { method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools: [validTool], ...body }) },
+      makeEnv({}, db),
+    ).then(async (res) => ({ res, db, body: (await res.json()) as { error?: string } }));
+  };
+  const writes = (db: ReturnType<typeof mockD1>) =>
+    (db.prepare as ReturnType<typeof vi.fn>).mock.calls.map((call, i) => ({
+      sql: call[0] as string,
+      args: ((db.prepare as ReturnType<typeof vi.fn>).mock.results[i]!.value.bind as ReturnType<typeof vi.fn>).mock.calls[0] ?? [],
+    }));
+
+  it.each(['cross-origin', 'cross-origin-strict'])('stores "%s" in the same batch as the tools, replacing any previous mode', async (mode) => {
+    const { res, db, body } = await put({ isolation: mode });
+    expect(res.status, body.error).toBe(200);
+    expect(db.batch).toHaveBeenCalledOnce();
+    const all = writes(db);
+    const del = all.findIndex((w) => w.sql === 'DELETE FROM app_isolation WHERE app_id = ?');
+    const ins = all.findIndex((w) => w.sql.startsWith('INSERT INTO app_isolation'));
+    expect(del).toBeGreaterThan(-1);
+    expect(ins).toBeGreaterThan(del);
+    expect(all[ins]!.args.slice(0, 2)).toEqual(['test-app', mode]);
+  });
+
+  it('a manifest without isolation clears the mode, so the app is not isolated again', async () => {
+    for (const body of [{}, { isolation: 'none' }, { isolation: null }]) {
+      const { res, db } = await put(body);
+      expect(res.status, JSON.stringify(body)).toBe(200);
+      const all = writes(db);
+      expect(all.some((w) => w.sql === 'DELETE FROM app_isolation WHERE app_id = ?')).toBe(true);
+      expect(all.some((w) => w.sql.startsWith('INSERT INTO app_isolation'))).toBe(false);
+    }
+  });
+
+  it.each([['an unknown mode', 'same-origin'], ['true', true], ['an object', { mode: 'cross-origin' }]])('rejects %s with 400 and writes nothing', async (_label, isolation) => {
+    const { res, db, body } = await put({ isolation });
+    expect(res.status).toBe(400);
+    expect(body.error).toContain('isolation must be "cross-origin" or "cross-origin-strict"');
     expect(db.batch).not.toHaveBeenCalled();
   });
 });

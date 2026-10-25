@@ -74,7 +74,7 @@ blocks mixed content regardless).
 
 | Capability | Why | Status |
 |---|---|---|
-| `SharedArrayBuffer` / cross-origin isolation (COOP + COEP) | `Cross-Origin-Embedder-Policy: require-corp` breaks every cross-origin image, font or script that does not send CORP/CORS headers, which most apps use | opt-in proposed: #452 |
+| `SharedArrayBuffer` / cross-origin isolation (COOP + COEP) | `Cross-Origin-Embedder-Policy: require-corp` breaks every cross-origin image, font or script that does not send CORP/CORS headers, which most apps use | **Opt-in per app:** declare `"isolation": "cross-origin"` (or `"cross-origin-strict"` for Safari) in `mcp.json` ([#452](https://github.com/proappstore-online/platform/issues/452); [what it does and what breaks](./mcp-app-tools.md#cross-origin-isolation-isolation)) |
 | Being framed by other sites | clickjacking protection for your users | `frame-ancestors` lists PAS surfaces only. **Opt-in per app, for named origins:** declare `embed: { "allow": [...] }` in `mcp.json` ([#453](https://github.com/proappstore-online/platform/issues/453); [how, and the clickjacking trade-off](./mcp-app-tools.md#embedding-embed)) |
 
 ## An app's own `_headers` file

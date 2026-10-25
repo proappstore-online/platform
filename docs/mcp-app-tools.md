@@ -557,6 +557,50 @@ Every uncached HTML hit on a matching path costs one action call, so declare
 Host calls use a service binding and are not subject to the anonymous rate
 limit.
 
+## Cross-origin isolation (`isolation`)
+
+Off by default. `SharedArrayBuffer`, high-resolution timers and WebAssembly threads only work
+on a page that is *cross-origin isolated* (`self.crossOriginIsolated === true`), which needs
+`Cross-Origin-Opener-Policy: same-origin` plus a `Cross-Origin-Embedder-Policy`. An app that
+needs them opts in:
+
+```json
+{ "isolation": "cross-origin" }
+```
+
+| Value | Headers the host adds | Browsers |
+|---|---|---|
+| *(absent)*, `null`, `"none"` | none: the default | all |
+| `"cross-origin"` | `COOP: same-origin` + `COEP: credentialless` | Chromium and Firefox. **Safari does not support `credentialless`, so the page is not isolated there.** |
+| `"cross-origin-strict"` | `COOP: same-origin` + `COEP: require-corp` | every browser that supports isolation, at the price below |
+
+The headers go on **this app's pages** (COOP and COEP) **and its scripts** (COEP only: a Worker or
+service worker must carry the embedder policy of the page that starts it). Images, styles, fonts
+and data files are same-origin, which both policies let through, so they are left alone. Every
+other app is unchanged. Registered with the tools and replaced by the next registration, so
+removing the field turns isolation off again on the next deploy. Anything but the values above
+fails registration with a 400 and writes nothing.
+
+**What breaks once isolated: test before you ship it.**
+
+- With `cross-origin-strict` (`require-corp`) the browser refuses every cross-origin subresource
+  that does not send `Cross-Origin-Resource-Policy: cross-origin` or CORS headers: images from
+  arbitrary hosts (avatars, CDNs), Google Fonts CSS, map tiles, most third-party scripts, and
+  cross-origin iframes that do not set their own COEP.
+- With `cross-origin` (`credentialless`) those no-CORS requests are sent *without credentials*
+  instead of being blocked. Things that need a cookie from the other site (a signed-in embed,
+  a paid font) stop working; public assets keep working.
+- `COOP: same-origin` severs `window.opener` for any popup the app opens or that opens the app,
+  so **popup-based OAuth and payment flows** that report back through the opener break. Use a
+  redirect-based flow (the SDK's sign-in already is one) and test your payment provider.
+- Cross-origin `<iframe>`s the app embeds must themselves be cross-origin isolated-compatible.
+
+Verify it from the browser console: `crossOriginIsolated` should be `true`. If it is `false`,
+check the response headers of the page and of the Worker script, and the console for a blocked
+subresource (it names it). The edge cache can serve the previous page for up to 60 seconds after
+a deploy, and a script the browser cached before you opted in keeps its old headers until its
+file name changes (a new build does that).
+
 ## Embedding (`embed`)
 
 Off by default. A hosted app's `Content-Security-Policy: frame-ancestors` lists only the
