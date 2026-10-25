@@ -37,6 +37,25 @@ import {
 import { privateNoStore } from '../lib/route-wrap.js';
 import type { Env } from '../types.js';
 
+/** An `uploading` reservation older than this is a dead run, not a concurrent one (#441). */
+const STALE_UPLOAD_MS = 15 * 60 * 1000;
+
+/**
+ * Before a re-reservation writes, drop whatever an earlier attempt left under the
+ * revision prefix: the old manifest first (its presence marks a complete upload),
+ * then every object the new manifest does not list.
+ */
+async function clearStaleObjects(store: R2Bucket, prefix: string, keep: Set<string>): Promise<void> {
+  await store.delete(prefix + MANIFEST_FILE);
+  let cursor: string | undefined;
+  do {
+    const page = await store.list(cursor ? { prefix, cursor } : { prefix });
+    const stale = page.objects.map((o) => o.key).filter((k) => !keep.has(k));
+    if (stale.length) await store.delete(stale);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+}
+
 const APP_ID_RE = /^[a-z][a-z0-9-]*$/;
 
 export const marketingDeployRoutes = new Hono<{ Bindings: Env }>();
@@ -162,17 +181,26 @@ marketingDeployRoutes.put('/apps/:appId/marketing/revisions/:revision', async (c
   const totalBytes = manifest.files.reduce((n, f) => n + f.size, 0);
 
   // Reserve the revision before writing a byte. The same artifact again is a
-  // no-op (a re-run); different bytes under a recorded revision are refused.
+  // no-op (a re-run). Different bytes under a recorded revision are refused —
+  // unless that revision never went live and its upload is dead: `failed`, or
+  // `uploading` and stale (#441). A re-run of the same commit can legitimately
+  // rebuild different bytes (`install --no-frozen-lockfile`), and nothing was
+  // published under the old manifest, so the reservation is re-taken with the
+  // new one. A live `uploading` row with another manifest is a concurrent run: 409.
   const now = Date.now();
   const reserved = await c.env.DB.prepare(
     `INSERT INTO app_marketing_deploys (app_id, revision, status, manifest_sha256, file_count, total_bytes, repository, workflow_ref, run_id, commit_sha, created_at, updated_at)
      SELECT ?1, ?2, 'uploading', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10 WHERE EXISTS (SELECT 1 FROM apps WHERE id = ?1)
      ON CONFLICT(app_id, revision) DO UPDATE SET status = 'uploading', error = NULL, updated_at = excluded.updated_at,
-       run_id = excluded.run_id, commit_sha = excluded.commit_sha
-       WHERE app_marketing_deploys.status IN ('uploading', 'failed') AND app_marketing_deploys.manifest_sha256 = excluded.manifest_sha256
+       run_id = excluded.run_id, commit_sha = excluded.commit_sha,
+       manifest_sha256 = excluded.manifest_sha256, file_count = excluded.file_count, total_bytes = excluded.total_bytes
+       WHERE app_marketing_deploys.activated_at IS NULL AND (
+         (app_marketing_deploys.status IN ('uploading', 'failed') AND app_marketing_deploys.manifest_sha256 = excluded.manifest_sha256)
+         OR app_marketing_deploys.status = 'failed'
+         OR (app_marketing_deploys.status = 'uploading' AND app_marketing_deploys.updated_at < ?11))
      RETURNING status`,
   ).bind(appId, revision, manifestSha, manifest.files.length, totalBytes, claims.repository,
-    String(claims.workflow_ref ?? ''), String(claims.run_id ?? ''), claims.sha ?? null, now).first<{ status: string }>();
+    String(claims.workflow_ref ?? ''), String(claims.run_id ?? ''), claims.sha ?? null, now, now - STALE_UPLOAD_MS).first<{ status: string }>();
   if (!reserved) {
     const existing = await deployRow(c.env.DB, appId, revision);
     if (!existing) throw new HttpError('app not found', 404);
@@ -184,6 +212,7 @@ marketingDeployRoutes.put('/apps/:appId/marketing/revisions/:revision', async (c
 
   const prefix = marketingPrefix(appId, revision);
   try {
+    await clearStaleObjects(store, prefix, new Set(manifest.files.map((f) => prefix + f.path.slice(1))));
     for (const file of manifest.files) {
       await store.put(prefix + file.path.slice(1), bodies.get(file.path)!, { httpMetadata: { contentType: file.contentType }, sha256: file.sha256 });
     }

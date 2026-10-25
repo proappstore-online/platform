@@ -165,6 +165,45 @@ describe('marketing deploy: upload, activation, rollback (#399, #408)', () => {
     expect(await served!.text()).toContain(R(1));
   });
 
+  it('#441: a failed revision can be re-uploaded with different bytes, drops the old objects, and publishes', async () => {
+    const prefix = `marketing/${APP}/revisions/${R(5)}/`;
+    const first = await build(APP, R(5), 'First');
+    first.files.set('/old-only.png', new Uint8Array([9])); // an object the rebuilt site will no longer contain
+    (first.manifest.files as unknown[]).push({ path: '/old-only.png', contentType: TYPES.png, size: 1, sha256: await hex(new Uint8Array([9])) });
+    expect((await upload(APP, R(5), first)).status).toBe(201);
+    // Simulate a dead attempt: the row failed after objects (and a manifest) landed.
+    await env.DB.prepare("UPDATE app_marketing_deploys SET status = 'failed', error = 'upload failed: boom' WHERE revision = ?").bind(R(5)).run();
+
+    const rebuilt = await build(APP, R(5), 'Second, rebuilt with another lockfile resolution');
+    const res = await upload(APP, R(5), rebuilt);
+    expect(res.status).toBe(201);
+    expect(await keys(prefix)).toEqual([
+      '_astro/Layout.css', 'artifact-manifest.json', 'icon-192.png', 'index.html', 'privacy/index.html',
+    ].map((k) => prefix + k));
+    const row = await env.DB.prepare('SELECT status, error, manifest_sha256 FROM app_marketing_deploys WHERE revision = ?').bind(R(5)).first<Record<string, unknown>>();
+    expect(row).toMatchObject({ status: 'uploaded', error: null });
+    expect(row!.manifest_sha256).toBe((await res.json() as { manifestSha256: string }).manifestSha256);
+    expect(await (await env.APPS.get(`${prefix}index.html`))!.text()).toContain('rebuilt');
+    expect((await activate(APP, R(5))).status).toBe(200);
+    expect(await active()).toBe(R(5));
+  });
+
+  it('#441: a stale uploading revision is re-reservable with a new manifest; a live one, an uploaded one and an activated one are not', async () => {
+    const reserve = async (rev: string, heading: string) => (await upload(APP, rev, await build(APP, rev, heading))).status;
+    const setRow = (rev: string, set: string) => env.DB.prepare(`UPDATE app_marketing_deploys SET ${set} WHERE revision = ?`).bind(rev).run();
+
+    expect(await reserve(R(6), 'a')).toBe(201);
+    await setRow(R(6), "status = 'uploading', updated_at = " + Date.now()); // a concurrent run still working
+    expect(await reserve(R(6), 'b')).toBe(409);
+    await setRow(R(6), "updated_at = " + (Date.now() - 16 * 60 * 1000)); // now dead
+    expect(await reserve(R(6), 'b')).toBe(201);
+
+    expect(await reserve(R(6), 'c')).toBe(409); // uploaded: immutable again
+
+    await setRow(R(6), "status = 'failed', activated_at = 1"); // went live once: never rewritten
+    expect(await reserve(R(6), 'd')).toBe(409);
+  });
+
   it('robots.txt and sitemap.xml are optional; only index.html is required (#408)', async () => {
     const art = await build(APP, R(3), 'Three');
     expect((art.manifest.files as { path: string }[]).map((f) => f.path)).not.toContain('/robots.txt');
