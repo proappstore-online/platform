@@ -202,6 +202,11 @@ as a SHA-256 hash of app id and IP, for that limit. The marketing site's CSP
 allows `form-action https://api.proappstore.online` for this form and nothing
 else.
 
+Owners read enquiries over MCP with `list_enquiries` (status filter, `next.before_id`
+cursor), `get_enquiry` and `mark_enquiry_handled` (`handled: false` reopens). The tools
+call the owner-or-admin routes above with the connection's own session, so a
+non-owner gets the backend's 403 (#413).
+
 ## Acceptance and release evidence
 
 - An app with an active revision — public or private, listed or not — serves

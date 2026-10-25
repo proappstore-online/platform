@@ -16,6 +16,7 @@ import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
+import { registerEnquiryTools } from "./enquiry-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
 import { registerOidcSessionTools } from "./oidc-session-tools.js";
@@ -104,6 +105,12 @@ export async function createPasMcpServer(env: Env, props: Record<string, unknown
 
     // ── App ownership transfer and recovery (#423) ──────────────
     registerOwnershipTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Marketing-site enquiries, owner-only (#413) ─────────────
+    registerEnquiryTools(server, env, () => ({
       userId: userId,
       token: userToken,
     }));
