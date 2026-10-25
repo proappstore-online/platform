@@ -105,7 +105,7 @@
     },
     {
       "name": "provision_app",
-      "description": "Provision platform resources for a PAS app (R2 route, D1 database, data worker)."
+      "description": "Ensure a PAS app's R2 route and D1, preserving existing data while refreshing its data-worker script and bindings."
     },
     {
       "name": "publish_app",
