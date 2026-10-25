@@ -24,6 +24,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "knip": "knip --no-progress",
     "test": "vitest run",
     "test:watch": "vitest",
     "docs:dev": "vitepress dev docs",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "2.1.9",
     "happy-dom": "^15.11.7",
+    "knip": "^6.43.0",
     "mermaid": "^11.4.1",
     "typescript": "^5.7.0",
     "vitepress": "^1.5.0",

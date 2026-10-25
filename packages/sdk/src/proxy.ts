@@ -54,7 +54,7 @@ export class ApiProxy {
  * Scheme detection is case-insensitive: `HTTPS://api.example.com/x` should
  * normalize the same as `https://api.example.com/x`.
  */
-export function normalizeTarget(target: string): string {
+function normalizeTarget(target: string): string {
   const schemeMatch = target.match(/^([a-z][a-z0-9+.-]*):\/\//i);
   if (schemeMatch) {
     const scheme = schemeMatch[1]!.toLowerCase();

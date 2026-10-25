@@ -14,7 +14,7 @@ const APP_ID_RE = /^[a-z][a-z0-9-]{0,57}$/;
 const DEFAULT_REFRESH_TTL_SECONDS = 30 * 86_400;
 /** Return the same rotation for a brief lost-response/concurrent-refresh retry.
  * A retry never creates a second successor. Reuse after this window revokes the family. */
-export const REFRESH_RETRY_SECONDS = 30;
+const REFRESH_RETRY_SECONDS = 30;
 interface RotationResponse { access_token: string; token_type: string; expires_in: number; refresh_token: string }
 type AuthProvider = typeof AUTH_PROVIDERS[number];
 

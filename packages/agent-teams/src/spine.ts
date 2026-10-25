@@ -44,7 +44,7 @@ function badPath(p: string): boolean {
 // SQLite (our storage + cost). Generous enough for real apps.
 export const MAX_FILE_BYTES = 512 * 1024;      // 512KB per file
 export const MAX_FILES = 300;                  // files in the working tree
-export const MAX_TREE_BYTES = 12 * 1024 * 1024; // 12MB total
+const MAX_TREE_BYTES = 12 * 1024 * 1024; // 12MB total
 
 function treeBytes(files: Map<string, string>): number {
   let n = 0;

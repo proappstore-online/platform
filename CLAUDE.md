@@ -53,6 +53,7 @@ pnpm install --frozen-lockfile
 pnpm -r --filter './packages/*' build
 bash scripts/check-design-system.sh .              # banned CSS aliases, html.dark, theme storage key
 node scripts/check-deploy-paths.mjs                # deploy paths: list every workspace package the worker bundles
+pnpm knip                                          # dead exports, unused files and dependencies (knip.json)
 pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root
 pnpm test:coverage                                 # same suite + V8 coverage floors (what CI's check job runs) + gaps report

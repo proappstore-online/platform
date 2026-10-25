@@ -35,9 +35,9 @@ export const ACTION_FAILURE_MIN = 20;
 export const SERVER_5XX_MIN = 5;
 /** Consecutive failed QA runs (deploy or cron triggered) with no pass since. */
 export const QA_CONSECUTIVE_FAILURES = 2;
-export const ALERT_EVENT = 'app.alert';
+const ALERT_EVENT = 'app.alert';
 
-export type AlertKind = 'error_spike' | 'action_failures' | 'server_5xx' | 'qa_failures';
+type AlertKind = 'error_spike' | 'action_failures' | 'server_5xx' | 'qa_failures';
 /** The kinds this evaluator records — and the only ones its redelivery sweep touches;
  *  other app_alerts writers (scheduled actions, app-worker quota) dispatch their own. */
 const EVALUATOR_KINDS: readonly AlertKind[] = ['error_spike', 'action_failures', 'server_5xx', 'qa_failures'];
@@ -50,13 +50,13 @@ export const DISPATCH_LEASE_MS = 10 * 60_000;
 /** Undelivered alerts older than this are left alone: past the point of being news. */
 const REDELIVERY_HORIZON_MS = 24 * 60 * 60_000;
 
-export interface AlertTop {
+interface AlertTop {
   categories: { category: string; count: number }[];
   operations: { operation: string; count: number }[];
   fingerprints: { fingerprint: string; count: number }[];
 }
 
-export interface Alert {
+interface Alert {
   app_id: string;
   kind: AlertKind;
   window_start: number;

@@ -138,7 +138,7 @@ export async function optionalUser(c: Context<{ Bindings: Env }>): Promise<FasUs
 
 /** Platform-level roles from the session token, ordered by privilege. */
 const PLATFORM_ROLES = ['user', 'creator', 'admin'] as const;
-export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 /** Team roles ordered by privilege level (higher index = more access). */
 export const TEAM_ROLES = ['viewer', 'po', 'developer', 'admin', 'owner'] as const;
@@ -148,8 +148,8 @@ export type TeamRole = (typeof TEAM_ROLES)[number];
  * Conventional app roles (the app author may also assign any custom string), so
  * the type is a widened string. Listed for documentation + tooling.
  */
-export const APP_ROLE_CONVENTIONS = ['owner', 'member', 'moderator', 'editor', 'viewer'] as const;
-export type AppRole = string;
+const APP_ROLE_CONVENTIONS = ['owner', 'member', 'moderator', 'editor', 'viewer'] as const;
+type AppRole = string;
 
 /**
  * Verify the signed-in user has access to the given app. Checks (in order):

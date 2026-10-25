@@ -124,7 +124,7 @@ function randomHex(bytes: number): string {
 export const TRACE_ID_HEADER = 'X-PAS-Trace-Id';
 
 /** A fresh 32-hex trace id, for a request that arrived without a valid traceparent. */
-export function newTraceId(): string {
+function newTraceId(): string {
   return randomHex(16);
 }
 

@@ -1,6 +1,6 @@
 import { HttpError } from '../lib/auth.js';
 
-export const HEX = /^#[0-9a-fA-F]{3,8}$/;
+const HEX = /^#[0-9a-fA-F]{3,8}$/;
 export const URL_LIKE = /^https?:\/\/.+/i;
 const EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HANDLE = /^[a-zA-Z0-9._-]{1,64}$/;

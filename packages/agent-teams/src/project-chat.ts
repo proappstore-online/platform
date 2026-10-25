@@ -140,7 +140,7 @@ export async function handleChatTurn(h: ProjectHost, request: Request): Promise<
   }
 }
 
-export async function handleChat(h: ProjectHost, request: Request): Promise<Response> {
+async function handleChat(h: ProjectHost, request: Request): Promise<Response> {
   const peek = await request.clone().json().catch(() => ({})) as { thread?: string };
   if (peek.thread === 'research') {
     return runArchitectChat(h, request);

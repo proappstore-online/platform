@@ -55,14 +55,14 @@ export const PERSONAL_DATA_COLUMN_PARTS: readonly string[] = [
 const NOT_PERSONAL_SUFFIXES = ['_id', '_ids', '_count', '_verified', '_at'];
 
 /** The statements an action runs, as the platform executes them. */
-export function policyStatements(tool: UnscopedPolicyTool): string[] {
+function policyStatements(tool: UnscopedPolicyTool): string[] {
   if (tool.operation === 'batch') return tool.statements ?? [];
   if (tool.operation === 'verify') return [tool.sql ?? '', ...(tool.statements ?? [])];
   return [tool.sql ?? ''];
 }
 
 /** Does the action declare an unscoped exemption (with a reason, as registration requires)? */
-export function declaresUnscoped(tool: UnscopedPolicyTool): boolean {
+function declaresUnscoped(tool: UnscopedPolicyTool): boolean {
   return tool.auth?.caller_unscoped !== undefined;
 }
 

@@ -12,7 +12,7 @@ interface AllowlistRule {
   createdAt: number;
 }
 
-export function parseInject(s: string): {
+function parseInject(s: string): {
   kind: 'query' | 'header' | 'bearer' | 'oauth2_cc';
   name: string;
 } {

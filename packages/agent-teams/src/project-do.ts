@@ -17,7 +17,7 @@ import type { ChatStreamSubscriber } from './chat-thread.ts';
 // Re-exported: these lived here before being split out, and callers import them from this module.
 export { minRoleFor } from './role-gate.ts';
 export { LISTING_MODEL, sanitizeListing } from './listing.ts';
-export { CHAT_THREADS, chatThreadOf, type ChatThread } from './chat-thread.ts';
+export { chatThreadOf } from './chat-thread.ts';
 
 /**
  * The Durable Object itself: it owns the storage, the in-memory run state and

@@ -16,7 +16,7 @@ export interface TelemetryAuth {
 
 /** In platform-cookie mode all calls go same-origin through the host's mediation
  *  so the HttpOnly cookie rides along (and the host can assert the app id). */
-export function telemetryUrl(auth: TelemetryAuth, apiBase: string, path: string): string {
+function telemetryUrl(auth: TelemetryAuth, apiBase: string, path: string): string {
   return auth.usesPlatformCookie ? `/.pas/api${path}` : `${apiBase}${path}`;
 }
 
@@ -35,7 +35,7 @@ export interface PostOptions {
 }
 
 /** A telemetry request that has not answered in this long counts as a transient failure. */
-export const TELEMETRY_TIMEOUT_MS = 10_000;
+const TELEMETRY_TIMEOUT_MS = 10_000;
 
 /**
  * How one telemetry POST ended (#392): a server response, a beacon handed to

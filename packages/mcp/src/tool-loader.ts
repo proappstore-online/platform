@@ -32,7 +32,7 @@ interface ToolParam {
   max?: number;
 }
 
-export interface ToolManifest {
+interface ToolManifest {
   name: string;
   description: string;
   /** `verify` (#148) runs a platform verifier and may write; it is gated as a mutation here. */

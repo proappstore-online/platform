@@ -32,7 +32,7 @@ export const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
 const ASSET_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._~@+-]+(?:\/[A-Za-z0-9._~@+-]+)*$/;
 
 export interface RawFrame { source: string; line: number; col: number }
-export interface SymbolicatedFrame {
+interface SymbolicatedFrame {
   source: string;
   line: number;
   col: number;
@@ -43,7 +43,7 @@ export interface SymbolicatedFrame {
   /** True when this frame could not be mapped inside the release (unknown file or position). */
   unresolved?: true;
 }
-export type SymbolicationStatus = 'ok' | 'missing' | 'mismatched' | 'unavailable';
+type SymbolicationStatus = 'ok' | 'missing' | 'mismatched' | 'unavailable';
 export interface SymbolicationResult { status: SymbolicationStatus; frames: SymbolicatedFrame[]; rawStack?: string }
 
 interface Env { DB: D1Database; STORAGE: R2Bucket }

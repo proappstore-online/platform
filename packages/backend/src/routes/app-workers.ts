@@ -94,7 +94,7 @@ const UPLOAD_SHA = /^[0-9a-f]{7,40}$/;
 const UPLOAD_REF = /^[\w./-]{1,200}$/;
 
 /** A deploy's `repository` claim identifies it as an owner-session upload, not CI. */
-export const SESSION_UPLOAD_PREFIX = 'session:';
+const SESSION_UPLOAD_PREFIX = 'session:';
 
 /**
  * The owner's own upload (#406): the same flag gate and bundle checks as the

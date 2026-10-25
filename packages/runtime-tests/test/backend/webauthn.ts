@@ -5,13 +5,13 @@
  */
 const enc = new TextEncoder();
 
-export const b64url = (bytes: Uint8Array) => {
+const b64url = (bytes: Uint8Array) => {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
-export const sha256 = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', b));
-export const concat = (...parts: Uint8Array[]) => {
+const sha256 = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', b));
+const concat = (...parts: Uint8Array[]) => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let o = 0;
   for (const p of parts) { out.set(p, o); o += p.length; }
@@ -20,7 +20,7 @@ export const concat = (...parts: Uint8Array[]) => {
 const u32 = (n: number) => new Uint8Array([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
 
 /** Raw r||s → DER, as authenticators encode ES256 signatures. */
-export function rawToDer(raw: Uint8Array): Uint8Array {
+function rawToDer(raw: Uint8Array): Uint8Array {
   const int = (x: Uint8Array) => {
     let i = 0;
     while (i < x.length - 1 && x[i] === 0) i++;

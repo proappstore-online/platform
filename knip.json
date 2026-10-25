@@ -1,0 +1,33 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["docs/.vitepress/config.mts", "scripts/*.mjs", "test/**/*.test.ts"],
+      "project": ["docs/.vitepress/*.mts", "scripts/*.mjs", "test/**/*.ts"]
+    },
+    "packages/*": {
+      "entry": ["src/index.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "packages/backend": {
+      "entry": ["src/**/*.test.ts", "src/app-worker-shim/entry.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/mcp-registry": {
+      "entry": ["bin/*"],
+      "project": ["bin/**"]
+    },
+    "packages/runtime-tests": {
+      "entry": ["test/**/*.test.ts", "vitest.*.ts", "scripts/*.mjs", "stubs/*.js", "config/**/*.{ts,js,mjs}"],
+      "project": ["test/**/*.ts", "scripts/*.mjs", "stubs/*.js", "config/**/*", "*.ts"],
+      "ignoreDependencies": ["@modelcontextprotocol/sdk"]
+    }
+  },
+  "ignoreDependencies": ["cloudflare"],
+  "ignoreBinaries": ["pags"],
+  "ignoreIssues": {
+    "packages/sdk/src/hooks.ts": ["duplicates"],
+    "packages/sdk/src/shell.tsx": ["duplicates"],
+    "packages/backend/src/routes/app-workers.ts": ["duplicates"]
+  }
+}

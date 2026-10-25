@@ -21,7 +21,7 @@ function wb(name: string): RegExp {
   return new RegExp(`(?:^|[^a-zA-Z0-9_])${escapeRegExp(name)}(?:$|[^a-zA-Z0-9_])`, 'i');
 }
 
-export const TRACKERS: TrackerSpec[] = [
+const TRACKERS: TrackerSpec[] = [
   { name: 'google-analytics', patterns: [/google-analytics/i, /googletagmanager\.com/i] },
   // `gtag` as a bare token would catch nothing real, but the GA install snippet
   // always calls it like `gtag('config', ...)` or `gtag('event', ...)` or

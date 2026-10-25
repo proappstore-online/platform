@@ -1,10 +1,10 @@
-import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, type ToolManifest, type ToolParam } from '../action-sql.js';
+import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, type ToolManifest } from '../action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../verifiers/index.js';
 import { isCronSyntaxError, scheduledCronError } from './cron.js';
 import { validateSql } from './sql.js';
 
-export type { ToolManifest, ToolParam };
+export type { ToolManifest };
 
 /** Above this many model-facing bytes the registration answers with a soft warning (#117). */
 export const MANIFEST_BYTES_SOFT_LIMIT = 50_000;
@@ -233,6 +233,6 @@ export function openUnscopedWrite(tool: ToolManifest): boolean {
     && actionCallers(tool).includes('user');
 }
 
-export function isStringArray(value: unknown): value is string[] {
+function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim() !== '');
 }

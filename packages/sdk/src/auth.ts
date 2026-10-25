@@ -19,7 +19,7 @@ export type AuthMode = 'legacy-bearer' | 'platform-cookie';
 export type AuthStatus = 'pending' | 'signed-in' | 'signed-out';
 
 /** `<meta name>` the PAS host stamps on every page it serves (host meta-rewriter). */
-export const AUTH_MODE_META_NAME = 'pas-auth-mode';
+const AUTH_MODE_META_NAME = 'pas-auth-mode';
 
 /**
  * Pick the auth mode when the app did not set one (#20).
@@ -43,7 +43,7 @@ export function resolveAuthMode(explicit?: AuthMode): AuthMode {
 }
 
 /** `<meta name>` the PAS host stamps on a PRIVATE app's pages (#259, host meta-rewriter). */
-export const VISIBILITY_META_NAME = 'pas-visibility';
+const VISIBILITY_META_NAME = 'pas-visibility';
 
 /**
  * Whether this app is private (#259). An explicit `visibility` option wins;

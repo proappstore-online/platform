@@ -209,7 +209,7 @@ export function previewAdminConsole(tools: ToolManifest[], proposal: unknown) {
 
 // ── Inspect: the stored contract against today's tools ──────────────────────
 
-export interface AdminConsoleGap {
+interface AdminConsoleGap {
   code: 'action_missing' | 'wrong_operation' | 'not_role_gated' | 'public_action' | 'scheduled_action' | 'not_user_callable' | 'step_up_missing' | 'column_not_selected' | 'sensitive_field';
   where: string;
   detail: string;

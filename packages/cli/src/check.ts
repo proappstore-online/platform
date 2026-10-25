@@ -44,7 +44,7 @@ const COLOR: Record<CheckResult['status'], (s: string) => string> = {
  * Render compliance results in the standard format. Same shape as the
  * FAS / FGS CLIs so devs see consistent output across stores.
  */
-export function renderCheckResults(results: CheckResult[]): {
+function renderCheckResults(results: CheckResult[]): {
   failed: number;
   warned: number;
   passed: number;

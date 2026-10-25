@@ -28,12 +28,12 @@ const RESERVED_IDS = new Set(['admin', 'agents', 'api', 'console', 'dashboard', 
 /** `data-<app>` and `about-<app>` hosts belong to another app's data worker and marketing site. */
 const RESERVED_PREFIXES = ['data-', 'about-'];
 
-export const LIFECYCLES = ['draft', 'provisioned', 'deployed', 'live', 'failed', 'unpublished', 'archived'] as const;
+const LIFECYCLES = ['draft', 'provisioned', 'deployed', 'live', 'failed', 'unpublished', 'archived'] as const;
 export type Lifecycle = (typeof LIFECYCLES)[number];
 const ACCESS_FILTERS = ['mine', 'team', 'operator', 'transfer', 'inaccessible'] as const;
-export type AccessFilter = (typeof ACCESS_FILTERS)[number];
-export type AccessLevel = 'owner' | 'team' | 'operator' | 'transfer_recipient' | 'inaccessible';
-export type LookupStatus = 'yours' | 'accessible' | 'exists_inaccessible' | 'unclaimed' | 'reserved' | 'invalid';
+type AccessFilter = (typeof ACCESS_FILTERS)[number];
+type AccessLevel = 'owner' | 'team' | 'operator' | 'transfer_recipient' | 'inaccessible';
+type LookupStatus = 'yours' | 'accessible' | 'exists_inaccessible' | 'unclaimed' | 'reserved' | 'invalid';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -128,7 +128,7 @@ interface AppSignalRow {
   last_deploy_at: number | null;
 }
 
-export interface DirectoryItem {
+interface DirectoryItem {
   id: string;
   displayName: string;
   lifecycle: Lifecycle | null;

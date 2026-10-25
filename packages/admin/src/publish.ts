@@ -994,7 +994,7 @@ export async function runProvisionSteps(
 // 40 × 20s ≈ 13 min of build time before declaring the deploy timed out — well
 // past a normal CI run, and the sleeps cost nothing.
 const CI_POLL_MAX = 40;
-export const CI_POLL_INTERVAL = "20 seconds";
+const CI_POLL_INTERVAL = "20 seconds";
 
 /** Shape `pollCiToVerdict` reads from a CI check — a subset of gh.deployResult. */
 export interface CiCheck {

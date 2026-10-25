@@ -24,7 +24,7 @@
  */
 import { parseStatements, type SqlStatement, type SqlToken } from '../../../data-worker/src/sql-statements.js';
 
-export interface MigrationLintError {
+interface MigrationLintError {
   /** The whole offending statement. */
   statement: string;
   /** The rule that refused it, e.g. `no-drop`. */

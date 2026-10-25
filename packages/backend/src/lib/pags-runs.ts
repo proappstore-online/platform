@@ -5,8 +5,8 @@
  */
 import type { Env } from '../types.js';
 
-export const PAGS_STATES = ['queued', 'running', 'needs-you', 'done', 'failed'] as const;
-export type PagsState = (typeof PAGS_STATES)[number];
+const PAGS_STATES = ['queued', 'running', 'needs-you', 'done', 'failed'] as const;
+type PagsState = (typeof PAGS_STATES)[number];
 
 /** A queued or running pags run with no event for this long goes to the headless executor. */
 export const PAGS_EVENT_TIMEOUT_MS = 15 * 60_000;

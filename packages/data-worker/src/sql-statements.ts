@@ -18,7 +18,7 @@
  * splits (and the database rejects) what it always did, while the lint reports it.
  */
 
-export type TokenKind = 'word' | 'ident' | 'string' | 'number' | 'punct';
+type TokenKind = 'word' | 'ident' | 'string' | 'number' | 'punct';
 
 export interface SqlToken {
   kind: TokenKind;

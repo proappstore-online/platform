@@ -30,7 +30,7 @@ import { SIGNATURE_HEADER, signatureHeader } from '../app-worker-shim/signature.
 import { APP_WORKER_SHIM } from '../generated/app-worker-shim.js';
 import { createConcurrencyLimit, limitForScope } from './loader-concurrency.js';
 
-export type AppWorkerBackend = 'account' | 'loader' | 'dispatch';
+type AppWorkerBackend = 'account' | 'loader' | 'dispatch';
 
 export const SHIM_MODULE = '__pas_entry.js';
 export const APP_MODULE = 'app.js';
@@ -45,7 +45,7 @@ export const BODY_EXCERPT_BYTES = 1024;
 /** ADR-009 §5: at most 4 Dynamic Workers in flight per request. The loader host enforces it (#449): a fifth waits for a slot. */
 export const LOADER_MAX_CONCURRENT = 4;
 /** Platform-pinned, as for data workers (lib/deploy-worker.ts); `env.APP_WORKER_COMPATIBILITY_DATE` overrides it. */
-export const APP_WORKER_COMPATIBILITY_DATE = '2026-01-01';
+const APP_WORKER_COMPATIBILITY_DATE = '2026-01-01';
 const compatibilityDate = (env: Pick<Env, 'APP_WORKER_COMPATIBILITY_DATE'>) => env.APP_WORKER_COMPATIBILITY_DATE ?? APP_WORKER_COMPATIBILITY_DATE;
 const COMPATIBILITY_FLAGS = ['nodejs_compat'];
 /**
@@ -77,14 +77,14 @@ export interface WorkerBundle {
   modules: Record<string, string>;
 }
 
-export interface DeployResult {
+interface DeployResult {
   backend: AppWorkerBackend;
   bundleSha256: string;
   /** True when this deploy minted the worker's token and event key. */
   firstDeploy: boolean;
 }
 
-export interface AppWorkerEvent {
+interface AppWorkerEvent {
   /** Envelope id: the idempotency key, stable across retries. */
   id: string;
   type: 'schedule' | 'hook' | 'http';

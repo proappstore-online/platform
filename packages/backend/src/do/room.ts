@@ -14,7 +14,7 @@ const IDLE_EVICT_MS = 24 * 60 * 60 * 1000;
  * (#276). The upgrade route checks only at join, so without this a socket
  * outlived a role revocation or a flip to private. The propagation bound.
  */
-export const VISIBILITY_RECHECK_MS = 60_000;
+const VISIBILITY_RECHECK_MS = 60_000;
 
 /**
  * WebSocket close codes a client can read (#119). A refused join is delivered

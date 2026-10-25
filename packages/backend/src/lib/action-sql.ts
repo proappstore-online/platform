@@ -6,7 +6,7 @@ export interface ToolParam {
   max?: number;
 }
 
-export interface ToolAuth {
+interface ToolAuth {
   required?: boolean;
   platform_roles?: string[];
   app_roles?: string[];
@@ -15,12 +15,12 @@ export interface ToolAuth {
 }
 
 /** Fixed input carried by a platform schedule. Schedules never receive caller input. */
-export interface ToolSchedule {
+interface ToolSchedule {
   cron: string;
   params: Record<string, unknown>;
 }
 
-export type ToolOperation = 'query' | 'execute' | 'batch' | 'verify';
+type ToolOperation = 'query' | 'execute' | 'batch' | 'verify';
 
 /** Prefix of the magic placeholders a verify action's write statements bind the verdict through (#148). */
 export const VERIFY_PARAM_PREFIX = '__verify_';

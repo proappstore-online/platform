@@ -62,7 +62,7 @@ export interface OutcomeBucket { app: string; family: string; start: number; tot
 export type OutcomeReader = (env: Env, apps: string[], since: number, until: number) => Promise<OutcomeBucket[]>;
 export interface Objective { app: string; family: string; target: number }
 
-export type RuleStatus = 'firing' | 'ok' | 'low_traffic' | 'degraded';
+type RuleStatus = 'firing' | 'ok' | 'low_traffic' | 'degraded';
 export interface RuleResult {
   app: string;
   rule: string;
@@ -238,7 +238,7 @@ interface OwedRow { id: number; app_id: string; rule: string; owed: 'firing' | '
  * once after the lease. The payload is rebuilt from the row, so a late send
  * carries the transition's own time.
  */
-export async function deliverPendingIncidents(db: D1Database, now: number): Promise<number> {
+async function deliverPendingIncidents(db: D1Database, now: number): Promise<number> {
   const { results } = await db.prepare(
     `SELECT id, app_id, rule, detail,
             CASE state WHEN 'recovered' THEN 'recovered' ELSE 'firing' END AS owed,

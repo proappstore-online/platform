@@ -55,7 +55,7 @@ const CORRELATION_ID_RE = /^[a-f0-9]{32}$/i;
 export type { CaptureContext } from './trace.js';
 
 /** Envelope version on every entry; the ingest allowlist keys on it. */
-export const LOG_ENVELOPE_VERSION = 1;
+const LOG_ENVELOPE_VERSION = 1;
 const SPAN_ID_RE = /^[a-f0-9]{16}$/i;
 const CODE_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MAX_DURATION_MS = 60 * 60 * 1000;

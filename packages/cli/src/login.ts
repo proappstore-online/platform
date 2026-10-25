@@ -4,7 +4,7 @@ import { readConfig, writeConfig } from './lib/config.js';
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
-export async function runLogin(): Promise<{ login: string }> {
+async function runLogin(): Promise<{ login: string }> {
   const config = await readConfig();
   const callback = await startCallbackServer();
 

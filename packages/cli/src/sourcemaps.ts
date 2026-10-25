@@ -18,8 +18,8 @@ import { Command } from 'commander';
  * the platform's: 500 maps, 20 MB in total.
  */
 
-export const API_BASE = 'https://api.proappstore.online';
-export const MAX_FILES = 500;
+const API_BASE = 'https://api.proappstore.online';
+const MAX_FILES = 500;
 export const MAX_BUNDLE_BYTES = 20 * 1024 * 1024;
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
 

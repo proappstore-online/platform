@@ -51,7 +51,7 @@ export async function requireOperatorOwner(c: Context<{ Bindings: Env }>, appId:
  * role subject is #272's: a GitHub session's login alias, never another
  * provider's free-text login.
  */
-export async function holdsOperatorAdminRole(db: D1Database, appId: string, user: FasUser): Promise<boolean> {
+async function holdsOperatorAdminRole(db: D1Database, appId: string, user: FasUser): Promise<boolean> {
   return Boolean(await db.prepare(
     `SELECT 1 FROM app_operator_view v, json_each(v.contract, '$.admin_access.roles') declared
       WHERE v.app_id = ?1

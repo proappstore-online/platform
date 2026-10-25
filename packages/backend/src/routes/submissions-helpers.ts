@@ -35,8 +35,6 @@ export function rowToSubmission(row: Record<string, unknown>): SubmissionRow {
   };
 }
 
-export { APP_ID_RE } from './validation.js';
-
 /**
  * #366: the only repository a submission may name — the one the platform
  * provisions for the app and reads with its own credentials. Anything else is a

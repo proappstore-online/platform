@@ -16,7 +16,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const FILTER_OPS = { eq: '=', lt: '<', lte: '<=', gt: '>', gte: '>=' } as const;
 type FilterOp = keyof typeof FILTER_OPS;
 
-export interface EndpointFilter { column: string; op: FilterOp; optional?: boolean; max?: number }
+interface EndpointFilter { column: string; op: FilterOp; optional?: boolean; max?: number }
 
 export interface EndpointConfig {
   name: string;

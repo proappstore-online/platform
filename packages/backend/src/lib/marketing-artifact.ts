@@ -39,7 +39,7 @@ export const MARKETING_CONTENT_TYPES: Record<string, string> = {
 };
 const TYPES = MARKETING_CONTENT_TYPES;
 
-export interface ArtifactFile {
+interface ArtifactFile {
   path: string;
   contentType: string;
   size: number;

@@ -33,7 +33,7 @@ export function dataWorkerName(appId: string): string {
  * binding is missing: a misconfigured platform must fail loud at the call
  * site, not fall back to some hard-coded account.
  */
-export function dataWorkerHost(env: { DATA_WORKER_HOST?: string }): string {
+function dataWorkerHost(env: { DATA_WORKER_HOST?: string }): string {
   const host = (env.DATA_WORKER_HOST ?? '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (!host) throw new HttpError('DATA_WORKER_HOST is not configured', 503);
   return host;

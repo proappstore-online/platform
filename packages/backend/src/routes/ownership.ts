@@ -33,10 +33,10 @@ const VERIFIED_PROVIDERS = ['github', 'google'];
 const UNVERIFIED_RECIPIENT =
   'recipient is not a verified PAS identity: they must have signed in to PAS with GitHub or Google. Pass their exact PAS user id if an email matches more than one account.';
 
-export type TransferKind = 'transfer' | 'recovery';
-export type TransferStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired' | 'escalated' | 'admin_approved';
+type TransferKind = 'transfer' | 'recovery';
+type TransferStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired' | 'escalated' | 'admin_approved';
 
-export interface TransferRow {
+interface TransferRow {
   id: number;
   app_id: string;
   from_user: string;

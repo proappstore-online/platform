@@ -20,7 +20,7 @@ import { DEFAULT_PERSONAS, PO_PERSONA } from './memory.ts';
 import { buildDefaultPrompt } from './runtimes/cf-native-prompt.ts';
 
 /** How an agent's prompt is sourced. */
-export type PromptSource = 'default' | 'custom' | 'templated';
+type PromptSource = 'default' | 'custom' | 'templated';
 
 export interface AgentDescriptor {
   /** Stable id used to address the agent (PO | Architect | BA | Dev | QA). */

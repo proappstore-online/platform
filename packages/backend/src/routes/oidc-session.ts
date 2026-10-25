@@ -48,7 +48,7 @@ interface GrantRow {
 
 const GRANT_COLUMNS = 'id, repository, workflow, ref, user_id, label, created_by, created_at, revoked_at, last_minted_at, mint_count, principal_id, environment, expires_at, session_ttl_seconds, scope';
 /** Principal-backed sessions default to one hour and may never exceed the legacy ceiling. */
-export const PRINCIPAL_SESSION_DEFAULT_TTL_SECONDS = 60 * 60;
+const PRINCIPAL_SESSION_DEFAULT_TTL_SECONDS = 60 * 60;
 const PRINCIPAL_SESSION_VIA = 'oidc-test-principal';
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{2,39}$/;
 

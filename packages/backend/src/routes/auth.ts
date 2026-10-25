@@ -756,7 +756,7 @@ authRoutes.post('/auth/credentials/provision', async (c) => {
 //  - the row is an adult's own: is_child = 0, created_by = NULL, roles ['user']
 //    like every credential account; credential_email is an identifier, never a
 //    proof (0042) and is not verified.
-export const REGISTER_RATE_LIMIT_PREFIX = 'register-ip:';
+const REGISTER_RATE_LIMIT_PREFIX = 'register-ip:';
 /** The widget's `data-action` on sign-up forms; a token minted elsewhere is refused (#26). */
 const TURNSTILE_REGISTER_ACTION = 'register';
 

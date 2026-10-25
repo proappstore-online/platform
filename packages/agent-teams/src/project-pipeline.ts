@@ -237,7 +237,7 @@ export function advanceOnce(h: ProjectHost, now: number): boolean {
   return moved;
 }
 
-export function runPendingAgents(h: ProjectHost): void {
+function runPendingAgents(h: ProjectHost): void {
   const proj = h.state.storage.sql
     .exec('SELECT status FROM project LIMIT 1')
     .toArray()[0] as { status: string } | undefined;
@@ -275,7 +275,7 @@ export function runPendingAgents(h: ProjectHost): void {
 }
 
 /** One agent turn — see agent-runner.ts. The DO supplies storage + callbacks. */
-export function runAgentInternal(h: ProjectHost, ticketId: string): Promise<void> {
+function runAgentInternal(h: ProjectHost, ticketId: string): Promise<void> {
   return runAgentTurn({
     sql: h.state.storage.sql,
     env: h.env,
@@ -294,7 +294,7 @@ export function runAgentInternal(h: ProjectHost, ticketId: string): Promise<void
   }, ticketId);
 }
 
-export function dispatchRun(h: ProjectHost, ticketId: string): void {
+function dispatchRun(h: ProjectHost, ticketId: string): void {
   const startingStatus = (h.state.storage.sql
     .exec('SELECT status FROM tickets WHERE id = ?', ticketId)
     .toArray()[0] as { status: TicketStatus } | undefined)?.status;
@@ -330,7 +330,7 @@ export function dispatchRun(h: ProjectHost, ticketId: string): void {
 }
 
 /** Fire-and-forget the deterministic deploy stage for a `deploying` ticket. */
-export function dispatchDeploy(h: ProjectHost, ticketId: string): void {
+function dispatchDeploy(h: ProjectHost, ticketId: string): void {
   h.running.add(ticketId);
   void runDeploy(h, ticketId)
     .catch((e) => {
@@ -358,7 +358,7 @@ export function dispatchDeploy(h: ProjectHost, ticketId: string): void {
     });
 }
 
-export function runDeploy(h: ProjectHost, ticketId: string): Promise<void> {
+function runDeploy(h: ProjectHost, ticketId: string): Promise<void> {
   return runDeployStage({
     sql: h.state.storage.sql,
     env: h.env,
@@ -371,7 +371,7 @@ export function runDeploy(h: ProjectHost, ticketId: string): Promise<void> {
 }
 
 /** Transition a ticket forward after a successful agent run. */
-export function applyAgentOutcome(h: ProjectHost, ticketId: string, role: Role, output: string): void {
+function applyAgentOutcome(h: ProjectHost, ticketId: string, role: Role, output: string): void {
   const now = Date.now();
   if (role === 'BA') {
     // BA can block on the founder when a buildable spec needs a product/scope

@@ -16,7 +16,7 @@ qa_delete_flow apply_admin_update respond_ownership_transfer resolve_ownership_r
 create_oidc_session_grant revoke_oidc_session_grant`.split(/\s+/));
 
 /** A shared tool's behavior is fixed even when one invocation is a dry-run. */
-export function platformToolAnnotations(name: string): ToolAnnotations {
+function platformToolAnnotations(name: string): ToolAnnotations {
   const read = READS.has(name);
   return { readOnlyHint: read, destructiveHint: !read && DESTRUCTIVE.has(name), idempotentHint: read, openWorldHint: true };
 }

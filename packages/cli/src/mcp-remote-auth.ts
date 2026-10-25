@@ -17,11 +17,11 @@ const crypto = webcrypto;
  * written to stdout/stderr, a URL, the relay or an error message.
  */
 
-export const BROKER_PREFIX = '/v1/mcp/broker/v2';
-export const BROKER_VERSION = '2026-10-10';
-export const MIN_PAGS_VERSION = '0.4.121';
+const BROKER_PREFIX = '/v1/mcp/broker/v2';
+const BROKER_VERSION = '2026-10-10';
+const MIN_PAGS_VERSION = '0.4.121';
 /** Broker poll floor: the server answers an earlier poll with `429 slow_down`. */
-export const POLL_MS = 2_000;
+const POLL_MS = 2_000;
 const MAX_POLL_DELAY_MS = 30_000;
 /** Consecutive network failures tolerated while waiting (≈ the request's 10-minute life at the backoff cap). */
 const MAX_NETWORK_FAILURES = 20;
@@ -31,7 +31,7 @@ const LOCK_STALE_MS = 15 * 60_000;
 /** A separate Codex server name by default, so an existing working entry is never touched. */
 export const DEFAULT_SERVER_NAME = 'proappstore-remote';
 export const DEFAULT_TOKEN_ENV = 'PAS_REMOTE_MCP_TOKEN';
-export const RELAY_STATES = ['pending', 'approving', 'approved_awaiting_machine', 'consumed', 'connected', 'denied', 'expired', 'cancelled', 'failed'] as const;
+const RELAY_STATES = ['pending', 'approving', 'approved_awaiting_machine', 'consumed', 'connected', 'denied', 'expired', 'cancelled', 'failed'] as const;
 export type BrokerStatus = typeof RELAY_STATES[number];
 const TERMINAL: ReadonlySet<BrokerStatus> = new Set(['connected', 'denied', 'expired', 'cancelled', 'failed']);
 
@@ -244,7 +244,7 @@ export async function reportRelayState(deps: RemoteAuthDeps, rarId: string, stat
 // ── MCP read & local credential store ───────────────────────────────────────
 
 /** A harmless authenticated MCP read (JSON-RPC `initialize`); the MCP worker records it as the broker's connected receipt. */
-export async function performMcpHealthCheck(deps: RemoteAuthDeps, resource: string, token: string, clientVersion: string): Promise<boolean> {
+async function performMcpHealthCheck(deps: RemoteAuthDeps, resource: string, token: string, clientVersion: string): Promise<boolean> {
   try {
     const res = await deps.fetch(resource, {
       method: 'POST',
@@ -290,7 +290,7 @@ async function readJson<T>(path: string): Promise<T | null> {
 }
 
 /** Replace the stored credential only now that it is known to work. */
-export async function installMcpCredential(deps: RemoteAuthDeps, name: string, credential: McpCredential): Promise<void> {
+async function installMcpCredential(deps: RemoteAuthDeps, name: string, credential: McpCredential): Promise<void> {
   await ensureDir(deps);
   const now = deps.now();
   await writeAtomic(file(deps, name, '.json'), {

@@ -25,7 +25,7 @@ import { timingSafeEqual } from './bytes.js';
 import { verifyWebhookSignature } from './stripe.js';
 
 const HOOK_VERIFY_KINDS = ['github-hmac-sha256', 'stripe', 'hmac-sha256', 'secret-token', 'github-app'] as const;
-export type HookVerifyKind = (typeof HOOK_VERIFY_KINDS)[number];
+type HookVerifyKind = (typeof HOOK_VERIFY_KINDS)[number];
 
 export interface HookVerify {
   kind: HookVerifyKind;

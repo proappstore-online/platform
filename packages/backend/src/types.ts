@@ -254,7 +254,7 @@ export interface LicenseRow {
  * The monthly payout cron sums these to compute each creator's share of
  * the subscriber pool.
  */
-export interface UsageRow {
+interface UsageRow {
   app_id: string;
   user_id: string;
   /** YYYY-MM-DD in UTC. */

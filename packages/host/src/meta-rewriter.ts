@@ -43,7 +43,7 @@ export const AUTH_MODE_META_TAG = `<meta name="${AUTH_MODE_META_NAME}" content="
  * marker the host always sets this one: it describes the platform's state, not
  * a choice the app makes.
  */
-export const VISIBILITY_META_NAME = "pas-visibility";
+const VISIBILITY_META_NAME = "pas-visibility";
 const VISIBILITY_META_TAG = `<meta name="${VISIBILITY_META_NAME}" content="private">`;
 
 /** Track which meta tags were found so we can inject missing ones. */

@@ -30,8 +30,6 @@ import {
   extFor,
 } from './listing-assets.js';
 
-export type { ListingDto } from './listing-types.js';
-
 /**
  * Per-app store-listing CRUD — the data the storefront renders on an
  * app's detail page (icon, screenshots, tagline, long description,

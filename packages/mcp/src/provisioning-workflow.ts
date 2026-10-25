@@ -93,11 +93,11 @@ export interface WorkflowUser {
   roles: string[];
 }
 
-export type PlanAction = "create" | "reuse_owned" | "reuse_admin" | "adopt_untouched" | "refused";
-export type RevisionSource = "template_head" | "scaffold_tree_match" | "unknown";
+type PlanAction = "create" | "reuse_owned" | "reuse_admin" | "adopt_untouched" | "refused";
+type RevisionSource = "template_head" | "scaffold_tree_match" | "unknown";
 export type AppRecordState = "owner" | "other" | "none" | "unknown";
 
-export interface PlanBlocker {
+interface PlanBlocker {
   code:
     | "repository_unavailable"
     | "repository_exists"

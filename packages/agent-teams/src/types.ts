@@ -81,7 +81,7 @@ export type Ticket = {
 // SDK primitives the BA can include in a spec.
 // v1: agent is restricted to static-output apps. Anything beyond 'auth' requires
 // the v1.1 PAS SDK-runtime port to actually run.
-export type SdkPrimitive =
+type SdkPrimitive =
   | 'auth'           // [v1 ok]  GitHub OAuth via FAS — works on static host
   | 'kv'             // [v1.1]   per-user KV
   | 'rooms'          // [v1.1]   WebSocket DOs
@@ -170,7 +170,7 @@ export type StreamEvent =
   // Prevents stuck-ticket false positives on slow model responses.
   | { type: 'heartbeat'; costUsd?: number; tokensIn?: number; tokensOut?: number }
 
-export type RuntimeTerminationStats = {
+type RuntimeTerminationStats = {
   costUsd: number
   tokensIn: number
   tokensOut: number

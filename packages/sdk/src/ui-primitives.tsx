@@ -198,13 +198,13 @@ export function TextSizeToggle() {
 // ProfileMenu
 // ---------------------------------------------------------------------------
 
-export interface ProfileMenuProps {
+interface ProfileMenuProps {
   app: ProAppStore;
   showThemeToggle?: boolean;
   children?: ReactNode;
 }
 
-export function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMenuProps) {
+function ProfileMenu({ app, showThemeToggle = true, children }: ProfileMenuProps) {
   const { user, signOut, deleteAccount } = useAuth(app);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -283,12 +283,12 @@ const menuItemStyle: React.CSSProperties = {
 // ProfilePage
 // ---------------------------------------------------------------------------
 
-export interface ProfilePageProps {
+interface ProfilePageProps {
   app: ProAppStore;
   showThemeToggle?: boolean;
 }
 
-export function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
+function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
   const { user, loading, signOut, deleteAccount } = useAuth(app);
   const { preference, setPreference } = useTheme();
 

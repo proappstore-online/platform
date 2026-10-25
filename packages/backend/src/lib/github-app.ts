@@ -116,7 +116,7 @@ export async function installationToken(env: Env, installationId: number, repo?:
 
 // ── The signed `state` of the install round trip ─────────────────────────────
 
-export const CONNECTOR_STATE_TTL_SECONDS = 600;
+const CONNECTOR_STATE_TTL_SECONDS = 600;
 
 async function stateKey(sessionSigningKey: string): Promise<CryptoKey> {
   const ikm = await crypto.subtle.importKey('raw', encoder.encode(sessionSigningKey), 'HKDF', false, ['deriveKey']);

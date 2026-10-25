@@ -40,9 +40,9 @@ const DRIFT_PROBE_TIMEOUT_MS = 8_000;
 
 export const REDEPLOY_WORKFLOW = { owner: 'proappstore-online', repo: 'platform', file: 'redeploy-data-workers.yml', ref: 'main' } as const;
 
-export type DriftVerdict = 'ok' | 'drift' | 'unreachable' | 'refused';
+type DriftVerdict = 'ok' | 'drift' | 'unreachable' | 'refused';
 
-export interface DriftProbe {
+interface DriftProbe {
   appId: string;
   verdict: DriftVerdict;
   status: number | null;

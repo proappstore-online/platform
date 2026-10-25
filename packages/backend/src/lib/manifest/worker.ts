@@ -7,7 +7,7 @@ const MAX_WORKER_SCHEDULES_PER_APP = 3;
 const MAX_WORKER_SCHEDULE_PARAMS_BYTES = 4096;
 const WORKER_SCHEDULE_NAME = /^[a-z][a-z0-9_]{0,49}$/;
 
-export interface WorkerSchedule { name: string; cron: string; params: Record<string, unknown> }
+interface WorkerSchedule { name: string; cron: string; params: Record<string, unknown> }
 export interface WorkerManifest { secrets: string[]; schedules: WorkerSchedule[] }
 
 /**

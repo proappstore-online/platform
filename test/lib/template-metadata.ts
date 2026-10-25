@@ -10,7 +10,7 @@ import { validate, type Json } from './validate-json-schema.js';
 const SCHEMA = JSON.parse(readFileSync(new URL('../../docs/templates/catalogue.schema.json', import.meta.url), 'utf8'));
 
 /** Placeholder `release.source_commit` until the template repository exists and its commit is reviewed. */
-export const UNPUBLISHED_COMMIT = '0'.repeat(40);
+const UNPUBLISHED_COMMIT = '0'.repeat(40);
 
 /** Schema errors for a staged template.json; `$comment` is documentation and is dropped when copied into the catalogue. */
 export function stagedTemplateErrors(meta: Record<string, unknown>): string[] {

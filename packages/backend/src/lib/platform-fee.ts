@@ -8,7 +8,7 @@
  * back. If the two copies ever drifted, refunds would claw back a different
  * fraction than was credited and the ledger would quietly stop balancing.
  */
-export const PLATFORM_FEE_BPS = 1000; // 10%
+const PLATFORM_FEE_BPS = 1000; // 10%
 
 /** The developer's share of `amountCents`, rounded the same way everywhere. */
 export function developerShareCents(amountCents: number): number {

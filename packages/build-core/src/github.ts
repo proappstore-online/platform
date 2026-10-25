@@ -117,7 +117,7 @@ function isDeployGateRun(run: Record<string, unknown>): boolean {
  * path check is what GitHub writes. `/` stays the separator; spaces and
  * unicode round-trip (GitHub decodes them once).
  */
-export function encodeRepoPath(path: string): string | null {
+function encodeRepoPath(path: string): string | null {
   const segments = path.split('/');
   // `.` and `..` cannot be escaped: the URL parser resolves them in every
   // spelling (`%2e`, `.%2E`, …). A path containing one names no file, so it

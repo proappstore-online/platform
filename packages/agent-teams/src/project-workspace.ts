@@ -116,7 +116,7 @@ export async function syncFromGitHub(h: ProjectHost, reason: string): Promise<{ 
   }
 }
 
-export async function publishKb(h: ProjectHost): Promise<void> {
+async function publishKb(h: ProjectHost): Promise<void> {
   const env = h.env;
   if (!env.ADMIN || !env.INTERNAL_TOKEN) return; // no admin binding (dev)
   const proj = h.state.storage.sql

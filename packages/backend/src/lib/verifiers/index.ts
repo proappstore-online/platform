@@ -22,7 +22,7 @@ import { chessReplay } from './chess-replay.js';
 
 export type VerifierScalar = string | number | boolean | null;
 
-export interface VerifierOutputSpec {
+interface VerifierOutputSpec {
   type: 'string' | 'integer' | 'boolean';
   description: string;
 }

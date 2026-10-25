@@ -45,7 +45,7 @@ export class WorkerCallError extends Error {
 }
 
 /** The second argument of every `PAS` call (ADR-009 §2). `as` is #260's caller grant. */
-export interface CallCtx {
+interface CallCtx {
   token: string;
   /** `<envelope id>:<attempt>` — the app_worker_invocations row of the running invocation. */
   invocation: string;

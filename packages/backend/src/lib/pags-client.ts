@@ -22,7 +22,7 @@ import type { Env } from '../types.js';
 export const PAGS_CALLBACK_URL = 'https://api.proappstore.online/v1/pags/callback';
 const QUEUE_TIMEOUT_MS = 8_000;
 /** A run's flow specs are sent whole; a larger job is run headlessly instead. */
-export const MAX_JOB_FLOWS_BYTES = 64 * 1024;
+const MAX_JOB_FLOWS_BYTES = 64 * 1024;
 
 export interface PagsBinding { instance_id: string; repo: string | null; enabled: number }
 export interface JobFlow { flow_id: string; name: string; spec: unknown }
@@ -35,7 +35,7 @@ export function pagsConfigured(env: Pick<Env, 'PAGS_API_URL' | 'PAGS_TOKEN' | 'P
 }
 
 /** A job id as PAGS issues it: opaque, bounded, URL-safe. */
-export const JOB_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const JOB_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export async function queueVerifierJob(
   env: Env,

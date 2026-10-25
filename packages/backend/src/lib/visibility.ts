@@ -39,7 +39,7 @@ import { roleLoginAlias } from './role-subject.js';
 /** What the visibility predicate reads: the database, and who the platform admins are. */
 export type VisibilityEnv = Pick<Env, 'DB' | 'ADMIN_GITHUB_IDS'>;
 
-export type VisibilityMode = 'public' | 'private';
+type VisibilityMode = 'public' | 'private';
 
 export interface AppVisibility {
   mode: VisibilityMode;
