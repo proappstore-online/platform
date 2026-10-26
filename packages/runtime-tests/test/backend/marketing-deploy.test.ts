@@ -1,7 +1,8 @@
-import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
+import { SELF, env as providedEnv, fetchMock, createExecutionContext } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { _resetJwksCache } from '../../../backend/src/lib/github-oidc';
 import type { Env } from '../../../backend/src/types';
+import worker from '../../../backend/src/index';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 // #399/#408 on workerd with real D1 + R2: the app's own deploy uploads an
@@ -297,4 +298,48 @@ describe('marketing deploy credential contract (#408)', () => {
     expect(admin.status).toBe(200);
     expect(await active()).toBe(R(1));
   });
+
+  it('refuses a stale workflow rollback whose candidate has already been replaced', async () => {
+    await ship(R(1)); await ship(R(2)); await ship(R(3));
+    const before = await env.DB.prepare('SELECT revision, activated_at FROM app_marketing_deploys WHERE app_id = ? ORDER BY revision').bind(APP).all();
+    const result = await rollback(APP, { revision: R(1), expectedRevision: R(2) });
+    expect(result.status).toBe(409);
+    expect(await active()).toBe(R(3));
+    expect((await env.DB.prepare('SELECT revision, activated_at FROM app_marketing_deploys WHERE app_id = ? ORDER BY revision').bind(APP).all()).results).toEqual(before.results);
+  });
+
+  for (const operation of ['activate', 'first-activate', 'rollback']) {
+    for (const change of operation === 'first-activate' ? ['activate-newer'] : ['activate-newer', 'unpublish', 'remove-row']) {
+      it(`${operation} does not overwrite ${change} during artifact verification`, async () => {
+        if (operation === 'first-activate') expect((await upload(APP, R(1), await build(APP, R(1), 'First'))).status).toBe(201);
+        else { await ship(R(1)); await ship(R(2)); }
+        expect((await upload(APP, R(3), await build(APP, R(3), 'Newer'))).status).toBe(201);
+        let changed = false;
+        let receipts: unknown;
+        const store = new Proxy(env.APPS, {
+          get(target, property) {
+            if (property === 'get') return async (...args: unknown[]) => {
+              if (!changed) {
+                changed = true;
+                if (change === 'activate-newer') expect((await activate(APP, R(3))).status).toBe(200);
+                else if (change === 'unpublish') await env.DB.prepare('UPDATE app_marketing_sites SET active_revision = NULL WHERE app_id = ?').bind(APP).run();
+                else await env.DB.prepare('DELETE FROM app_marketing_sites WHERE app_id = ?').bind(APP).run();
+                receipts = (await env.DB.prepare('SELECT revision, activated_at, updated_at FROM app_marketing_deploys WHERE app_id = ? ORDER BY revision').bind(APP).all()).results;
+              }
+              return Reflect.apply(target.get, target, args);
+            };
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        const route = operation === 'rollback' ? 'rollback' : 'activate';
+        const body = route === 'activate' ? { revision: R(1) } : { revision: R(1), expectedRevision: R(2) };
+        const response = await worker.fetch(new Request(`${BASE}/v1/apps/${APP}/marketing/${route}`, json('POST', body, await oidc())), { ...env, APPS: store }, createExecutionContext());
+        expect(changed).toBe(true);
+        expect(response.status).toBe(409);
+        expect(await active()).toBe(change === 'activate-newer' ? R(3) : null);
+        expect((await env.DB.prepare('SELECT revision, activated_at, updated_at FROM app_marketing_deploys WHERE app_id = ? ORDER BY revision').bind(APP).all()).results).toEqual(receipts);
+      });
+    }
+  }
 });

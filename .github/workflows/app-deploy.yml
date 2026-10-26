@@ -433,7 +433,7 @@ jobs:
           if (!problem) { console.log('Marketing site live: ' + SITE + '/ (' + REVISION + ')'); process.exit(0); }
           console.log('::error::marketing site live check failed: ' + problem);
           if (activation.previous && !activation.unchanged) {
-            console.log('Rolled back', JSON.stringify(await call('POST', 'rollback', JSON.stringify({ revision: activation.previous }), true)));
+            console.log('Rolled back', JSON.stringify(await call('POST', 'rollback', JSON.stringify({ revision: activation.previous, expectedRevision: REVISION }), true)));
           }
           process.exit(1);
           JS

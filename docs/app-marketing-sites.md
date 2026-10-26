@@ -173,12 +173,17 @@ repository can only write its own app's site; no standing secret is involved.
 |---|---|
 | `PUT /v1/apps/:id/marketing/revisions/:revision` | multipart: `manifest` (`artifact-manifest.json`) plus one part per listed path. The revision must be the commit the run is building. Every file must match its size and SHA-256 and be a path the host serves; only `/index.html` is required (`robots.txt` and `sitemap.xml` are optional). The files, then the manifest, go to `marketing/<id>/revisions/<revision>/`. Never activates. A revision is immutable: the same bytes again are a no-op, other bytes a 409. |
 | `POST /v1/apps/:id/marketing/activate` `{revision}` | re-reads and re-hashes the stored artifact (409 on any difference), then sets `active_revision` in one statement and returns `{active, previous}`. Any app may activate, private and unlisted ones included (#409). |
-| `POST /v1/apps/:id/marketing/rollback` `{revision?}` | the app's deploy or a platform admin: back to the named revision, or the most recently active one before the current, after the same integrity check. Refused when no site is active: an unpublished site is republished, never resurrected. |
+| `POST /v1/apps/:id/marketing/rollback` `{revision?, expectedRevision?}` | the app's deploy or a platform admin: back to the named revision, or the most recently active one before the current, after the same integrity check. A supplied `expectedRevision` must still be active; the deploy sends its failed candidate so it cannot undo a newer run. Refused when no site is active: an unpublished site is republished, never resurrected. |
 | `GET /v1/apps/:id/marketing/deployments` | owner or admin: receipts (`app_marketing_deploys`, migration 0103) — revision, status, hashes, sizes, repository, workflow run and commit, activation time, which one is live. |
 
 `app_storefront_publication.listed` (written by the admin publish step and
 reconciled hourly from `registry.json`) is the storefront catalogue's listing
 state; it does not affect the marketing site.
+
+Activation and rollback switch the active pointer only if its observed revision has
+not changed during artifact verification. A concurrent activation or unpublish
+returns 409 and leaves that newer state and its activation receipts intact. Callers
+must refresh the deployment state before deciding whether to retry.
 
 **Rollout.** Every app whose `deploy.yml` calls the reusable pipeline has the
 step (#427). An app still on a copied workflow gets it by replacing that file

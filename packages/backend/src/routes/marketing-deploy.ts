@@ -131,13 +131,19 @@ async function requireIntact(env: Env, appId: string, revision: string): Promise
 /** The one atomic switch the host reads, and the receipt's activation time. */
 async function switchActive(db: D1Database, appId: string, revision: string, previous: string | null): Promise<void> {
   const now = Date.now();
-  await db.batch([
+  const results = await db.batch([
     db.prepare(
-      `INSERT INTO app_marketing_sites (app_id, active_revision, updated_at) VALUES (?1, ?2, ?3)
-       ON CONFLICT(app_id) DO UPDATE SET active_revision = excluded.active_revision, updated_at = excluded.updated_at`,
-    ).bind(appId, revision, now),
-    db.prepare('UPDATE app_marketing_deploys SET activated_at = ?3, updated_at = ?3 WHERE app_id = ?1 AND revision = ?2').bind(appId, revision, now),
+      `INSERT INTO app_marketing_sites (app_id, active_revision, updated_at)
+       SELECT ?1, ?2, ?3 WHERE ?4 IS NULL OR EXISTS (
+         SELECT 1 FROM app_marketing_sites WHERE app_id = ?1 AND active_revision IS ?4
+       )
+       ON CONFLICT(app_id) DO UPDATE SET active_revision = excluded.active_revision, updated_at = excluded.updated_at
+       WHERE app_marketing_sites.active_revision IS ?4`,
+    ).bind(appId, revision, now, previous),
+    // D1 batch is transactional; changes() belongs to the immediately preceding switch.
+    db.prepare('UPDATE app_marketing_deploys SET activated_at = ?3, updated_at = ?3 WHERE app_id = ?1 AND revision = ?2 AND changes() > 0').bind(appId, revision, now),
   ]);
+  if (results[0]?.meta.changes !== 1) throw new HttpError('marketing site changed; refresh deployment state before retrying', 409);
   console.log(`[marketing] app=${appId} active=${revision} previous=${previous ?? '-'}`);
 }
 
@@ -252,10 +258,13 @@ marketingDeployRoutes.post('/apps/:appId/marketing/rollback', async (c) => {
   const token = bearer(c);
   if (token && claimedIssuer(token) === 'https://token.actions.githubusercontent.com') await requireAppDeployOidc(c, appId);
   else await requireAdmin(c);
-  const body = await c.req.json<{ revision?: unknown }>().catch(() => null);
+  const body = await c.req.json<{ revision?: unknown; expectedRevision?: unknown }>().catch(() => null);
 
   const current = await activeRevision(c.env.DB, appId);
   if (!current) throw new HttpError('no marketing site is active; publish one instead', 409);
+  if (body?.expectedRevision !== undefined && revisionOf(body.expectedRevision) !== current) {
+    throw new HttpError('marketing site changed; refresh deployment state before retrying', 409);
+  }
   let target: string;
   if (body?.revision !== undefined) {
     target = revisionOf(body.revision);

@@ -76,7 +76,7 @@ describe('marketing deployment live verification', () => {
     expect(result.code).toBe(1);
     expect(result.fetch).toHaveBeenCalledTimes(10);
     expect(result.call).toHaveBeenCalledOnce();
-    expect(result.call).toHaveBeenCalledWith('POST', 'rollback', JSON.stringify({ revision: 'previous-live' }), true);
+    expect(result.call).toHaveBeenCalledWith('POST', 'rollback', JSON.stringify({ revision: 'previous-live', expectedRevision: 'candidate' }), true);
   });
 
   it('restores the prior revision when probes time out', async () => {
