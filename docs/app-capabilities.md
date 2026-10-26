@@ -1,3 +1,7 @@
+---
+description: "Review browser capabilities available to hosted ProAppStore apps, platform limits and opt-in embedding or isolation settings."
+---
+
 # App capabilities
 
 What a hosted app on `<app>.proappstore.online` (or its custom domain) may use in

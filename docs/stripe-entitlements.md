@@ -1,3 +1,7 @@
+---
+description: "Understand the platform subscription and Stripe entitlements that drive SDK access gates without per-app checkout or pricing."
+---
+
 # Stripe & entitlements
 
 > **App requirement:** monetisation is the platform subscription and the SDK gates — no per-app checkout or pricing ([PAS-STACK-020](./standard/stack.md#pas-stack-020) in the [Application Standard](./standard/index.md)). This page describes the platform mechanism.

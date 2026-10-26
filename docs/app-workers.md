@@ -1,3 +1,7 @@
+---
+description: "Build app-owned server code for scheduled jobs, webhooks and server routes using platform-managed app Workers."
+---
+
 # App workers
 
 An app worker is the app's own server code: one Worker per app, deployed and

@@ -1,3 +1,7 @@
+---
+description: "Compare Tailored forks and shared Ready apps, including tenancy models, membership scoping and database boundaries."
+---
+
 # Tailored vs Ready
 
 > The category decides the tenancy clauses' applicability in the [Application Standard](./standard/index.md): a Ready app must scope every row by membership ([PAS-DATA-007](./standard/data.md#pas-data-007), [PAS-STACK-011](./standard/stack.md#pas-stack-011)); a Tailored fork records those as not-applicable with the fork as evidence.

@@ -1,3 +1,7 @@
+---
+description: "Apply forward-only schema repairs using additive named migrations and the Application Standard's data and operations rules."
+---
+
 # Migration Repair Runbook
 
 > **App requirements** for schema changes — additive, named, never edited, forward-only repair — are [PAS-DATA-002](./standard/data.md#pas-data-002) and [PAS-OPS-008](./standard/ops.md#pas-ops-008) in the [Application Standard](./standard/index.md). This runbook is the repair procedure those clauses cite.

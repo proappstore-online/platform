@@ -1,3 +1,7 @@
+---
+description: "Deferred build-service decision explaining the return to per-repository GitHub Actions and alternatives for future centralization."
+---
+
 # ADR-006: Build architecture — stay on per-repo GitHub Actions; if centralizing, use Cloudflare's first-party stack (NOT a hand-rolled container pipeline)
 
 ## Status

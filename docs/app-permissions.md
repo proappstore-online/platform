@@ -1,3 +1,7 @@
+---
+description: "Declare browser permissions and explanations so app storefront listings tell users what access an app will request."
+---
+
 # App permissions on the storefront
 
 Every app's storefront listing says up front what it will ask the browser for:

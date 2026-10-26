@@ -1,3 +1,7 @@
+---
+description: "Application Standard requirements for external integrations and the supported use of ProAppStore platform services."
+---
+
 # Integrations and platform services
 
 **Standard version 1.10** · Chapter `INT` · Part of the [Application Standard](./index.md)

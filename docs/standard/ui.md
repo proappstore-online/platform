@@ -1,3 +1,7 @@
+---
+description: "Application Standard requirements for UI, accessibility, browser security and PWA behavior in ProAppStore apps."
+---
+
 # UI, browser security, and PWA
 
 **Standard version 1.10** · Chapter `UI` · Part of the [Application Standard](./index.md)

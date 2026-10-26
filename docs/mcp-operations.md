@@ -1,3 +1,7 @@
+---
+description: "Connect to ProAppStore's platform and app MCP endpoints and use the live tool catalogue for supported app operations."
+---
+
 # PAS MCP operations
 
 The general PAS server is `https://mcp.proappstore.online/mcp`. Its live tool

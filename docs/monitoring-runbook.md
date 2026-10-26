@@ -1,3 +1,7 @@
+---
+description: "Monitor ProAppStore app health and investigate incidents with logging, rate-limit and diagnostic-evidence guidance."
+---
+
 # Operational Monitoring & Runbook
 
 > **App requirements** for monitoring, log hygiene, rate limits and incident evidence are clauses in the [Application Standard — Operations chapter](./standard/ops.md) ([PAS-OPS-011](./standard/ops.md#pas-ops-011) – [015](./standard/ops.md#pas-ops-015)). This runbook is the platform procedure those clauses cite.

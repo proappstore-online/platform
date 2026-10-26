@@ -1,3 +1,7 @@
+---
+description: "Migrate an existing operator view to the ProAppStore admin console, with declared actions and access for app operators."
+---
+
 # Migrating an operator view to the admin console
 
 This guide is for apps that already declare an `operator_view` from the #240 operator

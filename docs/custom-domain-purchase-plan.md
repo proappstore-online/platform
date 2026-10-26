@@ -1,3 +1,7 @@
+---
+description: "Deferred design notes for buying domains through ProAppStore, separate from the existing bring-your-own-domain feature."
+---
+
 # Deferred plan — buying domains through PAS
 
 Status: **deferred**. Captured 2026-05-21 alongside the BYO custom-domain ship

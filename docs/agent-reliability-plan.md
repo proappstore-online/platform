@@ -1,3 +1,7 @@
+---
+description: "Review Agent Teams reliability constraints, backward compatibility and planned improvements for live agent sessions."
+---
+
 # Agent Reliability Plan
 
 Status: **live** — agents are serving real users. Every fix must be backward-compatible (no migration-gated features that break unmigrated DOs).

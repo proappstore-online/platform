@@ -1,3 +1,7 @@
+---
+description: "Diagnose session loss and auth hydration failures using fixed-shape SDK events and the owner-only app log pipeline."
+---
+
 # Session-loss diagnostics
 
 Issue #353 extends the existing owner-only app log pipeline (#105, #106) with two

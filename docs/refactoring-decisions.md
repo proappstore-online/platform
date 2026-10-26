@@ -1,3 +1,7 @@
+---
+description: "Review explicit platform refactoring decisions where consolidation would change public responses, validation rules or API behavior."
+---
+
 # Refactoring decisions
 
 This record captures the non-mechanical follow-ups from #250. They were reviewed

@@ -1,3 +1,7 @@
+---
+description: "Understand Cloudflare Turnstile bot protection on anonymous registration and browser-driven app publishing."
+---
+
 # Bot protection with Cloudflare Turnstile
 
 Cloudflare Turnstile is the platform's bot / abuse layer on the two entry

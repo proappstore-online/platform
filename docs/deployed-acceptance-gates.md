@@ -1,3 +1,7 @@
+---
+description: "Review deployed observability acceptance gates and distinguish local contract tests from evidence in a live environment."
+---
+
 # Deployed acceptance gates for the observability epic (#387, #388)
 
 Local and runtime tests prove the contracts. They cannot prove a deployed

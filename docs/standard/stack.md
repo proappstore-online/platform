@@ -1,3 +1,7 @@
+---
+description: "Choose the supported app stack and platform services using the Application Standard's architecture and provisioning requirements."
+---
+
 # Stack and platform services
 
 **Standard version 1.10** · Chapter `STACK` · Part of the [Application Standard](./index.md)

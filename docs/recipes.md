@@ -1,3 +1,7 @@
+---
+description: "Use conforming implementation recipes for common app needs, with Application Standard clauses taking precedence."
+---
+
 # Recipes
 
 > The recipes here are the *conforming* patterns the [Application Standard](./standard/index.md) points at; a recipe never overrides a clause. When a recipe and a clause disagree, the clause's *Since* version says which is current.

@@ -1,3 +1,7 @@
+---
+description: "Architecture decision introducing sandboxed per-app server Workers hosted and invoked through the ProAppStore control plane."
+---
+
 # ADR-009: App workers — platform-hosted, sandboxed per-app server code
 
 ## Status

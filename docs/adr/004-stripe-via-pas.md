@@ -1,3 +1,7 @@
+---
+description: "Architecture decision selecting Stripe for platform subscriptions and explaining the payment-provider alternatives."
+---
+
 # ADR-004: Stripe (not Paddle / Lemon Squeezy / Polar) via the pas Worker
 
 ## Status

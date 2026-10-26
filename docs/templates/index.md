@@ -1,3 +1,7 @@
+---
+description: "Choose from approved ProAppStore templates and understand the selection contract shared by all provisioning paths."
+---
+
 # Approved templates
 
 The catalogue of templates a ProAppStore app may be provisioned from, and the

@@ -1,3 +1,7 @@
+---
+description: "Design plan for consolidating ProAppStore platform tools and clarifying their supported operational responsibilities."
+---
+
 # PAS Platform Tools Consolidation Plan
 
 Date: 2026-06-30

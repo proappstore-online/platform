@@ -1,3 +1,7 @@
+---
+description: "Architecture decision defining Tailored and Ready apps, their tenancy differences and subsequent provisioning changes."
+---
+
 # ADR-002: Tailored vs Ready as the platform's two app categories
 
 ## Status

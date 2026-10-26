@@ -1,3 +1,7 @@
+---
+description: "Configure Cloudflare AI Gateway for Agent Teams provider calls, request analytics, caching and fallback behavior."
+---
+
 # AI Gateway (Agent Teams)
 
 Every LLM call Agent Teams makes goes through Cloudflare AI Gateway when the

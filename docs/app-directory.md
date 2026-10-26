@@ -1,3 +1,7 @@
+---
+description: "Find an app's ownership, repository, route and live status, or check whether an app ID is available before provisioning."
+---
+
 # App directory
 
 Status: **shipped** (#424). One place to answer: does this app exist, is it

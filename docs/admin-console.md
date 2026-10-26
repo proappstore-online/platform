@@ -1,3 +1,7 @@
+---
+description: "Configure an app admin console for record browsing, moderation actions and operator access through the Creator Console."
+---
+
 # Admin console
 
 Every ProAppStore app gets an admin console in the Creator Console (#291). It is for the

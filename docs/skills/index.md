@@ -1,3 +1,7 @@
+---
+description: "Find portable ProAppStore Agent Skills for creating, securing, shipping, upgrading and auditing apps against platform standards."
+---
+
 # ProAppStore Agent Skills
 
 ProAppStore publishes seven portable [Agent Skills](https://agentskills.io/specification)

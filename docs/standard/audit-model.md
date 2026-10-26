@@ -1,3 +1,7 @@
+---
+description: "Understand the Application Standard audit model, clause applicability and how evidence supports a compliance finding."
+---
+
 # Audit model
 
 **Standard version 1.10** · Part of the [Application Standard](./index.md)

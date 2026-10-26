@@ -1,3 +1,7 @@
+---
+description: "An agent's guide to adding or changing an app admin console, including prerequisites, tool order and safe verification."
+---
+
 # Agent onboarding: admin console tools
 
 This page is for an AI agent (Claude Code, Cursor, an Agent Teams worker, …) that is asked

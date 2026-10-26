@@ -1,3 +1,7 @@
+---
+description: "Provision and verify a ProAppStore app's repository, route, database and data worker through supported platform operations."
+---
+
 # Provisioning operator
 
 Standing up a new PAS app has two halves: **writing its code** and **operating the

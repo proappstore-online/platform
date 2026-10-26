@@ -1,3 +1,7 @@
+---
+description: "Connect a headless machine's MCP client with pas mcp-auth and approve sign-in on a phone without a localhost callback."
+---
+
 # Remote MCP sign-in: the machine client (`pas mcp-auth`, #356)
 
 `pas mcp-auth` connects a **headless** machine's MCP client to ProAppStore. You approve it on your phone.

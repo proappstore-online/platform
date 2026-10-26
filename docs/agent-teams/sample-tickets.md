@@ -1,3 +1,7 @@
+---
+description: "Sample product-owner tickets used to develop Agent Teams ticket formats, business-analysis prompts and supervision views."
+---
+
 # Sample Tickets — PO Voice Corpus
 
 > **PO assignment (T2 from the eng review).** This file is the input/output

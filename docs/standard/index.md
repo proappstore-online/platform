@@ -1,3 +1,7 @@
+---
+description: "Recommended ProAppStore Application Standard and Audit Guide, with versioned clauses and machine-readable audit resources."
+---
+
 # Recommended Application Standard and Audit Guide
 
 **Standard version 1.10** · [Changelog](./changelog.md) · [Governance and versioning](./governance.md) · [Audit model](./audit-model.md) · [Audit instructions](./audit-instructions.md)

@@ -1,3 +1,7 @@
+---
+description: "Follow the supported app publishing lifecycle with CLI-managed infrastructure, deployment evidence and platform checks."
+---
+
 # Publishing flow
 
 > **App requirements** around publishing — CLI-managed lifecycle, no manual infrastructure, deploy evidence — are [PAS-STACK-004](./standard/stack.md#pas-stack-004) and [PAS-OPS-005](./standard/ops.md#pas-ops-005) in the [Application Standard](./standard/index.md).

@@ -1,3 +1,7 @@
+---
+description: "Understand the current ProAppStore build and deployment path, required evidence and the distinction from proposed changes."
+---
+
 # Build & Deploy — current state vs future state
 
 > **App requirements** for deployment — the keyless workflow, evidence per deploy, rollback and smoke tests — are clauses in the [Application Standard — Operations chapter](./standard/ops.md) ([PAS-OPS-005](./standard/ops.md#pas-ops-005), [009](./standard/ops.md#pas-ops-009), [010](./standard/ops.md#pas-ops-010)). This page describes the platform path those clauses cite.

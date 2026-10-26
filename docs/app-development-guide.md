@@ -1,3 +1,7 @@
+---
+description: "Follow the ProAppStore app development workflow, including repository hooks and required checks before committing code."
+---
+
 # App Development Guide
 
 ## Pre-Commit Hook Standard

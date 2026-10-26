@@ -1,3 +1,7 @@
+---
+description: "Architecture decision for server error capture, Analytics Engine signals, bounded D1 details and creator-owned trackers."
+---
+
 # ADR-008: Error observability — CF-native server capture, Analytics Engine for signal, bounded D1 for detail, BYO tracker for creators
 
 ## Status

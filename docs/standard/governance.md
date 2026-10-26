@@ -1,3 +1,7 @@
+---
+description: "Understand Application Standard governance, stable clause IDs, versioning and the policy for changing requirements."
+---
+
 # Governance, clause IDs, and versioning
 
 **Standard version 1.10** · Part of the [Application Standard](./index.md)

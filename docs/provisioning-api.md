@@ -1,3 +1,7 @@
+---
+description: "Preview app creation, reuse or scaffold adoption, then explicitly confirm the exact ProAppStore provisioning plan."
+---
+
 # Provisioning API: preview and confirmation
 
 The Creator Console creates a PAS app, reuses an app it owns, or adopts an

@@ -1,3 +1,7 @@
+---
+description: "Design notes on a services marketplace around Tailored templates, publisher expertise and third-party implementation services."
+---
+
 # Services marketplace
 
 A Tailored template naturally creates a services market. The publisher

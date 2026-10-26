@@ -1,3 +1,7 @@
+---
+description: "Understand the versioned remote MCP approval broker, the supported v2 path and the withdrawal of the legacy v1 endpoints."
+---
+
 # Remote MCP approval broker v2 (PAS #355)
 
 `/v1/mcp/broker/v1/*` is permanently withdrawn and answers `503

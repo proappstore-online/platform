@@ -1,3 +1,7 @@
+---
+description: "Research and design decisions for Agent Teams runtime choices, AI-provider usage and possible billing models."
+---
+
 # Agent Teams: runtime choice & billing options
 
 Research + decisions for how PAS Agent Teams runs AI agents and how usage could be

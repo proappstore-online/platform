@@ -1,3 +1,7 @@
+---
+description: "Migration plan for moving GrassKarma from Firebase to ProAppStore, including repository structure and tenancy choices."
+---
+
 # GrassKarma → PAS port plan
 
 Source: `https://github.com/grasskarma/site` (Firebase, two pnpm workspace packages — `web/` + `admin/` + `functions/`).

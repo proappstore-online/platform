@@ -1,3 +1,7 @@
+---
+description: "Migration plan for moving DoorDrop from Firebase to a shared Ready app on ProAppStore, including scope and platform mappings."
+---
+
 # DoorDrop → PAS port plan
 
 Source: `~/dev/doordrop/` (Firebase, ~22k LOC).

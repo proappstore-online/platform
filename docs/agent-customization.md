@@ -1,3 +1,7 @@
+---
+description: "Customize Agent Teams project agents through their identity, prompts, skills and model settings."
+---
+
 # Agent customization
 
 ProAppStore's Agent Teams aren't a black box. Everything **textual** about an

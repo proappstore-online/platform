@@ -1,3 +1,7 @@
+---
+description: "Compare ProAppStore's role systems and choose the appropriate authorization model for app developers, operators and users."
+---
+
 # Authorization Model — the three role systems and which to use
 
 > **App requirements** for using these role systems correctly are clauses in the [Application Standard — Identity, sessions, and permissions](./standard/auth.md). This page defines the systems; the standard says what an app must do with them and how an audit checks it.

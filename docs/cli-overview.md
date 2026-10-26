@@ -1,3 +1,7 @@
+---
+description: "Use the ProAppStore CLI to create, check and publish apps through the platform's supported developer workflow."
+---
+
 # CLI overview
 
 `@proappstore/cli` is the developer-facing command-line tool for creating,

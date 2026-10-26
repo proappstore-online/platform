@@ -1,3 +1,7 @@
+---
+description: "Architecture decision requiring Cloudflare Workers and D1 for ProAppStore apps, including the reasons and alternatives."
+---
+
 # ADR-001: Cloudflare Workers + D1 only, no Firebase
 
 ## Status

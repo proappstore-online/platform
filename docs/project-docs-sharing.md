@@ -1,3 +1,7 @@
+---
+description: "Manage private Agent Teams project documents and understand the sharing model for KNOWLEDGE.md and project Markdown files."
+---
+
 # Project Docs Sharing
 
 Agent Teams projects produce private project docs: `KNOWLEDGE.md` plus markdown

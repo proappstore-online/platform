@@ -1,3 +1,7 @@
+---
+description: "Integrate the browser-first ProAppStore SDK for platform APIs, authentication, data access and app services."
+---
+
 # SDK overview
 
 `@proappstore/sdk` is a browser-first ESM package that any Pro app imports

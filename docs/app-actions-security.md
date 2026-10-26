@@ -1,3 +1,7 @@
+---
+description: "Understand the platform mechanisms securing registered app actions, row-scoped data access and raw SQL boundaries."
+---
+
 # App Actions and Data Access Security
 
 > **App requirements** for registered actions, row scoping and raw SQL are clauses in the [Application Standard — Data, actions, and Workers](./standard/data.md). This page is the platform mechanism those clauses cite.

@@ -13,6 +13,7 @@ on:
       - 'scripts/build-standard-data.mjs'
       - 'scripts/build-compliance-map.mjs'
       - 'scripts/build-skills-manifest.mjs'
+      - 'scripts/verify-docs-metadata.py'
       - 'packages/compliance/src/clause-map.ts'
       - 'marketplace.json'
       - '.claude-plugin/plugin.json'
@@ -97,6 +98,7 @@ jobs:
           cat > mkdocs.yml <<'YAML'
           site_name: ProAppStore Platform Docs
           site_url: https://docs.proappstore.online/
+          site_description: Developer guides for building, securing and publishing ProAppStore apps with the SDK, CLI and platform services.
           docs_dir: zensical-src
           # Zensical excludes a top-level templates/ directory by default. This
           # directory contains the public PAS catalogue, not theme templates.
@@ -184,6 +186,7 @@ jobs:
                 - App Workers: adr/009-app-workers.md
           YAML
           python -m zensical build
+          python scripts/verify-docs-metadata.py site
           # A green build must include the provisioning catalogue and MCP guides.
           test -f site/templates/index.html
           test -f site/mcp-app-tools/index.html

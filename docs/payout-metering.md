@@ -1,3 +1,7 @@
+---
+description: "Archived payout-metering design retained as history; ProAppStore has no active payout routes, crons or meter writes."
+---
+
 # Payout metering and reconciliation
 
 > **Archived (#381).** ProAppStore has no payouts. Nothing described on this page runs:

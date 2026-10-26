@@ -32,6 +32,7 @@ features:
   - title: Agent Teams
     details: A PO/BA/Dev/QA AI team builds and maintains an app from a founder's chat. One Durable Object per project; GitHub is the source of truth; agents run on the user's BYO key. Personas + project memory give each team real context.
     link: /agent-teams-runtime-and-billing
+description: "Developer documentation for ProAppStore apps: SDK, CLI, subscriptions, data, authentication, publishing and platform standards."
 ---
 
 # ProAppStore Platform Docs

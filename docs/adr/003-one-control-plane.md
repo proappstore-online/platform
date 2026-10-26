@@ -1,3 +1,7 @@
+---
+description: "Architecture decision for one ProAppStore control plane and two SDK shapes, with the current PAS-owned implementation."
+---
+
 # ADR-003: One control plane, two SDK shapes — no Ready-specific backend
 
 ## Status

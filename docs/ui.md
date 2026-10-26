@@ -1,3 +1,7 @@
+---
+description: "Use the ProAppStore UI component library with the Application Standard's accessibility, browser-security and PWA guidance."
+---
+
 # UI Component Library
 
 > **App requirements** for UI, accessibility, browser security and PWA behaviour are clauses in the [Application Standard — UI chapter](./standard/ui.md), which also lists what each SDK component provides for accessibility. This page is the component reference those clauses cite.

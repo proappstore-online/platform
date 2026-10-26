@@ -1,3 +1,7 @@
+---
+description: "Explore ProAppStore's control plane, hosted apps, data services and SDK architecture, with links to the Application Standard."
+---
+
 # Architecture
 
 > **Building an app on this?** The [Application Standard](./standard/index.md) says which of these components an app should use for each need and how an audit checks it; start with the [Stack and platform services chapter](./standard/stack.md). This page describes the platform; it does not set app requirements.

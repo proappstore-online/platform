@@ -1,3 +1,7 @@
+---
+description: "Understand generated app marketing sites, their public-content boundary and the deployment design at about-app origins."
+---
+
 # App marketing websites
 
 Status: **design changed 2026-10-18** (#409, split from #398); the deploy path

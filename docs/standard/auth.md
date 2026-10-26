@@ -1,3 +1,7 @@
+---
+description: "Application Standard requirements for app identity, sign-in sessions, membership scoping and permission checks."
+---
+
 # Identity, sessions, and permissions
 
 **Standard version 1.10** · Chapter `AUTH` · Part of the [Application Standard](./index.md)

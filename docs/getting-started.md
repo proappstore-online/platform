@@ -1,3 +1,7 @@
+---
+description: "Start building a ProAppStore app and find the platform primitives, SDK guidance and Application Standard for each requirement."
+---
+
 # Getting Started
 
 > **Building to the standard?** The [Application Standard](./standard/index.md) says which platform primitive to use for each need ([STACK chapter](./standard/stack.md)) and how an audit checks an app; hosted apps set `authMode: 'platform-cookie'` from day one ([PAS-AUTH-001](./standard/auth.md#pas-auth-001)).

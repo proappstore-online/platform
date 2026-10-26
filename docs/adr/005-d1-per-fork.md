@@ -1,3 +1,7 @@
+---
+description: "Architecture decision assigning a separate D1 database to each Tailored fork and clarifying the current provisioning path."
+---
+
 # ADR-005: D1 per Tailored fork
 
 ## Status

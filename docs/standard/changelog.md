@@ -1,3 +1,7 @@
+---
+description: "Track versioned changes to the Application Standard and find the governance rules for documenting clause updates."
+---
+
 # Standard changelog
 
 Part of the [Application Standard](./index.md). One entry per version, newest

@@ -1,3 +1,7 @@
+---
+description: "Application Standard requirements for tests, keyless deployments, release evidence, monitoring and app operations."
+---
+
 # Testing, deployment, and operations
 
 **Standard version 1.10** · Chapter `OPS` · Part of the [Application Standard](./index.md)

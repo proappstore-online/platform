@@ -1,3 +1,7 @@
+---
+description: "Architecture decision for durable provisioning with Cloudflare Workflows, polling CI gates and per-deployment instance IDs."
+---
+
 # ADR-007: Durable provisioning via Cloudflare Workflows — poll-based CI gate, per-deploy instance id (NOT slug)
 
 ## Status

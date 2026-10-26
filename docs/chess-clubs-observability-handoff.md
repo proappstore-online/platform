@@ -1,3 +1,7 @@
+---
+description: "Observability handoff for Chess Clubs, separating platform conformance evidence from app-specific deployed verification."
+---
+
 # Chess Clubs observability handoff (#396)
 
 The platform's diagnostics contracts are proven generically by the synthetic

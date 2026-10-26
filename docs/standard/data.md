@@ -1,3 +1,7 @@
+---
+description: "Application Standard requirements for app data, migrations, registered actions, row scoping and server Workers."
+---
+
 # Data, actions, and Workers
 
 **Standard version 1.10** · Chapter `DATA` · Part of the [Application Standard](./index.md)

@@ -1,3 +1,7 @@
+---
+description: "Trial design for requesting browser QA from a ProAgentStore agent running under the subscriber's own local AI subscription."
+---
+
 # Browser verifier on ProAgentStore agents (trial, #456)
 
 A ProAppStore app can ask a **ProAgentStore (PAGS) agent** to run its QA flows in a

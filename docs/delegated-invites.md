@@ -1,3 +1,7 @@
+---
+description: "Use delegated group-scoped invitations for tenant onboarding while keeping tenant, app-role and developer authorities separate."
+---
+
 # Delegated, group-scoped invites
 
 `app.invites` supports multi-tenant onboarding without making a tenant admin a

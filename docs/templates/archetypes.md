@@ -1,3 +1,7 @@
+---
+description: "Evidence and recommendations for ProAppStore template archetypes, linked to the approved provisioning catalogue."
+---
+
 # Template archetypes — evidence and recommendation
 
 **Investigation #179** · related: [template catalogue](./index.md) (#178), Agent Skills epic #168 · standard version 1.9 · investigated 2026-09-23

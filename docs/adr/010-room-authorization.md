@@ -1,3 +1,7 @@
+---
+description: "Architecture decision defining room authorization and the rules for app-worker publication to rooms."
+---
+
 # ADR-010: Room authorization and app-worker publishing
 
 ## Status

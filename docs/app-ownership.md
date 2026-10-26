@@ -1,3 +1,7 @@
+---
+description: "Transfer app ownership through an offer and acceptance, or follow the platform-admin recovery process."
+---
+
 # App ownership transfer and recovery
 
 Status: **shipped** (#423). An app's owner is `apps.creator_id`. It changes only

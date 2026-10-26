@@ -1,3 +1,7 @@
+---
+description: "Understand browser sign-in, platform sessions and SDK authentication behavior for hosted ProAppStore apps."
+---
+
 # Browser Auth Session Model
 
 > **App requirements** for sessions and sign-in live in the [Application Standard — Identity, sessions, and permissions](./standard/auth.md). This page is the platform design those clauses cite; where the two differ, the standard's *Since* version says which is current.

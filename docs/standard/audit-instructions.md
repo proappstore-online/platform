@@ -1,3 +1,7 @@
+---
+description: "Run an app audit against the Application Standard, collect evidence and report findings in the supported structured format."
+---
+
 # Audit instructions
 
 **Standard version 1.10** · Part of the [Application Standard](./index.md) · Machine-readable: [standard.json](./standard.json) · [finding.schema.json](./finding.schema.json) · [full text](./llms-full.txt)

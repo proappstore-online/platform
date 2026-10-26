@@ -1,3 +1,7 @@
+---
+description: "Understand ProAppStore's tiers for external API integrations and how the platform manages shared infrastructure credentials."
+---
+
 # Third-Party Integrations Strategy
 
 How the platform approaches external API integrations. Three tiers, one principle: devs never manage infrastructure credentials.

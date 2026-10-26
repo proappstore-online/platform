@@ -1,3 +1,7 @@
+---
+description: "Historical publisher feedback from building the carsads reference app with the ProAppStore SDK and CLI."
+---
+
 # Publisher feedback: building carsads end-to-end
 
 A real third-party app (carsads-online/carsads, the car-classifieds
