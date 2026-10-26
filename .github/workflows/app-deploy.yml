@@ -419,9 +419,15 @@ jobs:
             if (attempt) await new Promise((r) => setTimeout(r, 3000));
             problem = null;
             for (const method of ['GET', 'HEAD']) {
-              const r = await fetch(SITE + '/', { method, cache: 'no-store' });
-              const served = r.headers.get('x-pas-marketing-revision');
-              if (r.status !== 200 || served !== REVISION) problem = method + ' / -> ' + r.status + ' revision ' + served;
+              try {
+                const r = await fetch(SITE + '/', { method, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+                const served = r.headers.get('x-pas-marketing-revision');
+                if (r.status !== 200 || served !== REVISION) problem = method + ' / -> ' + r.status + ' revision ' + served;
+                await r.body?.cancel().catch(() => {});
+              } catch (error) {
+                // A transport error is a failed probe too: retry, then reach rollback.
+                problem = method + ' / -> request failed: ' + String(error).slice(0, 200);
+              }
             }
           }
           if (!problem) { console.log('Marketing site live: ' + SITE + '/ (' + REVISION + ')'); process.exit(0); }

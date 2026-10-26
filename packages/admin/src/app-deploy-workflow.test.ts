@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 function tmp(pkg: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), 'gate-'));
@@ -22,6 +22,83 @@ const step = (name: string): string => {
   const next = WORKFLOW.indexOf('\n      - ', start + 1);
   return WORKFLOW.slice(start, next === -1 ? undefined : next);
 };
+
+describe('marketing deployment live verification', () => {
+  const publish = step('Publish marketing site (marketing/ -> about-<app>, keyless)');
+  const code = publish.slice(publish.indexOf("let problem = 'not checked';"), publish.indexOf('\n          JS'));
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+
+  async function verify(probe: (method: string, attempt: number) => Response, activation = { previous: 'previous-live', unchanged: false }) {
+    let count = 0;
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn(async (_url: string, options: RequestInit) => {
+      signals.push(options.signal as AbortSignal);
+      return probe(options.method!, Math.floor(count++ / 2));
+    });
+    const call = vi.fn(async () => ({ active: activation.previous }));
+    const exit = { code: -1 };
+    const stopped = new Error('workflow exit');
+    try {
+      await new AsyncFunction('fetch', 'setTimeout', 'activation', 'REVISION', 'SITE', 'call', 'process', 'console', 'AbortSignal', code)(
+        fetch, (callback: () => void) => callback(), activation, 'candidate', 'https://about-fixture.invalid', call,
+        { exit: (value: number) => { exit.code = value; throw stopped; } }, { log: vi.fn() }, AbortSignal,
+      );
+    } catch (error) {
+      if (error !== stopped) throw error;
+    }
+    return { code: exit.code, call, fetch, signals };
+  }
+  const healthy = () => new Response(null, { headers: { 'x-pas-marketing-revision': 'candidate' } });
+
+  it('succeeds after healthy GET and HEAD without rolling back', async () => {
+    const result = await verify(healthy);
+    expect(result.code).toBe(0);
+    expect(result.fetch).toHaveBeenCalledTimes(2);
+    expect(result.call).not.toHaveBeenCalled();
+    expect(result.signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+  });
+
+  it('retries a transient transport failure and keeps a verified candidate', async () => {
+    const result = await verify((method, attempt) => {
+      if (method === 'GET' && attempt === 0) throw new TypeError('connection reset');
+      return healthy();
+    });
+    expect(result.code).toBe(0);
+    expect(result.fetch).toHaveBeenCalledTimes(4);
+    expect(result.call).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'HEAD'])('restores the prior revision after persistent %s network failures', async (failed) => {
+    const result = await verify((method) => {
+      if (method === failed) throw new TypeError('network unavailable');
+      return healthy();
+    });
+    expect(result.code).toBe(1);
+    expect(result.fetch).toHaveBeenCalledTimes(10);
+    expect(result.call).toHaveBeenCalledOnce();
+    expect(result.call).toHaveBeenCalledWith('POST', 'rollback', JSON.stringify({ revision: 'previous-live' }), true);
+  });
+
+  it('restores the prior revision when probes time out', async () => {
+    const result = await verify(() => { throw new DOMException('timed out', 'TimeoutError'); });
+    expect(result.code).toBe(1);
+    expect(result.signals).toHaveLength(10);
+    expect(result.signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    expect(result.call).toHaveBeenCalledOnce();
+  });
+
+  it.each(['status', 'revision'])('restores the prior revision after persistent %s mismatch', async (failure) => {
+    const result = await verify(() => failure === 'status' ? new Response(null, { status: 503 }) : new Response(null, { headers: { 'x-pas-marketing-revision': 'unexpected' } }));
+    expect(result.code).toBe(1);
+    expect(result.call).toHaveBeenCalledOnce();
+  });
+
+  it.each([{ previous: '', unchanged: false }, { previous: 'previous-live', unchanged: true }])('does not invent a rollback target for %j', async (activation) => {
+    const result = await verify(() => { throw new TypeError('offline'); }, activation);
+    expect(result.code).toBe(1);
+    expect(result.call).not.toHaveBeenCalled();
+  });
+});
 
 describe('app-deploy.yml Build gate (#435)', () => {
   it('decides gated vs fallback build with node, not jq', () => {
