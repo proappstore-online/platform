@@ -11,9 +11,11 @@ export { Avatar, ThemeToggle, TextSizeToggle } from './ui-primitives.js';
 export type { AvatarProps } from './ui-primitives.js';
 
 // Pro-branded primitives + subscription components
-export { SignInButton, ProBadge, SubscriptionStatus, UpgradeCard, BillingButton } from './ui-pro-components.js';
+export { SignInButton, SignInButtons, ProBadge, SubscriptionStatus, UpgradeCard, BillingButton } from './ui-pro-components.js';
 export type {
   SignInButtonProps,
+  SignInButtonsProps,
+  SignInProvider,
   ProBadgeProps,
   SubscriptionStatusProps,
   UpgradeCardProps,

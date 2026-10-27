@@ -4,13 +4,31 @@ import { readConfig, writeConfig } from './lib/config.js';
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
-async function runLogin(): Promise<{ login: string }> {
+const LOGIN_PROVIDERS = ['github', 'google'] as const;
+export type LoginProvider = (typeof LOGIN_PROVIDERS)[number];
+
+/** Validates `--provider`; throws a clear error for anything but github or google. */
+export function parseProvider(value: string | undefined): LoginProvider {
+  const provider = (value ?? 'github').toLowerCase();
+  if (!(LOGIN_PROVIDERS as readonly string[]).includes(provider)) {
+    throw new Error(`Unknown provider "${value}". Use --provider github or --provider google.`);
+  }
+  return provider as LoginProvider;
+}
+
+/** The URL that starts the browser sign-in for a provider. GitHub and Google are separate accounts. */
+export function loginStartUrl(authApiBase: string, provider: LoginProvider, returnTo: string): URL {
+  const startUrl = new URL(`${authApiBase}/v1/auth/${provider}/start`);
+  startUrl.searchParams.set('return_to', returnTo);
+  startUrl.searchParams.set('response_mode', 'query');
+  return startUrl;
+}
+
+async function runLogin(provider: LoginProvider): Promise<{ login: string }> {
   const config = await readConfig();
   const callback = await startCallbackServer();
 
-  const startUrl = new URL(`${config.authApiBase}/v1/auth/github/start`);
-  startUrl.searchParams.set('return_to', callback.url);
-  startUrl.searchParams.set('response_mode', 'query');
+  const startUrl = loginStartUrl(config.authApiBase, provider, callback.url);
 
   process.stdout.write(`\nOpen this URL to sign in to ProAppStore:\n${startUrl.toString()}\n\n`);
   process.stdout.write('Waiting for authorization...\n');
@@ -119,7 +137,15 @@ function startCallbackServer(): Promise<{ url: string; code: Promise<string>; cl
 }
 
 export const loginCommand = new Command('login')
-  .description('Sign in with GitHub.')
-  .action(async () => {
-    await runLogin();
+  .description('Sign in with GitHub (default) or Google. The two are separate accounts.')
+  .option('--provider <provider>', 'Sign-in provider: github or google', 'github')
+  .action(async (opts: { provider?: string }) => {
+    let provider: LoginProvider;
+    try {
+      provider = parseProvider(opts.provider);
+    } catch (e) {
+      process.stderr.write(`${(e as Error).message}\n`);
+      process.exit(1);
+    }
+    await runLogin(provider);
   });

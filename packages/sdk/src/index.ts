@@ -92,10 +92,11 @@ export type { PageHeaderProps } from './page.js';
 export { NavBar } from './navbar.js';
 export type { NavBarProps, NavItem } from './navbar.js';
 export {
-  Avatar, ThemeToggle, TextSizeToggle, SignInButton, ProfileMenu,
+  Avatar, ThemeToggle, TextSizeToggle, SignInButton, SignInButtons, ProfileMenu,
   ProBadge, SubscriptionStatus, UpgradeCard, BillingButton, GateScreen,
   ProProfilePage,
 } from './ui.js';
+export type { SignInProvider } from './ui.js';
 
 /**
  * Pro SDK instance — all features hit the PAS backend.

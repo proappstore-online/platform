@@ -3,6 +3,7 @@ import type { ProAppStore } from './index.js';
 import type { User } from './base-types.js';
 import type { Subscription } from './types.js';
 import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle, Spinner } from './ui.js';
+import type { SignInProvider } from './ui-pro-components.js';
 import { ProProvider } from './provider.js';
 import { activeHref, NavBar, useCurrentPath, type NavItem } from './navbar.js';
 import { SHELL_CSS } from './shell-css.js';
@@ -74,6 +75,11 @@ export interface AppShellProps {
    * explicit opt-in regardless of this setting.
    */
   branding?: 'platform' | 'app';
+  /**
+   * Sign-in providers the signed-out gate offers, in order. Default: GitHub and
+   * Google (separate accounts). Narrow it with e.g. `providers={['github']}`.
+   */
+  providers?: readonly SignInProvider[];
   /**
    * The app's screens — the standard way to give an app navigation (#235).
    * AppShell renders them as a `<nav aria-label="Main">` in its topbar, marks
@@ -164,6 +170,7 @@ export function AppShell({
   children,
   appName,
   branding = 'platform',
+  providers,
   nav,
   renderNav,
   onNavigate,
@@ -234,11 +241,11 @@ export function AppShell({
   // --- Gates ---
   if (gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
   if (gate !== 'ready') {
-    return <GateScreen gate={gate} app={app} appName={appName} branding={branding} />;
+    return <GateScreen gate={gate} app={app} appName={appName} branding={branding} {...(providers ? { providers } : {})} />;
   }
 
   if (!user) {
-    return <GateScreen gate="signed-out" app={app} appName={appName} branding={branding} />;
+    return <GateScreen gate="signed-out" app={app} appName={appName} branding={branding} {...(providers ? { providers } : {})} />;
   }
 
   const profileMenu = (

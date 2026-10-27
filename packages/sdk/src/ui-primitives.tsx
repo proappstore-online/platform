@@ -52,13 +52,14 @@ export function Avatar({ user, size = 32 }: AvatarProps) {
 
 export interface SignInButtonProps {
   app: ProAppStore;
+  /** Defaults to "Sign in with <provider>". */
   label?: string;
   provider?: Exclude<AuthProvider, 'email'>;
 }
 
 export function SignInButton({
   app,
-  label = 'Sign in with GitHub',
+  label,
   provider = 'github',
 }: SignInButtonProps) {
   return (
@@ -72,7 +73,7 @@ export function SignInButton({
         cursor: 'pointer', fontFamily: 'inherit',
       }}
     >
-      {label}
+      {label ?? `Sign in with ${provider === 'google' ? 'Google' : 'GitHub'}`}
     </button>
   );
 }

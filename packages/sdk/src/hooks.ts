@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import type { ProAppStore } from './index.js';
 import type { Subscription } from './types.js';
+import type { AuthProvider } from './auth.js';
 import { resolveApp } from './provider.js';
 
 // Re-export User type for convenience
@@ -121,7 +122,9 @@ export function useAuth(app?: ProAppStore) {
   const { status, user } = state;
   const loading = status === 'pending';
 
-  const signIn = useCallback(() => app.auth.signIn(), [app]);
+  // `signIn()` keeps the GitHub default; `signIn('google')` picks a provider. A non-string argument
+  // (an event, when passed straight to onClick) is ignored rather than mistaken for a provider.
+  const signIn = useCallback((provider?: AuthProvider) => app.auth.signIn(typeof provider === 'string' ? provider : undefined), [app]);
   const signOut = useCallback(() => app.auth.signOut(), [app]);
 
   // Deletes the account in THIS app only, running the app's `app.account.onDelete` handler first (#379).

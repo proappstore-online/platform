@@ -13,15 +13,29 @@ import { resolveApp } from './provider.js';
 // SignInButton (Pro-branded)
 // ---------------------------------------------------------------------------
 
+/** The providers that have a sign-in button (email is a form, not a button). */
+export type SignInProvider = Exclude<AuthProvider, 'email'>;
+
+/** GitHub and Google are separate accounts; both are offered unless an app narrows the list. */
+const DEFAULT_SIGN_IN_PROVIDERS: readonly SignInProvider[] = ['github', 'google'];
+
+const PROVIDER_NAMES: Record<SignInProvider, string> = { github: 'GitHub', google: 'Google' };
+
+/** "Sign in with GitHub" / "Sign in with Google". */
+function signInLabel(provider: SignInProvider): string {
+  return `Sign in with ${PROVIDER_NAMES[provider]}`;
+}
+
 export interface SignInButtonProps {
   app?: ProAppStore;
+  /** Defaults to "Sign in with <provider>". */
   label?: string;
-  provider?: Exclude<AuthProvider, 'email'>;
+  provider?: SignInProvider;
 }
 
 export function SignInButton({
   app: appProp,
-  label = 'Sign in with GitHub',
+  label,
   provider = 'github',
 }: SignInButtonProps) {
   const app = resolveApp(appProp);
@@ -40,8 +54,25 @@ export function SignInButton({
         fontFamily: 'inherit',
       }}
     >
-      {label}
+      {label ?? signInLabel(provider)}
     </button>
+  );
+}
+
+export interface SignInButtonsProps {
+  app?: ProAppStore;
+  /** Which providers to offer, in order. Default: GitHub and Google. */
+  providers?: readonly SignInProvider[];
+}
+
+/** One sign-in button per provider (default GitHub + Google), stacked. */
+export function SignInButtons({ app, providers = DEFAULT_SIGN_IN_PROVIDERS }: SignInButtonsProps) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
+      {providers.map((provider) => (
+        <SignInButton key={provider} {...(app ? { app } : {})} provider={provider} />
+      ))}
+    </div>
   );
 }
 
