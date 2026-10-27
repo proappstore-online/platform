@@ -466,6 +466,21 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     expect(publicTools.map((tool) => tool.name)).not.toContain('draft_report');
   });
 
+  it("a staged-only app: anonymous 200 with an empty list is not the team's answer (#490)", async () => {
+    const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, state: 'staged' };
+    const calls: (string | null)[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((_req: Request | string, init?: RequestInit) => {
+      const authed = new Headers(init?.headers ?? (_req instanceof Request ? _req.headers : undefined)).get('Authorization');
+      calls.push(authed);
+      return Promise.resolve(Response.json({ tools: authed === 'Bearer team' ? [staged] : [] }));
+    });
+    expect((await fetchVisibleTools(api, 'https://api.test', 'bk', 'team')).map((t) => t.name)).toEqual(['draft_report']);
+    // The empty anonymous list is cached for everyone, and the team member's staged list is not mixed into it.
+    expect((await fetchVisibleTools(api, 'https://api.test', 'bk', 'other')).map((t) => t.name)).toEqual([]);
+    expect((await fetchVisibleTools(api, 'https://api.test', 'bk', null)).map((t) => t.name)).toEqual([]);
+    expect(calls.filter((c) => c === 'Bearer team')).toHaveLength(1);
+  });
+
   it('call_app_tool invokes a staged tool for its owner through the action executor (#428)', async () => {
     const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, state: 'staged' };
     globalThis.fetch = vi.fn().mockImplementation((request: Request | string, init?: RequestInit) => {

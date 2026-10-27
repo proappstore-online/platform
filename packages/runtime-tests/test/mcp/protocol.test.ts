@@ -184,6 +184,21 @@ describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
     expect(schema.properties.limit).toMatchObject({ type: "integer", maximum: 50, default: 10 });
   });
 
+  // #490: a public app that has not gone live lists NOTHING to the world (an empty 200), but its team
+  // is registered the staged actions and can call them; a non-member sees and runs nothing.
+  it("registers a staged-only app's actions for its team and for nobody else", async () => {
+    const names = async (uid: string) => ((await rpc(await access(uid, "staged-app"), "tools/list", {}, "/mcp/apps/staged-app")).body.result.tools as { name: string }[]).map((t) => t.name);
+    expect(await names("gh:team")).toContain("staged_report");
+    const outsider = await names("gh:other");
+    expect(outsider).not.toContain("staged_report");
+    expect(outsider).toEqual(expect.arrayContaining(["whoami", "mcp_audit_log"]));
+
+    const call = async (uid: string) => (await rpc(await access(uid, "staged-app"), "tools/call", { name: "staged_report", arguments: {} }, "/mcp/apps/staged-app")).body;
+    expect((await call("gh:team")).result.content[0].text).toContain("staged-1");
+    const denied = await call("gh:other");
+    expect(denied.result?.isError === true || denied.error !== undefined).toBe(true);
+  });
+
   it("enforces manifest parameters, applies defaults and flags executor failures as tool errors", async () => {
     const credential = await access("gh:1", "example");
     const call = (name: string, args: Record<string, unknown>) => rpc(credential, "tools/call", { name, arguments: args }, "/mcp/apps/example");
