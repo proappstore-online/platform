@@ -2,38 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deriveLettermark, lettermarkLabel, renderLettermarkPng, writeDefaultIcons } from './lettermark.js';
-
-describe('deriveLettermark', () => {
-  it.each([
-    ['Hiring', 'H'],
-    ['hiring', 'H'],
-    ['DoorDrop', 'DD'],
-    ['doorDrop', 'DD'],
-    ['Door Drop', 'DD'],
-    ['door-drop', 'DD'],
-    ['door_drop', 'DD'],
-    ['  door   drop  ', 'DD'],
-    ['Door.Drop!', 'DD'],
-    ["Joe's Chess", 'JC'],
-    ['Pro App Store', 'PA'],
-    ['The Book of Hours', 'BH'],
-    ['HTTPServer', 'HS'],
-    ['Élan', 'E'],
-    ['2fast', '2'],
-    ['!!!', 'A'],
-    ['', 'A'],
-  ])('%s -> %s', (name, expected) => {
-    expect(deriveLettermark(name)).toBe(expected);
-  });
-});
-
-describe('lettermarkLabel', () => {
-  it('exposes the full app name', () => {
-    expect(lettermarkLabel('Door Drop')).toBe('Door Drop app icon');
-    expect(lettermarkLabel('')).toBe('App app icon');
-  });
-});
+import { planIcons, renderLettermarkPng, writeDefaultIcons } from './lettermark.js';
 
 describe('renderLettermarkPng', () => {
   it('is a deterministic square PNG that differs per lettermark', () => {
@@ -47,7 +16,7 @@ describe('renderLettermarkPng', () => {
 });
 
 describe('writeDefaultIcons', () => {
-  const TEMPLATE = join(__dirname, '..', '..', '..', '..', 'templates', 'template-map', 'web', 'public');
+  const FIXTURES = join(__dirname, '..', '..', 'compliance', 'src', '__fixtures__', 'template-icons');
 
   async function appDir(): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), 'lettermark-'));
@@ -62,12 +31,12 @@ describe('writeDefaultIcons', () => {
     expect(png.equals(renderLettermarkPng('Hiring', 512))).toBe(true);
   });
 
-  it('replaces the template F icons when the template checkout is present', async () => {
+  it("replaces the template's F and placeholder icons", async () => {
     const dir = await appDir();
-    const f192 = await readFile(join(TEMPLATE, 'icon-192.png')).catch(() => null);
-    if (!f192) return;
-    await writeFile(join(dir, 'web', 'public', 'icon-192.png'), f192);
-    expect(await writeDefaultIcons(dir, 'Hiring')).toContain(join(dir, 'web', 'public', 'icon-192.png'));
+    await writeFile(join(dir, 'web', 'public', 'icon-192.png'), await readFile(join(FIXTURES, 'f-192.png')));
+    await writeFile(join(dir, 'web', 'public', 'icon-512.png'), await readFile(join(FIXTURES, 'placeholder-512.png')));
+    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(2);
+    expect((await readFile(join(dir, 'web', 'public', 'icon-192.png'))).equals(renderLettermarkPng('Hiring', 192))).toBe(true);
   });
 
   it('leaves owner-supplied icons unchanged', async () => {
@@ -77,5 +46,17 @@ describe('writeDefaultIcons', () => {
     await writeFile(join(dir, 'web', 'public', 'icon-512.png'), custom);
     expect(await writeDefaultIcons(dir, 'Hiring')).toEqual([]);
     expect((await readFile(join(dir, 'web', 'public', 'icon-192.png'))).equals(custom)).toBe(true);
+  });
+});
+
+describe('planIcons', () => {
+  it('classifies each icon as missing, template-default or custom', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lettermark-plan-'));
+    await mkdir(join(dir, 'web', 'public'), { recursive: true });
+    const fixtures = join(__dirname, '..', '..', 'compliance', 'src', '__fixtures__', 'template-icons');
+    await writeFile(join(dir, 'web', 'public', 'icon-192.png'), await readFile(join(fixtures, 'f-192.png')));
+    expect((await planIcons(dir)).map((p) => p.state)).toEqual(['template-default', 'missing']);
+    await writeFile(join(dir, 'web', 'public', 'icon-512.png'), 'mine');
+    expect((await planIcons(dir)).map((p) => p.state)).toEqual(['template-default', 'custom']);
   });
 });

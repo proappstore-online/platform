@@ -23,7 +23,7 @@ describe('deploy path filters track workspace imports (#322)', () => {
       'agent-teams': ['deploy-agent-teams.yml', 'deploy-mcp.yml'],
       'build-core': ['deploy-admin.yml', 'deploy-backend.yml', 'deploy-kb-host.yml', 'deploy-mcp.yml'],
       'qa-spec': ['deploy-backend.yml', 'deploy-host.yml', 'deploy-qa-worker.yml'],
-      compliance: ['deploy-backend.yml'],
+      compliance: ['deploy-admin.yml', 'deploy-agent-teams.yml', 'deploy-backend.yml', 'deploy-mcp.yml'], // the lettermark derivation (#505)
       'data-worker': ['deploy-backend.yml'],
       // Bundled by no deployed worker: their changes deploy nothing (sdk and cli are published by publish.yml).
       // runtime-tests is an explicit backend pre-deploy gate, so changes must deploy it.
@@ -56,7 +56,7 @@ describe('deploy path filters track workspace imports (#322)', () => {
   });
 
   it('counts relative imports into another package and build-time embeds, transitively', () => {
-    expect([...bundledDeps('mcp').keys()].sort()).toEqual(['agent-teams', 'build-core']);
+    expect([...bundledDeps('mcp').keys()].sort()).toEqual(['agent-teams', 'build-core', 'compliance']);
     expect(bundledDeps('mcp').get('agent-teams')).toMatch(/\.\.\/\.\.\/agent-teams\/src\/recipes\.js/);
     // The backend bundles the data worker twice over: the build embeds its bundle, and (#455) the
     // migration lint imports the shared SQL tokenizer from its source. Either reason is a bundle.

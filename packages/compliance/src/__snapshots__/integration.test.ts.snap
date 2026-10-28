@@ -474,6 +474,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "template-default-icon",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
+    "detail": "no template-default icon served",
+    "evidence": {
+      "class": "source",
+      "detail": "no template-default icon served",
+    },
+    "name": "Template default icon",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "mcp-unscoped",
     "citations": [
       {

@@ -17,6 +17,7 @@ import { checkNoPlaceholders } from './checks/no-placeholders.js';
 import { checkNoScroll } from './checks/no-scroll.js';
 import { checkNoTracking } from './checks/no-tracking.js';
 import { checkPermissions } from './checks/permissions.js';
+import { checkTemplateDefaultIcon } from './checks/template-default-icon.js';
 import { checkPwaMeta } from './checks/pwa-meta.js';
 import { checkPwaOffline } from './checks/pwa-offline.js';
 import { checkUnsafeVh } from './checks/unsafe-vh.js';
@@ -27,6 +28,8 @@ import { CHECKS, annotate, annotateByName, getCheckMeta, getCheckMetaForName, ci
 import type { CheckResult } from './types.js';
 
 export type { FileSource } from './lib/file-source.js';
+export { deriveLettermark, lettermarkLabel } from './lettermark.js';
+export { ICON_SIZES, isTemplateDefaultIcon } from './default-icons.js';
 // #437: the permission catalogue and detector, shared with the platform and the deploy pipeline.
 export {
   detectPermissions,
@@ -86,6 +89,7 @@ export {
   checkNoScroll,
   checkNoTracking,
   checkPermissions,
+  checkTemplateDefaultIcon,
   checkPwaMeta,
   checkPwaOffline,
   checkUnsafeVh,
@@ -141,6 +145,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
   { id: 'deploy-workflow', run: checkDeployWorkflow },
   { id: 'permissions', run: checkPermissions },
+  { id: 'template-default-icon', run: checkTemplateDefaultIcon },
 ];
 
 /** Ids of the source-side checks, in output order. */

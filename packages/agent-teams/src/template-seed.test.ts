@@ -158,3 +158,16 @@ describe('seedFiles — category templates produce valid scaffolds', () => {
     });
   }
 });
+
+describe('seedFiles — default icon is the lettermark of the app name (#505)', () => {
+  const icon = (slug: string) => seedFiles(slug).get('public/icon.svg')!;
+
+  it('derives the letters from the name: Hiring is H, door-drop is DD', () => {
+    expect(icon('hiring')).toMatch(/>H<\/text>/);
+    expect(icon('door-drop')).toMatch(/>DD<\/text>/);
+  });
+
+  it('labels the icon with the full app name, not just the initials', () => {
+    expect(icon('door-drop')).toContain('aria-label="door-drop app icon"');
+  });
+});

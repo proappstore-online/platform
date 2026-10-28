@@ -47,6 +47,9 @@ importers:
       '@proappstore/build-core':
         specifier: workspace:*
         version: link:../build-core
+      '@proappstore/compliance':
+        specifier: workspace:*
+        version: link:../compliance
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.15
@@ -63,6 +66,9 @@ importers:
 
   packages/agent-teams:
     dependencies:
+      '@proappstore/compliance':
+        specifier: workspace:*
+        version: link:../compliance
       hono:
         specifier: ^4.12.27
         version: 4.12.27

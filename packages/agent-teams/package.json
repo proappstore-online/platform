@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@proappstore/compliance": "workspace:*",
     "hono": "^4.12.27"
   },
   "devDependencies": {

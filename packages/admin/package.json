@@ -12,7 +12,8 @@
     "lint:fix": "biome check --write src/"
   },
   "dependencies": {
-    "@proappstore/build-core": "workspace:*"
+    "@proappstore/build-core": "workspace:*",
+    "@proappstore/compliance": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",

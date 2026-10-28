@@ -153,6 +153,25 @@ describe("provisioning: shared core", () => {
     expect(rec.blobs).toHaveLength(0); // CLI pushes app files itself
   });
 
+  it("handlePublish lists an app published without an icon under the lettermark of its name (#505)", async () => {
+    install();
+    const inner = globalThis.fetch;
+    let listed: { apps: { id: string; icon: string; iconBg: string }[] } | undefined;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/contents/registry.json") && init?.method === "PUT") {
+        listed = JSON.parse(Buffer.from(JSON.parse(init.body as string).content, "base64").toString());
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+    const r = await handlePublish(
+      { id: "door-drop", name: "Door Drop", category: "Productivity", description: "d" } as Parameters<typeof handlePublish>[0],
+      ENV,
+    );
+    expect(r.success).toBe(true);
+    expect(listed!.apps.find((a) => a.id === "door-drop")).toMatchObject({ icon: "DD", iconBg: "#7c3aed" });
+  });
+
   it("handlePublish recovers from a lost registry.json race by re-reading and re-applying (#60)", async () => {
     const rec = install({ registryConflicts: 1 });
     const r = await handlePublish(

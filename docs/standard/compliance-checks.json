@@ -400,6 +400,21 @@
       "live": false
     },
     {
+      "id": "template-default-icon",
+      "name": "Template default icon",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Warn-only (#505): byte-matches web/public/icon-192.png and icon-512.png against the icons the template has shipped; a custom icon, or no icon, is never flagged.",
+      "live": false
+    },
+    {
       "id": "reachable",
       "name": "Reachable",
       "clauses": [

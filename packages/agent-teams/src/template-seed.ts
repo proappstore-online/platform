@@ -15,6 +15,7 @@
  *   dashboard    — generic CRUD, stats, list/detail/create
  */
 
+import { deriveLettermark, lettermarkLabel } from '@proappstore/compliance/lettermark';
 import { templateOverlay, type TemplateType } from './templates/index.ts';
 
 // NOTE: No CI/CD workflow is generated here. The platform OWNS CI — at deploy
@@ -228,7 +229,8 @@ export default defineConfig({
   // manifest updates when config changes without stale caching.
 
   // Default icon so the PWA installs. Branded purple square + the app's initial.
-  files.set('public/icon.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="104" fill="#7c3aed"/><text x="256" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="300" font-weight="800" fill="#fff" text-anchor="middle">${(slug[0] ?? 'A').toUpperCase()}</text></svg>\n`);
+  const mark = deriveLettermark(slug);
+  files.set('public/icon.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="${lettermarkLabel(slug)}"><rect width="512" height="512" rx="104" fill="#7c3aed"/><text x="256" y="${mark.length > 1 ? 330 : 350}" font-family="system-ui, -apple-system, sans-serif" font-size="${mark.length > 1 ? 220 : 300}" font-weight="800" fill="#fff" text-anchor="middle">${mark}</text></svg>\n`);
 
   files.set('public/og-image.svg', `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${slug}">
   <defs>

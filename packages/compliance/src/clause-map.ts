@@ -95,6 +95,8 @@ export const CHECKS: readonly CheckMeta[] = [
     limits: 'Warn-only (#427): pattern match on .github/workflows for the reusable-pipeline caller and for wrangler, the Workers scripts API, platform Worker names and platform secrets; not what a workflow does at run time.' },
   { id: 'permissions', name: 'Permissions declared', clauses: ['PAS-OPS-016'], automation: 'partial', evidenceClass: 'source', scope: 'all',
     limits: 'Warn-only (#437): static pattern detection of browser permission APIs in app source, compared with mcp.json permissions; dynamic or minified-away calls are not seen.' },
+  { id: 'template-default-icon', name: 'Template default icon', clauses: ['PAS-UI-020'], automation: 'partial', evidenceClass: 'source', scope: 'all',
+    limits: 'Warn-only (#505): byte-matches web/public/icon-192.png and icon-512.png against the icons the template has shipped; a custom icon, or no icon, is never flagged.' },
   // Live-URL audit (auditLive) — a post-publish subset run against the deployed app.
   { id: 'reachable', name: 'Reachable', clauses: ['PAS-OPS-010'], automation: 'partial', evidenceClass: 'runtime', scope: 'all', live: true,
     limits: 'HTTP 200 from the live URL; not that the app works (that is the post-deploy smoke).' },

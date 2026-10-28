@@ -1,46 +1,13 @@
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { deriveLettermark, ICON_SIZES, isTemplateDefaultIcon } from '@proappstore/compliance';
 import { FONT, encodePng } from './og-image.js';
 
-/** sha256 of the template-shipped "F" icons — only these are ever overwritten on regeneration. */
-const DEFAULT_ICON_SHA256: Record<number, string> = {
-  192: '068ce0b22606087c2bf67ee3125a7b18522f2ec95a762f5fe2be104fcacc5384',
-  512: 'ebe6d029764e050f2d2229d5516dec4d5b7f488ff18961db0c757687247c10a6',
-};
-
-const ICON_SIZES = [192, 512] as const;
-const STOP_WORDS = new Set(['a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to']);
-
-/**
- * Deterministic lettermark: one letter for a single word, the first two
- * initials for several (Hiring -> H, DoorDrop / Door Drop / door-drop -> DD).
- */
-export function deriveLettermark(appName: string): string {
-  const ascii = appName.normalize('NFKD').replace(/[̀-ͯ]/g, '');
-  const words = ascii
-    .replace(/['\u2019]/g, '')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .split(/[^A-Za-z0-9]+/)
-    .filter(Boolean);
-  const meaningful = words.filter((w) => !STOP_WORDS.has(w.toLowerCase()));
-  const picked = meaningful.length > 0 ? meaningful : words;
-  if (picked.length === 0) return 'A';
-  return picked
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join('');
-}
-
-/** Accessible name for the icon: the full app name, never just the initials. */
-export function lettermarkLabel(appName: string): string {
-  return `${appName.trim() || 'App'} app icon`;
-}
+// The letters come from @proappstore/compliance (shared with the admin Worker and the Agent Teams
+// seed); this file renders them to PNG and writes them into an app on disk.
 
 /** Square full-bleed icon (safe for maskable use): gradient tile, centred lettermark. */
-export function renderLettermarkPng(appName: string, size: number): Buffer {
-  const letters = deriveLettermark(appName);
+export function renderLettermarkPng(appName: string, size: number, letters = deriveLettermark(appName)): Buffer {
   const pixels = Buffer.alloc(size * size * 4);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -76,8 +43,24 @@ export function renderLettermarkPng(appName: string, size: number): Buffer {
   return encodePng(size, size, pixels);
 }
 
-function sha256(buf: Buffer): string {
-  return createHash('sha256').update(buf).digest('hex');
+type IconState = 'missing' | 'template-default' | 'custom';
+
+export interface IconPlan {
+  path: string;
+  size: (typeof ICON_SIZES)[number];
+  state: IconState;
+}
+
+/** What each icon in `<dir>/web/public` is: absent, byte-identical to the template's, or the owner's. */
+export async function planIcons(dir: string): Promise<IconPlan[]> {
+  const plans: IconPlan[] = [];
+  for (const size of ICON_SIZES) {
+    const path = join(dir, 'web', 'public', `icon-${size}.png`);
+    const current = await readFile(path).catch(() => null);
+    const state: IconState = !current ? 'missing' : isTemplateDefaultIcon(size, current) ? 'template-default' : 'custom';
+    plans.push({ path, size, state });
+  }
+  return plans;
 }
 
 /**
@@ -86,16 +69,10 @@ function sha256(buf: Buffer): string {
  * survive. Returns the files written.
  */
 export async function writeDefaultIcons(dir: string, appName: string): Promise<string[]> {
-  const publicDir = join(dir, 'web', 'public');
-  await mkdir(publicDir, { recursive: true });
+  await mkdir(join(dir, 'web', 'public'), { recursive: true });
   const written: string[] = [];
-  for (const size of ICON_SIZES) {
-    const path = join(publicDir, `icon-${size}.png`);
-    const current = await readFile(path).catch(() => null);
-    if (current && sha256(current) !== DEFAULT_ICON_SHA256[size]) {
-      // Re-running for the same name is a no-op; anything else is custom branding.
-      continue;
-    }
+  for (const { path, size, state } of await planIcons(dir)) {
+    if (state === 'custom') continue; // re-running for the same name is a no-op; anything else is custom branding
     await writeFile(path, renderLettermarkPng(appName, size));
     written.push(path);
   }

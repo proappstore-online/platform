@@ -13,6 +13,7 @@ on:
     branches: [main]
     paths:
       - 'packages/agent-teams/**'
+      - 'packages/compliance/**' # the seed bundles the lettermark derivation
       - 'migrations/**'
       - '.github/workflows/deploy-agent-teams.yml'
   workflow_dispatch:

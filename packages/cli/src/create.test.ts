@@ -13,6 +13,7 @@ vi.mock('./og-image.js', () => ({ writeOgImage: vi.fn() }));
 vi.mock('./lettermark.js', () => ({ writeDefaultIcons: vi.fn() }));
 
 const { createApp } = await import('./create.js');
+const { writeDefaultIcons } = await import('./lettermark.js');
 
 let cwd: string;
 let dir: string;
@@ -67,6 +68,20 @@ describe('pas create provisioning', () => {
       appId: 'my-app',
       description: 'My App',
     });
+  });
+
+  it('writes the lettermark icons for the new app on `pas create` (#505)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/catalogue.json')) {
+        return Response.json({ templates: [{
+          id: 'template-app', repo: 'proappstore-online/template-app', ref: 'main', status: 'approved', default: true, deprecation: null,
+        }] });
+      }
+      if (url.endsWith('/v1/provision')) return Response.json({ appId: 'door-drop', steps: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    await createApp('door-drop', { skipInstall: true, skipGit: true, token: 'synthetic-token' });
+    expect(writeDefaultIcons).toHaveBeenCalledWith(expect.stringContaining('door-drop'), 'Door Drop');
   });
 
   it('scaffolds worker/ and registers it in the workspace only with --with-worker (#261)', async () => {

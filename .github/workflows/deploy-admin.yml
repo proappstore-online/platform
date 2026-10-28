@@ -21,6 +21,7 @@ on:
     paths:
       - 'packages/admin/**'
       - 'packages/build-core/**' # admin bundles build-core — redeploy when it changes
+      - 'packages/compliance/**' # admin bundles the lettermark derivation
       - '.github/workflows/deploy-admin.yml'
   workflow_dispatch:
 

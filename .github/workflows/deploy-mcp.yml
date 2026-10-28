@@ -11,6 +11,7 @@ on:
       # Every workspace package the MCP bundles (#322; scripts/check-deploy-paths.mjs keeps this exact):
       - 'packages/build-core/**' # mcp bundles build-core — redeploy when it changes
       - 'packages/agent-teams/**' # src/platform-tools.ts imports agent-teams/src/recipes.js
+      - 'packages/compliance/**' # agent-teams' template seed (bundled via recipes) imports the lettermark derivation
       - '.github/workflows/deploy-mcp.yml'
   workflow_dispatch:
 

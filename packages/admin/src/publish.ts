@@ -1,3 +1,4 @@
+import { deriveLettermark } from "@proappstore/compliance/lettermark";
 import { type CfConfig, ensureAnalytics, makeGitHub, type Step } from "@proappstore/build-core";
 import { E2E_SPEC_PREFIX, e2eHarnessFiles } from "./e2e-harness.js";
 import { ensureOidcTestGrant } from "./e2e-grant.js";
@@ -466,8 +467,9 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
       id: req.id,
       name: req.name,
       category: req.category,
-      icon: req.icon,
-      iconBg: req.iconBg,
+      // #505: an app published without its own icon gets the lettermark of its name, not a blank tile.
+      icon: req.icon || deriveLettermark(req.name),
+      iconBg: req.iconBg || "#7c3aed",
       description: req.description,
       appUrl: `https://${req.id}.${env.APPS_DOMAIN_BASE}`,
       repo: `${env.PUBLISHERS_ORG}/${req.id}`,
@@ -755,7 +757,7 @@ export async function handleAgentDeploy(
     id: req.id,
     name: req.name,
     category: req.category || "Productivity",
-    icon: req.icon || "📦",
+    icon: req.icon || deriveLettermark(req.name),
     iconBg: req.iconBg || "#7c3aed",
     description: req.description || req.name,
   };
