@@ -76,6 +76,17 @@ describe('fetchTools', () => {
     for (const call of (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls) expect(String(call[0])).not.toMatch(/\/v1\/tools$/);
   });
 
+  it('does not list an owner-UI-only action to an assistant, and keeps the app\'s other actions (#500)', async () => {
+    const tools = [
+      { name: 'list_receipts', description: 'List receipts', operation: 'query', params: {} },
+      { name: 'post_transaction', description: 'Post a transaction', operation: 'execute', params: {}, owner_ui_only: true },
+      { name: 'rename_label', description: 'Rename a label', operation: 'execute', params: {}, owner_ui_only: false },
+    ];
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ tools }), { status: 200 }));
+    const result = await fetchTools(api, 'https://api.proappstore.online', 'books-flag');
+    expect(result.map((t) => t.name)).toEqual(['list_receipts', 'rename_label']);
+  });
+
   it('keeps each app\'s cache separate', async () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -190,6 +201,15 @@ describe('executeToolCall', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
         body: JSON.stringify({ params: { limit: 5, __user_id: 'attacker' } }),
       }),
+    );
+  });
+
+  it('marks every call it makes for an assistant, so the executor can refuse an owner-UI-only action (#500)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
+    await executeToolCall(tool, {}, 'session-token', api, 'https://api.proappstore.online');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api.proappstore.online/v1/apps/interns/actions/list_orgs',
+      expect.objectContaining({ headers: expect.objectContaining({ 'X-PAS-Via': 'mcp' }) }),
     );
   });
 

@@ -6,6 +6,8 @@ import { DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import {
   actionCallers,
+  MCP_VIA_HEADER,
+  MCP_VIA_VALUE,
   prepareActionBatch,
   prepareActionQuery,
   prepareVerifyInput,
@@ -109,6 +111,11 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // #254: an action whose callers lack "user" runs only through the app's worker
   // (PAS.actions) or hooks — never from a session or app token here.
   if (!actionCallers(manifest).includes('user')) throw new HttpError("this action runs only from the app's worker/hooks", 403);
+  // #500: an owner-UI-only action refuses a call the MCP server makes for an assistant. The header can only restrict a call:
+  // a caller who sends it is refused here, and one who omits it is a signed-in user acting as themselves.
+  if (manifest.owner_ui_only === true && c.req.header(MCP_VIA_HEADER) === MCP_VIA_VALUE) {
+    throw new HttpError("this action can only be run by the signed-in owner in the app's own UI, not by an assistant", 403);
+  }
   const publicAction = manifest.requires_auth === false;
   // #259: a private app has no anonymous data path, and every caller — session or
   // app token — must be its owner or hold one of its declared roles. Registration

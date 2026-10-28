@@ -57,7 +57,17 @@ export interface ToolManifest {
   step_up?: boolean;
   /** Who may run the action (#254, ADR-009 §2). Absent means `["user"]`, today's behaviour. */
   callers?: ActionCaller[];
+  /**
+   * #500: only the signed-in owner in the app's own UI may run it. An MCP agent session (the call arrives marked
+   * `X-PAS-Via: mcp`, see {@link MCP_VIA_HEADER}) is refused, and the MCP server does not list it. For actions that post, delete
+   * or lock records, where an assistant proposing is fine but acting is not. Absent or false: callable by agents as before.
+   */
+  owner_ui_only?: boolean;
 }
+
+/** The header the MCP server adds to every action call it makes on a user's behalf (#500). Only ever restricts a call. */
+export const MCP_VIA_HEADER = 'X-PAS-Via';
+export const MCP_VIA_VALUE = 'mcp';
 
 /** #428: a staged action is callable only by the app's owner and team and by platform callers; a live one by anyone its auth admits. */
 export type ActionState = 'staged' | 'live';

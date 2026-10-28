@@ -20,7 +20,7 @@ import { validateOperatorView } from '../lib/operator-contract.js';
 import { inspectAdminConsole, operatorCapabilities, previewAdminConsole, proposeAdminUpdate, securityReview, type RoleContext } from '../lib/operator-authoring.js';
 import { loadContract } from './operator.js';
 import { refuseAppMediated } from '../lib/operator-audit-marks.js';
-import { MAX_TOOLS_PER_APP, MANIFEST_BYTES_SOFT_LIMIT, TOOLS_WARN_THRESHOLD, measureManifestCost, openUnscopedWrite, type ToolSource } from '../lib/manifest/tool.js';
+import { MAX_TOOLS_PER_APP, MANIFEST_BYTES_SOFT_LIMIT, TOOLS_WARN_THRESHOLD, measureManifestCost, openUnscopedWrite, agentReachableRiskyWrite, type ToolSource } from '../lib/manifest/tool.js';
 import { toolStatements, validateToolSet } from '../lib/manifest/tool-set.js';
 import { siteManifestFrom, validateSiteManifest, type SiteManifest } from '../lib/manifest/site.js';
 import { validateOperatorGate } from '../lib/manifest/operator.js';
@@ -62,6 +62,8 @@ function actionShape(tool: ToolManifest): string {
     auth: tool.auth ?? null,
     callers: tool.callers ?? null,
     schedule: tool.schedule ?? null,
+    // #500: only when set, so every existing action keeps its shape (and its state).
+    ...(tool.owner_ui_only !== undefined ? { owner_ui_only: tool.owner_ui_only } : {}),
   });
 }
 
@@ -301,6 +303,9 @@ export async function replaceAppTools(
   for (const tool of (tools as ToolManifest[]).filter(openUnscopedWrite)) {
     warnings.push(`action "${tool.name}" is an unscoped write any signed-in user can run; if only the app's worker should, declare "callers": ["worker"]`);
   }
+  for (const tool of (tools as ToolManifest[]).filter(agentReachableRiskyWrite)) {
+    warnings.push(`action "${tool.name}" posts, deletes or locks but an MCP agent can run it; if only the signed-in owner in the app's UI should, declare "owner_ui_only": true`);
+  }
   if (tools.length >= TOOLS_WARN_THRESHOLD) {
     warnings.push(
       `Manifest registers ${tools.length} of ${MAX_TOOLS_PER_APP} tools (${Math.round((tools.length / MAX_TOOLS_PER_APP) * 100)}% of the per-app cap, ${MAX_TOOLS_PER_APP - tools.length} left); ` +
@@ -375,6 +380,8 @@ function publicToolView(m: ToolManifest) {
     ...(m.schedule !== undefined ? { scheduled: true } : {}),
     // Who may run it (#254), so MCP can hide what a user session cannot call.
     ...(m.callers !== undefined ? { callers: m.callers } : {}),
+    // Owner-UI-only (#500), so MCP can hide what an agent session cannot call.
+    ...(m.owner_ui_only === true ? { owner_ui_only: true } : {}),
     // Lets a client or MCP host step up before calling, rather than after a refusal (#231).
     ...(m.step_up ? { step_up: true } : {}),
     ...(m.auth

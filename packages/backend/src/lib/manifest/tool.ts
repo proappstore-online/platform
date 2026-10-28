@@ -216,6 +216,14 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
     if (tool.schedule !== undefined) return 'scheduled tools cannot declare callers (only the platform scheduler runs them)';
   }
 
+  // #500: an owner-UI-only action. A public action has no session to tell an agent from the owner, and a scheduled
+  // one never runs for a session, so the flag would restrict nothing there.
+  if (tool.owner_ui_only !== undefined) {
+    if (typeof tool.owner_ui_only !== 'boolean') return 'owner_ui_only must be true or false';
+    if (tool.owner_ui_only && tool.requires_auth === false) return 'a public action (requires_auth false) cannot be owner_ui_only: it has no signed-in session';
+    if (tool.owner_ui_only && tool.schedule !== undefined) return 'scheduled tools cannot be owner_ui_only (only the platform scheduler runs them)';
+  }
+
   return null;
 }
 
@@ -231,6 +239,22 @@ export function openUnscopedWrite(tool: ToolManifest): boolean {
     && tool.auth?.caller_unscoped !== undefined
     && !tool.auth.app_roles?.length && !tool.auth.platform_roles?.length
     && actionCallers(tool).includes('user');
+}
+
+/** Verbs that post, delete or lock a record: what an assistant may propose but the signed-in owner should do (#500). */
+const IRREVERSIBLE_VERB = /(?:^|_)(?:post|delete|lock|lodge|approve|void|finali[sz]e|purge)(?:_|$)/i;
+
+/**
+ * #500: a write named like a post, delete or lock that an MCP agent session can run. Not refused, but said at registration,
+ * because "owner_ui_only": true keeps it out of the assistant's hands. A heuristic on the name; the owner knows best.
+ */
+export function agentReachableRiskyWrite(tool: ToolManifest): boolean {
+  return (tool.operation === 'execute' || tool.operation === 'batch')
+    && tool.requires_auth !== false
+    && tool.schedule === undefined
+    && tool.owner_ui_only !== true
+    && actionCallers(tool).includes('user')
+    && IRREVERSIBLE_VERB.test(tool.name);
 }
 
 function isStringArray(value: unknown): value is string[] {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolManifest } from '../action-sql.js';
-import { measureManifestCost, openUnscopedWrite, validateManifest } from './tool.js';
+import { agentReachableRiskyWrite, measureManifestCost, openUnscopedWrite, validateManifest } from './tool.js';
 
 const query = (over: Record<string, unknown> = {}): ToolManifest => ({
   name: 'list_items',
@@ -75,5 +75,39 @@ describe('measureManifestCost', () => {
     const heavy = measureManifestCost([query({ sql: `SELECT ${'x'.repeat(1000)} FROM items WHERE user_id = :__user_id` })]);
     expect(heavy.bytes).toBe(lean.bytes);
     expect(lean.estimatedTokens).toBe(Math.round(lean.bytes / 4));
+  });
+});
+
+describe('owner_ui_only (#500)', () => {
+  it('accepts true and false on an authenticated action, and nothing else', () => {
+    expect(validateManifest(query({ owner_ui_only: true }))).toBeNull();
+    expect(validateManifest(query({ owner_ui_only: false }))).toBeNull();
+    expect(validateManifest(query({ owner_ui_only: 'yes' }))).toBe('owner_ui_only must be true or false');
+    expect(validateManifest(query({ owner_ui_only: 1 }))).toBe('owner_ui_only must be true or false');
+  });
+
+  it('refuses it on a public action, which has no session to tell an assistant from the owner', () => {
+    expect(validateManifest(query({ requires_auth: false, owner_ui_only: true, sql: 'SELECT * FROM items LIMIT 10' }))).toMatch(/cannot be owner_ui_only/);
+    expect(validateManifest(query({ requires_auth: false, owner_ui_only: false, sql: 'SELECT * FROM items LIMIT 10' }))).toBeNull();
+  });
+});
+
+describe('agentReachableRiskyWrite (#500)', () => {
+  const write = (name: string, over: Record<string, unknown> = {}) => query({ name, operation: 'execute', sql: 'DELETE FROM items WHERE id = :id', ...over });
+
+  it('flags a write named like a post, delete or lock that an assistant can run', () => {
+    for (const name of ['post_transaction', 'delete_receipt', 'bulk_approve_import_batch', 'lock_year', 'lodge_return', 'finalise_year']) {
+      expect(agentReachableRiskyWrite(write(name)), name).toBe(true);
+    }
+  });
+
+  it('does not flag a read, an owner-UI-only action, a worker-only one, or an ordinary write', () => {
+    expect(agentReachableRiskyWrite(query({ name: 'delete_preview' }))).toBe(false); // a query
+    expect(agentReachableRiskyWrite(write('delete_receipt', { owner_ui_only: true }))).toBe(false);
+    expect(agentReachableRiskyWrite(write('delete_receipt', { callers: ['worker'] }))).toBe(false);
+    expect(agentReachableRiskyWrite(write('add_note'))).toBe(false);
+    expect(agentReachableRiskyWrite(write('remove_member'))).toBe(false); // soft, reversible verbs are not flagged
+    expect(agentReachableRiskyWrite(write('archive_record'))).toBe(false);
+    expect(agentReachableRiskyWrite(write('undeleted_items'))).toBe(false); // the verb is a whole word
   });
 });

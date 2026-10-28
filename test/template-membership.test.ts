@@ -128,7 +128,8 @@ describe('template-membership: registration (#189)', () => {
     expect(res.status).toBe(200);
     expect(body.registered).toBe(MANIFEST.tools.length);
     // A new app's actions register staged until it goes live (#428); nothing else is warned about.
-    expect(body.warnings).toEqual([expect.stringMatching(new RegExp(`^${MANIFEST.tools.length} action\\(s\\) are staged`))]);
+    // #500: the owner_ui_only advisory depends on the template's action names, not on registration working.
+    expect((body.warnings ?? []).filter((w) => !/posts, deletes or locks but an MCP agent can run it/.test(w))).toEqual([expect.stringMatching(new RegExp(`^${MANIFEST.tools.length} action\\(s\\) are staged`))]);
   });
 
   it('no public tools; the only unscoped statements are the app-admin tools gated by auth.app_roles', () => {

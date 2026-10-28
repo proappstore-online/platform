@@ -53,6 +53,8 @@ interface ToolManifest {
   scheduled?: boolean;
   /** #254: who may run it; absent means users. */
   callers?: string[];
+  /** #500: only the signed-in owner in the app's own UI may run it; an assistant session neither lists nor calls it. */
+  owner_ui_only?: boolean;
 }
 
 export interface AppTool extends ToolManifest {
@@ -152,7 +154,8 @@ function toolsFrom(data: ToolsResponse, appId: string): AppTool[] {
   // view; `schedule` on the full manifest a team member receives.)
   return (data.tools ?? [])
     // #254: a worker/hook-only action refuses user sessions, so it is hidden too.
-    .filter((tool) => !tool.scheduled && !(tool as { schedule?: unknown }).schedule && (tool.callers ?? ['user']).includes('user'))
+    // #500: an owner-UI-only action is not offered to an assistant (the executor refuses it too).
+    .filter((tool) => !tool.scheduled && !(tool as { schedule?: unknown }).schedule && (tool.callers ?? ['user']).includes('user') && tool.owner_ui_only !== true)
     .map((tool) => ({ ...tool, app_id: appId }));
 }
 
@@ -293,6 +296,8 @@ export async function executeToolCall(
       headers: {
         Authorization: `Bearer ${userToken}`,
         'Content-Type': 'application/json',
+        // #500: tells the executor this call is an assistant's, so it refuses an owner-UI-only action.
+        'X-PAS-Via': 'mcp',
       },
       body: JSON.stringify({ params: args }),
     });
