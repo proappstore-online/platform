@@ -45,11 +45,11 @@ export function Admin({ group }: { group: Group }) {
   return (
     <Section title="Admin">
       <GroupNav group={group} current="admin" />
-      <h2 className="display-font text-lg font-semibold text-[var(--ink)]">Roles</h2>
+      <h2 className="display-font text-lg font-semibold text-ink">Roles</h2>
       <ul className="mt-2 space-y-2">
         {members.map((m) => (
           <Row key={m.user_id}>
-            <span className="text-sm text-[var(--ink)]">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</span>
+            <span className="text-sm text-ink">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</span>
             {admin && m.user_id !== me ? (
               <select aria-label={`Role for ${m.display_name || m.user_id}`} value={m.role} onChange={(e) => setMemberRole(m, e.target.value)} className={selectClass + ' w-auto'}>
                 {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -59,31 +59,31 @@ export function Admin({ group }: { group: Group }) {
         ))}
       </ul>
 
-      <h2 className="display-font mt-8 text-lg font-semibold text-[var(--ink)]">Join codes</h2>
+      <h2 className="display-font mt-8 text-lg font-semibold text-ink">Join codes</h2>
       <form onSubmit={makeCode} className="mt-2 flex flex-wrap items-end gap-2">
         <Field label="Grants"><select aria-label="Role granted" value={role} onChange={(e) => setRole(e.target.value)} className={selectClass + ' w-auto'}><option value="member">member</option><option value="moderator">moderator</option></select></Field>
         <Field label="Uses"><Input aria-label="Maximum uses" type="number" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} /></Field>
         <Field label="Expires in days"><Input aria-label="Expires in days" type="number" min={0} value={days} onChange={(e) => setDays(e.target.value)} placeholder="never" /></Field>
         <Button type="submit">New code</Button>
       </form>
-      {codes.length === 0 ? <p className="mt-2 text-sm text-[var(--muted)]">No live codes.</p> : (
+      {codes.length === 0 ? <p className="mt-2 text-sm text-muted">No live codes.</p> : (
         <ul className="mt-2 space-y-2">
           {codes.map((c) => (
             <Row key={c.id}>
-              <div className="text-sm"><code className="text-[var(--ink)]">{c.code}</code> <span className="text-[var(--muted)]">· grants {c.role} · {c.use_count}/{c.max_uses} used{c.expires_at ? ` · until ${when(c.expires_at)}` : ''}</span></div>
+              <div className="text-sm"><code className="text-ink">{c.code}</code> <span className="text-muted">· grants {c.role} · {c.use_count}/{c.max_uses} used{c.expires_at ? ` · until ${when(c.expires_at)}` : ''}</span></div>
               <Button size="sm" variant="ghost" onClick={async () => { await x('revoke_join_code', { id: c.id, group_id: group.id }); await load() }}>Revoke</Button>
             </Row>
           ))}
         </ul>
       )}
 
-      <h2 className="display-font mt-8 text-lg font-semibold text-[var(--ink)]">Settings</h2>
+      <h2 className="display-font mt-8 text-lg font-semibold text-ink">Settings</h2>
       <form onSubmit={save} className="mt-2 max-w-md space-y-3">
         <Field label="Name"><Input aria-label="Group name" required value={name} onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="Description"><TextArea aria-label="Description" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
         <Button type="submit" variant="secondary">Save</Button>
       </form>
-      {msg ? <p role="status" className="mt-3 text-sm text-[var(--ink)]">{msg}</p> : null}
+      {msg ? <p role="status" className="mt-3 text-sm text-ink">{msg}</p> : null}
     </Section>
   )
 }

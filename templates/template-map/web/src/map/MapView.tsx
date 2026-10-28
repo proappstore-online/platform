@@ -135,7 +135,7 @@ export function MapView({ view, onViewChange, markers, selectedId, onSelect, onP
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onWheel={onWheel}
-      className={`relative select-none overflow-hidden bg-[var(--paper-deep)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--sky)] ${picking ? 'cursor-crosshair' : 'cursor-grab'} ${className ?? ''}`}
+      className={`relative select-none overflow-hidden bg-paper-deep outline-none focus-visible:ring-2 focus-visible:ring-[var(--sky)] ${picking ? 'cursor-crosshair' : 'cursor-grab'} ${className ?? ''}`}
       style={{ touchAction: 'none' }}
     >
       {tiles.map((t) => (
@@ -160,7 +160,7 @@ export function MapView({ view, onViewChange, markers, selectedId, onSelect, onP
               aria-label={`${c.items.length} places here, zoom in`}
               onClick={(e) => { e.stopPropagation(); emit({ center: { lat: c.lat, lng: c.lng }, zoom: Math.min(MAX_ZOOM, view.zoom + 2) }) }}
               onPointerDown={(e) => e.stopPropagation()}
-              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[var(--paper)] bg-[var(--accent)] px-2 py-1 text-xs font-bold text-white shadow"
+              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-paper bg-accent px-2 py-1 text-xs font-bold text-white shadow"
               style={{ left: at.x, top: at.y, minWidth: 32 }}
             >
               {c.items.length}
@@ -177,17 +177,17 @@ export function MapView({ view, onViewChange, markers, selectedId, onSelect, onP
             aria-pressed={selected}
             onClick={(e) => { e.stopPropagation(); onSelect?.(m.id) }}
             onPointerDown={(e) => e.stopPropagation()}
-            className={`absolute -translate-x-1/2 -translate-y-full rounded-full border-2 border-[var(--paper)] shadow transition-transform ${selected ? 'z-10 scale-125' : ''}`}
+            className={`absolute -translate-x-1/2 -translate-y-full rounded-full border-2 border-paper shadow transition-transform ${selected ? 'z-10 scale-125' : ''}`}
             style={{ left: at.x, top: at.y, width: 18, height: 18, background: m.color ?? 'var(--accent)' }}
           />
         )
       })}
       <div className="absolute right-2 top-2 flex flex-col gap-1">
-        <button type="button" aria-label="Zoom in" onClick={() => zoomAt(1)} onPointerDown={(e) => e.stopPropagation()} className="h-9 w-9 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-strong)] text-lg font-bold text-[var(--ink)]">+</button>
-        <button type="button" aria-label="Zoom out" onClick={() => zoomAt(-1)} onPointerDown={(e) => e.stopPropagation()} className="h-9 w-9 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-strong)] text-lg font-bold text-[var(--ink)]">−</button>
+        <button type="button" aria-label="Zoom in" onClick={() => zoomAt(1)} onPointerDown={(e) => e.stopPropagation()} className="h-9 w-9 rounded-pas-sm border border-line bg-panel-strong text-lg font-bold text-ink">+</button>
+        <button type="button" aria-label="Zoom out" onClick={() => zoomAt(-1)} onPointerDown={(e) => e.stopPropagation()} className="h-9 w-9 rounded-pas-sm border border-line bg-panel-strong text-lg font-bold text-ink">−</button>
       </div>
-      {offline ? <p role="status" className="absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--warning-soft)] px-3 py-1 text-xs font-semibold text-[var(--warning)]">Offline — map tiles may not load</p> : null}
-      <p className="absolute bottom-0 right-0 rounded-tl bg-[var(--panel-strong)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">© <a href="https://www.openstreetmap.org/copyright" className="underline" onPointerDown={(e) => e.stopPropagation()}>OpenStreetMap</a> contributors</p>
+      {offline ? <p role="status" className="absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-[var(--warning-soft)] px-3 py-1 text-xs font-semibold text-warning">Offline — map tiles may not load</p> : null}
+      <p className="absolute bottom-0 right-0 rounded-tl bg-panel-strong px-1.5 py-0.5 text-[10px] text-muted">© <a href="https://www.openstreetmap.org/copyright" className="underline" onPointerDown={(e) => e.stopPropagation()}>OpenStreetMap</a> contributors</p>
     </div>
   )
 }

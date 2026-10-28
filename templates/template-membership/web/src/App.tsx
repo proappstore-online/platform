@@ -93,7 +93,7 @@ function Routed() {
 function WithGroup({ id, children }: { id: string; children: (g: Group) => ReactNode }) {
   const [group, setGroup] = useState<Group | null | undefined>(undefined)
   useEffect(() => { q<Group>('get_group', { group_id: id }).then(([g]) => setGroup(g ?? null)) }, [id])
-  if (group === undefined) return <Section title="Loading…"><p className="text-sm text-[var(--muted)]">One moment.</p></Section>
+  if (group === undefined) return <Section title="Loading…"><p className="text-sm text-muted">One moment.</p></Section>
   if (group === null) return <Section title="Not a member"><Empty title="You are not in this group" description="Ask for a join code, or go back to your groups." /></Section>
   return <>{children(group)}</>
 }

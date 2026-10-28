@@ -45,21 +45,21 @@ export function Onboarding() {
   return (
     <Section title={`Create or join a ${GROUP.noun}`}>
       <div className="grid max-w-3xl grid-cols-1 gap-6 sm:grid-cols-2">
-        <form onSubmit={create} className="space-y-3 rounded-[var(--radius)] border border-[var(--line)] p-4">
-          <h2 className="font-semibold text-[var(--ink)]">Create</h2>
-          <p className="text-sm text-[var(--muted)]">You become its admin and can hand out join codes.</p>
+        <form onSubmit={create} className="space-y-3 rounded-pas border border-line p-4">
+          <h2 className="font-semibold text-ink">Create</h2>
+          <p className="text-sm text-muted">You become its admin and can hand out join codes.</p>
           <Field label="Name"><Input aria-label="Group name" required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Field label="Description"><TextArea aria-label="Description" rows={3} maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
           <Button type="submit" loading={busy}>Create</Button>
         </form>
-        <form onSubmit={join} className="space-y-3 rounded-[var(--radius)] border border-[var(--line)] p-4">
-          <h2 className="font-semibold text-[var(--ink)]">Join with a code</h2>
-          <p className="text-sm text-[var(--muted)]">Codes are limited-use and may expire; your role was chosen by whoever made the code.</p>
+        <form onSubmit={join} className="space-y-3 rounded-pas border border-line p-4">
+          <h2 className="font-semibold text-ink">Join with a code</h2>
+          <p className="text-sm text-muted">Codes are limited-use and may expire; your role was chosen by whoever made the code.</p>
           <Field label="Join code"><Input aria-label="Join code" required value={code} onChange={(e) => setCode(e.target.value)} /></Field>
           <Button type="submit" variant="secondary" loading={busy}>Join</Button>
         </form>
       </div>
-      {error ? <p role="alert" className="mt-4 text-sm text-[var(--danger)]">{error}</p> : null}
+      {error ? <p role="alert" className="mt-4 text-sm text-danger">{error}</p> : null}
     </Section>
   )
 }

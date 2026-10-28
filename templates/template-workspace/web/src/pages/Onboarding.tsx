@@ -51,21 +51,21 @@ export function Onboarding({ join }: { join: boolean }) {
     <Section title={workspaces.length ? 'Join another workspace' : 'Welcome'}>
       <div className="grid max-w-3xl grid-cols-1 gap-6 sm:grid-cols-2">
         {!join ? (
-          <form onSubmit={create} className="space-y-3 rounded-[var(--radius)] border border-[var(--line)] p-4">
-            <h2 className="font-semibold text-[var(--ink)]">Create a workspace</h2>
-            <p className="text-sm text-[var(--muted)]">You become its admin and can invite your team.</p>
+          <form onSubmit={create} className="space-y-3 rounded-pas border border-line p-4">
+            <h2 className="font-semibold text-ink">Create a workspace</h2>
+            <p className="text-sm text-muted">You become its admin and can invite your team.</p>
             <Field label="Name"><Input aria-label="Workspace name" required value={name} onChange={(e) => setName(e.target.value)} /></Field>
             <Button type="submit" loading={busy}>Create</Button>
           </form>
         ) : null}
-        <form onSubmit={accept} className="space-y-3 rounded-[var(--radius)] border border-[var(--line)] p-4">
-          <h2 className="font-semibold text-[var(--ink)]">Join with an invitation code</h2>
-          <p className="text-sm text-[var(--muted)]">Codes are single-use; your role was set by whoever invited you.</p>
+        <form onSubmit={accept} className="space-y-3 rounded-pas border border-line p-4">
+          <h2 className="font-semibold text-ink">Join with an invitation code</h2>
+          <p className="text-sm text-muted">Codes are single-use; your role was set by whoever invited you.</p>
           <Field label="Code"><Input aria-label="Invitation code" required value={code} onChange={(e) => setCode(e.target.value)} /></Field>
           <Button type="submit" variant="secondary" loading={busy}>Join</Button>
         </form>
       </div>
-      {error ? <p role="alert" className="mt-4 text-sm text-[var(--danger)]">{error}</p> : null}
+      {error ? <p role="alert" className="mt-4 text-sm text-danger">{error}</p> : null}
     </Section>
   )
 }

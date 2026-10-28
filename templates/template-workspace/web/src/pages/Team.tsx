@@ -65,18 +65,18 @@ export function Team() {
           return (
             <Row key={m.user_id}>
               <div>
-                <p className="font-semibold text-[var(--ink)]">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</p>
-                <p className="text-xs text-[var(--muted)]">{m.user_id} · joined {when(m.joined_at)}</p>
+                <p className="font-semibold text-ink">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</p>
+                <p className="text-xs text-muted">{m.user_id} · joined {when(m.joined_at)}</p>
                 {m.role !== 'admin' ? (
                   <div className="mt-1 flex flex-wrap gap-2">
                     {PERMISSION_KEYS.map((k) => (
-                      <label key={k} className="flex items-center gap-1 text-xs text-[var(--muted)]">
+                      <label key={k} className="flex items-center gap-1 text-xs text-muted">
                         <input aria-label={`${k} for ${m.display_name || m.user_id}`} type="checkbox" checked={perms.includes(k)} disabled={!manager} onChange={() => togglePermission(m, k, perms.includes(k))} />
                         {k}
                       </label>
                     ))}
                   </div>
-                ) : <p className="mt-1 text-xs text-[var(--muted)]">admins hold every permission</p>}
+                ) : <p className="mt-1 text-xs text-muted">admins hold every permission</p>}
               </div>
               <div className="flex items-center gap-2">
                 {admin && m.user_id !== me ? (
@@ -91,27 +91,27 @@ export function Team() {
         })}
       </ul>
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Invitations</h2>
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Invitations</h2>
       {manager ? (
         <form onSubmit={invite} className="mt-2 flex flex-wrap items-end gap-2">
           <div className="min-w-48"><Field label="Login (for your records)"><Input aria-label="Login" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="alice" /></Field></div>
           <Field label="Role"><select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)} className={selectClass + ' w-auto'}><option value="member">member</option><option value="manager">manager</option></select></Field>
           <Button type="submit">Create invitation</Button>
         </form>
-      ) : <p className="mt-2 text-sm text-[var(--muted)]">Inviting needs the manage_members permission.</p>}
-      {lastCode ? <p role="status" className="mt-2 text-sm text-[var(--ink)]">Send this single-use code: <code className="rounded bg-[var(--paper-deep)] px-1.5 py-0.5">{lastCode}</code></p> : null}
-      {invites.length === 0 ? <p className="mt-2 text-sm text-[var(--muted)]">No open invitations.</p> : (
+      ) : <p className="mt-2 text-sm text-muted">Inviting needs the manage_members permission.</p>}
+      {lastCode ? <p role="status" className="mt-2 text-sm text-ink">Send this single-use code: <code className="rounded bg-paper-deep px-1.5 py-0.5">{lastCode}</code></p> : null}
+      {invites.length === 0 ? <p className="mt-2 text-sm text-muted">No open invitations.</p> : (
         <ul className="mt-2 space-y-2">
           {invites.map((i) => (
             <Row key={i.id}>
-              <div className="text-sm"><code className="text-[var(--ink)]">{i.id}</code> <span className="text-[var(--muted)]">· {i.login || 'anyone'} · {i.role} · {when(i.created_at)}</span></div>
+              <div className="text-sm"><code className="text-ink">{i.id}</code> <span className="text-muted">· {i.login || 'anyone'} · {i.role} · {when(i.created_at)}</span></div>
               {manager ? <Button size="sm" variant="ghost" onClick={async () => { await x('revoke_invitation', { id: i.id, workspace_id: active!.id }); await load() }}>Revoke</Button> : null}
             </Row>
           ))}
         </ul>
       )}
       {members.length === 0 ? <Empty title="No members" /> : null}
-      {msg ? <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {msg ? <p role="alert" className="mt-3 text-sm text-danger">{msg}</p> : null}
     </Section>
   )
 }

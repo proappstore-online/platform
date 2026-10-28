@@ -39,8 +39,8 @@ export function Records() {
         {rows.map((r) => (
           <Row key={r.id}>
             <div>
-              <a href={`#/records/${r.id}`} className="font-semibold text-[var(--ink)] hover:underline">{r.title}</a>
-              <p className="text-xs text-[var(--muted)]">{r.type} · {money(r.amount)} · {when(r.created_at)}</p>
+              <a href={`#/records/${r.id}`} className="font-semibold text-ink hover:underline">{r.title}</a>
+              <p className="text-xs text-muted">{r.type} · {money(r.amount)} · {when(r.created_at)}</p>
             </div>
             <Status value={r.status} />
           </Row>
@@ -63,7 +63,7 @@ export function RecordPage({ id }: { id: string }) {
   }, [active?.id, id])
   useEffect(() => { load() }, [load])
 
-  if (!active || rec === undefined) return <Section title="Record"><p className="text-sm text-[var(--muted)]">Loading…</p></Section>
+  if (!active || rec === undefined) return <Section title="Record"><p className="text-sm text-muted">Loading…</p></Section>
   if (rec === null) return <Section title="Record"><Empty title="Not found" description="It may be archived or belong to another workspace." /></Section>
   const approvals = JSON.parse(rec.approvals || '[]') as Approval[]
   const pending = approvals.find((a) => a.decision === 'pending')
@@ -78,8 +78,8 @@ export function RecordPage({ id }: { id: string }) {
 
   return (
     <Section title={rec.title} action={<Status value={rec.status} />}>
-      <p className="text-sm text-[var(--muted)]">{rec.type} · {money(rec.amount)} · created {when(rec.created_at)} · updated {when(rec.updated_at)}{rec.assignee_id ? ` · assigned to ${rec.assignee_id}` : ''}</p>
-      {rec.notes ? <p className="mt-3 whitespace-pre-wrap text-sm text-[var(--ink)]">{rec.notes}</p> : null}
+      <p className="text-sm text-muted">{rec.type} · {money(rec.amount)} · created {when(rec.created_at)} · updated {when(rec.updated_at)}{rec.assignee_id ? ` · assigned to ${rec.assignee_id}` : ''}</p>
+      {rec.notes ? <p className="mt-3 whitespace-pre-wrap text-sm text-ink">{rec.notes}</p> : null}
 
       <div className="mt-6 flex flex-wrap gap-2">
         {rec.status === 'draft' || rec.status === 'rejected' ? <>
@@ -90,16 +90,16 @@ export function RecordPage({ id }: { id: string }) {
         {rec.status !== 'closed' ? <Button variant="danger" onClick={() => { if (confirm('Archive this record? It leaves the lists but stays in the audit trail.')) run('archive_record', { id }, 'Archived.').then(() => { location.hash = '#/records' }) }}>Archive</Button> : null}
       </div>
       {rec.status === 'draft' || rec.status === 'rejected' ? <div className="mt-3 max-w-md"><Field label="Note for the approver"><TextArea aria-label="Note for the approver" rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field></div> : null}
-      {flash ? <p role="status" className="mt-3 text-sm text-[var(--muted)]">{flash}</p> : null}
+      {flash ? <p role="status" className="mt-3 text-sm text-muted">{flash}</p> : null}
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Approvals</h2>
-      {approvals.length === 0 ? <p className="mt-2 text-sm text-[var(--muted)]">Not submitted yet.</p> : (
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Approvals</h2>
+      {approvals.length === 0 ? <p className="mt-2 text-sm text-muted">Not submitted yet.</p> : (
         <ul className="mt-2 space-y-2">
           {approvals.map((a) => (
             <Row key={a.id}>
               <div className="text-sm">
-                <p className="text-[var(--ink)]">Requested by {a.requested_by} · {when(a.created_at)}{a.note ? ` · “${a.note}”` : ''}</p>
-                {a.decided_at ? <p className="text-xs text-[var(--muted)]">Decided by {a.decided_by} · {when(a.decided_at)}</p> : null}
+                <p className="text-ink">Requested by {a.requested_by} · {when(a.created_at)}{a.note ? ` · “${a.note}”` : ''}</p>
+                {a.decided_at ? <p className="text-xs text-muted">Decided by {a.decided_by} · {when(a.decided_at)}</p> : null}
               </div>
               <div className="flex items-center gap-2">
                 <Status value={a.decision} />
@@ -126,7 +126,7 @@ export function DecideButtons({ approvalId, onDone }: { approvalId: string; onDo
     <>
       <Button size="sm" onClick={() => decide('approved')}>Approve</Button>
       <Button size="sm" variant="danger" onClick={() => decide('rejected')}>Reject</Button>
-      {msg ? <span role="alert" className="text-xs text-[var(--danger)]">{msg}</span> : null}
+      {msg ? <span role="alert" className="text-xs text-danger">{msg}</span> : null}
     </>
   )
 }
@@ -176,7 +176,7 @@ export function RecordForm({ id }: { id?: string }) {
         <Field label="Amount"><Input aria-label="Amount" type="number" step="0.01" value={d.amount} onChange={(e) => set({ amount: e.target.value })} /></Field>
         <Field label="Assignee"><select aria-label="Assignee" value={d.assignee_id} onChange={(e) => set({ assignee_id: e.target.value })} className={selectClass}><option value="">Unassigned</option>{members.map((m) => <option key={m.user_id} value={m.user_id}>{m.display_name || m.user_id}</option>)}</select></Field>
         <Field label="Notes"><TextArea aria-label="Notes" rows={5} maxLength={4000} value={d.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
-        {error ? <p role="alert" className="text-sm text-[var(--danger)]">{error}</p> : null}
+        {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
         <div className="flex gap-2">
           <Button type="submit" loading={busy}>{id ? 'Save' : 'Create draft'}</Button>
           <Button type="button" variant="ghost" onClick={() => { location.hash = '#/records' }}>Cancel</Button>

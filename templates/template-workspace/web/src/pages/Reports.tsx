@@ -28,14 +28,14 @@ export function Reports() {
   return (
     <Section title="Reports">
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs uppercase tracking-wide text-[var(--muted)]"><th className="py-2">Status</th><th>Records</th><th>Total</th></tr></thead>
+        <thead><tr className="text-left text-xs uppercase tracking-wide text-muted"><th className="py-2">Status</th><th>Records</th><th>Total</th></tr></thead>
         <tbody>
-          {stats.map((s) => <tr key={s.status} className="border-t border-[var(--line)]"><td className="py-2"><Status value={s.status} /></td><td>{s.count}</td><td>{money(s.total)}</td></tr>)}
-          {stats.length === 0 ? <tr><td colSpan={3} className="py-4 text-[var(--muted)]">No records yet.</td></tr> : null}
+          {stats.map((s) => <tr key={s.status} className="border-t border-line"><td className="py-2"><Status value={s.status} /></td><td>{s.count}</td><td>{money(s.total)}</td></tr>)}
+          {stats.length === 0 ? <tr><td colSpan={3} className="py-4 text-muted">No records yet.</td></tr> : null}
         </tbody>
       </table>
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Export</h2>
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Export</h2>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <select aria-label="Type to export" value={type} onChange={(e) => setType(e.target.value)} className={selectClass + ' w-auto'}>
           <option value="">All types</option>
@@ -43,7 +43,7 @@ export function Reports() {
         </select>
         <Button variant="secondary" onClick={exportCsv}>Download CSV</Button>
       </div>
-      {msg ? <p role="status" className="mt-2 text-sm text-[var(--muted)]">{msg}</p> : null}
+      {msg ? <p role="status" className="mt-2 text-sm text-muted">{msg}</p> : null}
     </Section>
   )
 }

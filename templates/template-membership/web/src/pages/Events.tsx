@@ -31,7 +31,7 @@ function EventForm({ group, initial, eventId, onDone }: { group: Group; initial:
         <Field label="Ends"><Input aria-label="Ends" type="datetime-local" value={d.ends_at} onChange={(e) => set({ ends_at: e.target.value })} /></Field>
         <Field label="Capacity"><Input aria-label="Capacity" type="number" min={1} value={d.capacity} onChange={(e) => set({ capacity: e.target.value })} placeholder="unlimited" /></Field>
       </div>
-      {error ? <p role="alert" className="text-sm text-[var(--danger)]">{error}</p> : null}
+      {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       <Button type="submit">{eventId ? 'Save' : 'Create event'}</Button>
     </form>
   )
@@ -48,16 +48,16 @@ export function Events({ group }: { group: Group }) {
     <Section title="Events" action={isMod(group) ? <Button onClick={() => setCreating(true)}>New event</Button> : undefined}>
       <GroupNav group={group} current="events" />
       <div className="mb-3 flex gap-2 text-sm">
-        <button type="button" onClick={() => setPast(false)} className={`font-medium ${!past ? 'text-[var(--ink)]' : 'text-[var(--muted)]'}`}>Upcoming</button>
-        <button type="button" onClick={() => setPast(true)} className={`font-medium ${past ? 'text-[var(--ink)]' : 'text-[var(--muted)]'}`}>Past</button>
+        <button type="button" onClick={() => setPast(false)} className={`font-medium ${!past ? 'text-ink' : 'text-muted'}`}>Upcoming</button>
+        <button type="button" onClick={() => setPast(true)} className={`font-medium ${past ? 'text-ink' : 'text-muted'}`}>Past</button>
       </div>
       {rows.length === 0 ? <Empty title={past ? 'No past events' : 'Nothing scheduled'} description={isMod(group) ? 'Create the first one.' : 'Admins and moderators create events.'} /> : null}
       <ul className="space-y-2">
         {rows.map((e) => (
           <Row key={e.id}>
             <div>
-              <a href={`#/group/${group.id}/events/${e.id}`} className="font-semibold text-[var(--ink)] hover:underline">{e.title}</a>
-              <p className="text-xs text-[var(--muted)]">{when(e.starts_at)}{e.location ? ` · ${e.location}` : ''} · {e.going_count} going{e.capacity ? ` of ${e.capacity}` : ''}{e.waitlist_count ? ` · ${e.waitlist_count} waitlisted` : ''}</p>
+              <a href={`#/group/${group.id}/events/${e.id}`} className="font-semibold text-ink hover:underline">{e.title}</a>
+              <p className="text-xs text-muted">{when(e.starts_at)}{e.location ? ` · ${e.location}` : ''} · {e.going_count} going{e.capacity ? ` of ${e.capacity}` : ''}{e.waitlist_count ? ` · ${e.waitlist_count} waitlisted` : ''}</p>
             </div>
             {e.my_status ? <Badge value={e.my_status} /> : null}
           </Row>
@@ -83,7 +83,7 @@ export function EventDetail({ group, eventId }: { group: Group; eventId: string 
   }, [group.id, eventId])
   useEffect(() => { load() }, [load])
 
-  if (event === undefined) return <Section title="Event"><p className="text-sm text-[var(--muted)]">Loading…</p></Section>
+  if (event === undefined) return <Section title="Event"><p className="text-sm text-muted">Loading…</p></Section>
   if (event === null) return <Section title="Event"><Empty title="Not found" /></Section>
   const mayEdit = isMod(group) || event.created_by === me
 
@@ -101,21 +101,21 @@ export function EventDetail({ group, eventId }: { group: Group; eventId: string 
 
   return (
     <Section title={event.title} action={event.my_status ? <Badge value={event.my_status} /> : undefined}>
-      <p className="text-sm text-[var(--muted)]">{when(event.starts_at)}{event.ends_at ? ` → ${when(event.ends_at)}` : ''}{event.location ? ` · ${event.location}` : ''}</p>
-      {event.description ? <p className="mt-3 whitespace-pre-wrap text-sm text-[var(--ink)]">{event.description}</p> : null}
-      <p className="mt-3 text-sm text-[var(--ink)]">{event.going_count} going{event.capacity ? ` of ${event.capacity}` : ''}{event.waitlist_count ? ` · ${event.waitlist_count} on the waitlist` : ''}</p>
+      <p className="text-sm text-muted">{when(event.starts_at)}{event.ends_at ? ` → ${when(event.ends_at)}` : ''}{event.location ? ` · ${event.location}` : ''}</p>
+      {event.description ? <p className="mt-3 whitespace-pre-wrap text-sm text-ink">{event.description}</p> : null}
+      <p className="mt-3 text-sm text-ink">{event.going_count} going{event.capacity ? ` of ${event.capacity}` : ''}{event.waitlist_count ? ` · ${event.waitlist_count} on the waitlist` : ''}</p>
       <div className="mt-4 flex flex-wrap gap-2">
         {event.my_status !== 'going' && event.my_status !== 'waitlist' ? <Button onClick={() => rsvp('going')}>{event.capacity && event.going_count >= event.capacity ? 'Join the waitlist' : "I'm going"}</Button> : <Button variant="secondary" onClick={() => rsvp('not_going')}>Can't make it</Button>}
         {mayEdit ? <Button variant="ghost" onClick={() => setEditing(true)}>Edit</Button> : null}
         {mayEdit ? <Button variant="danger" onClick={remove}>Delete</Button> : null}
-        <a href={`#/group/${group.id}/events`} className="self-center text-sm text-[var(--muted)] hover:underline">All events</a>
+        <a href={`#/group/${group.id}/events`} className="self-center text-sm text-muted hover:underline">All events</a>
       </div>
-      {msg ? <p role="alert" className="mt-2 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {msg ? <p role="alert" className="mt-2 text-sm text-danger">{msg}</p> : null}
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Who's coming</h2>
-      {rsvps.length === 0 ? <p className="mt-2 text-sm text-[var(--muted)]">Nobody yet.</p> : (
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Who's coming</h2>
+      {rsvps.length === 0 ? <p className="mt-2 text-sm text-muted">Nobody yet.</p> : (
         <ul className="mt-2 space-y-1 text-sm">
-          {rsvps.map((r) => <li key={r.user_id} className="flex items-center gap-2"><Badge value={r.status} /><span className="text-[var(--ink)]">{r.display_name ?? r.user_id}</span>{r.waitlist_position ? <span className="text-xs text-[var(--muted)]">#{r.waitlist_position}</span> : null}</li>)}
+          {rsvps.map((r) => <li key={r.user_id} className="flex items-center gap-2"><Badge value={r.status} /><span className="text-ink">{r.display_name ?? r.user_id}</span>{r.waitlist_position ? <span className="text-xs text-muted">#{r.waitlist_position}</span> : null}</li>)}
         </ul>
       )}
       <Modal open={editing} onClose={() => setEditing(false)} title="Edit event" width={560}>

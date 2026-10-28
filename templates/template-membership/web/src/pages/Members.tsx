@@ -32,8 +32,8 @@ export function Members({ group }: { group: Group }) {
         {members.map((m) => (
           <Row key={m.user_id}>
             <div>
-              <p className="font-semibold text-[var(--ink)]">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</p>
-              <p className="text-xs text-[var(--muted)]">{m.user_id} · joined {when(m.joined_at)}</p>
+              <p className="font-semibold text-ink">{m.display_name || m.user_id}{m.user_id === me ? ' (you)' : ''}</p>
+              <p className="text-xs text-muted">{m.user_id} · joined {when(m.joined_at)}</p>
             </div>
             <div className="flex items-center gap-2">
               <Badge value={m.role} />
@@ -42,8 +42,8 @@ export function Members({ group }: { group: Group }) {
           </Row>
         ))}
       </ul>
-      {isMod(group) ? <p className="mt-3 text-xs text-[var(--muted)]">Roles and join codes are managed in <a href={`#/group/${group.id}/admin`} className="text-[var(--accent)] hover:underline">Admin</a>.</p> : null}
-      {msg ? <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {isMod(group) ? <p className="mt-3 text-xs text-muted">Roles and join codes are managed in <a href={`#/group/${group.id}/admin`} className="text-accent hover:underline">Admin</a>.</p> : null}
+      {msg ? <p role="alert" className="mt-3 text-sm text-danger">{msg}</p> : null}
     </Section>
   )
 }

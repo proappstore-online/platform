@@ -18,14 +18,14 @@ export function Activity() {
 
   return (
     <Section title="Activity">
-      <p className="mb-4 text-sm text-[var(--muted)]">Every write in this workspace lands here in the same transaction as the change itself.</p>
+      <p className="mb-4 text-sm text-muted">Every write in this workspace lands here in the same transaction as the change itself.</p>
       {rows.length === 0 ? <Empty title="Nothing yet" /> : null}
       <ul className="space-y-1 text-sm">
         {rows.map((a) => (
-          <li key={a.id} className="border-b border-[var(--line)] py-2">
-            <span className="text-[var(--muted)]">{when(a.created_at)}</span> · <strong className="text-[var(--ink)]">{a.user_name ?? a.user_id}</strong> · {a.action}
-            {a.entity_type === 'record' ? <> · <a href={`#/records/${a.entity_id}`} className="text-[var(--accent)] hover:underline">record</a></> : <> · {a.entity_type} {a.entity_id}</>}
-            {a.changes && a.changes !== '{}' ? <code className="ml-2 text-xs text-[var(--muted)]">{a.changes}</code> : null}
+          <li key={a.id} className="border-b border-line py-2">
+            <span className="text-muted">{when(a.created_at)}</span> · <strong className="text-ink">{a.user_name ?? a.user_id}</strong> · {a.action}
+            {a.entity_type === 'record' ? <> · <a href={`#/records/${a.entity_id}`} className="text-accent hover:underline">record</a></> : <> · {a.entity_type} {a.entity_id}</>}
+            {a.changes && a.changes !== '{}' ? <code className="ml-2 text-xs text-muted">{a.changes}</code> : null}
           </li>
         ))}
       </ul>

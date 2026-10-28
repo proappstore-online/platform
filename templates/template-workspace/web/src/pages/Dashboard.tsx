@@ -23,29 +23,29 @@ export function Dashboard() {
         {(['draft', 'submitted', 'approved', 'rejected', 'closed'] as const).map((s) => {
           const row = stats.find((r) => r.status === s)
           return (
-            <div key={s} className="rounded-[var(--radius)] border border-[var(--line)] p-3">
+            <div key={s} className="rounded-pas border border-line p-3">
               <Status value={s} />
-              <p className="mt-2 text-2xl font-semibold text-[var(--ink)]">{row?.count ?? 0}</p>
-              <p className="text-xs text-[var(--muted)]">{money(row?.total ?? 0)}</p>
+              <p className="mt-2 text-2xl font-semibold text-ink">{row?.count ?? 0}</p>
+              <p className="text-xs text-muted">{money(row?.total ?? 0)}</p>
             </div>
           )
         })}
       </div>
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Awaiting approval</h2>
-      {queue.length === 0 ? <p className="mt-2 text-sm text-[var(--muted)]">Nothing waiting.</p> : (
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Awaiting approval</h2>
+      {queue.length === 0 ? <p className="mt-2 text-sm text-muted">Nothing waiting.</p> : (
         <ul className="mt-2 space-y-2">
           {queue.slice(0, 5).map((a) => (
-            <li key={a.id} className="text-sm"><a href={`#/records/${a.record_id}`} className="font-semibold text-[var(--ink)] hover:underline">{a.title}</a> <span className="text-[var(--muted)]">· {a.type} · {money(a.amount)} · by {a.requested_by_name ?? a.requested_by}</span></li>
+            <li key={a.id} className="text-sm"><a href={`#/records/${a.record_id}`} className="font-semibold text-ink hover:underline">{a.title}</a> <span className="text-muted">· {a.type} · {money(a.amount)} · by {a.requested_by_name ?? a.requested_by}</span></li>
           ))}
-          {queue.length > 5 ? <li><a href="#/approvals" className="text-sm text-[var(--accent)] hover:underline">See all {queue.length}</a></li> : null}
+          {queue.length > 5 ? <li><a href="#/approvals" className="text-sm text-accent hover:underline">See all {queue.length}</a></li> : null}
         </ul>
       )}
 
-      <h2 className="display-font mt-8 text-xl font-semibold text-[var(--ink)]">Recent activity</h2>
+      <h2 className="display-font mt-8 text-xl font-semibold text-ink">Recent activity</h2>
       {recent.length === 0 ? <Empty title="No activity yet" description="Every change in this workspace is recorded here." /> : (
         <ul className="mt-2 space-y-1 text-sm">
-          {recent.map((a) => <li key={a.id}><span className="text-[var(--muted)]">{when(a.created_at)}</span> · <strong className="text-[var(--ink)]">{a.user_name ?? a.user_id}</strong> · {a.action} <span className="text-[var(--muted)]">{a.entity_type} {a.entity_id.slice(0, 8)}</span></li>)}
+          {recent.map((a) => <li key={a.id}><span className="text-muted">{when(a.created_at)}</span> · <strong className="text-ink">{a.user_name ?? a.user_id}</strong> · {a.action} <span className="text-muted">{a.entity_type} {a.entity_id.slice(0, 8)}</span></li>)}
         </ul>
       )}
     </Section>

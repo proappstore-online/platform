@@ -13,10 +13,10 @@ export function Landing() {
         {(groups ?? []).map((g) => (
           <Row key={g.id}>
             <div className="flex items-center gap-3">
-              {g.avatar_url ? <img src={g.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : <span aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--accent-soft)] font-semibold text-[var(--accent-deep)]">{g.name[0]}</span>}
+              {g.avatar_url ? <img src={g.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : <span aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent-deep">{g.name[0]}</span>}
               <div>
-                <a href={`#/group/${g.id}`} className="font-semibold text-[var(--ink)] hover:underline">{g.name}</a>
-                <p className="text-xs text-[var(--muted)]">{g.member_count} member{g.member_count === 1 ? '' : 's'}{g.description ? ` · ${g.description}` : ''}</p>
+                <a href={`#/group/${g.id}`} className="font-semibold text-ink hover:underline">{g.name}</a>
+                <p className="text-xs text-muted">{g.member_count} member{g.member_count === 1 ? '' : 's'}{g.description ? ` · ${g.description}` : ''}</p>
               </div>
             </div>
             <Badge value={g.role} />

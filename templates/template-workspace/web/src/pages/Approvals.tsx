@@ -14,17 +14,17 @@ export function Approvals() {
 
   return (
     <Section title="Approvals">
-      {!approver ? <p className="mb-4 text-sm text-[var(--muted)]">You can see the queue; deciding needs the <code>approve</code> permission (ask an admin).</p> : null}
+      {!approver ? <p className="mb-4 text-sm text-muted">You can see the queue; deciding needs the <code>approve</code> permission (ask an admin).</p> : null}
       {rows.length === 0 ? <Empty title="Queue is empty" /> : null}
       <ul className="space-y-2">
         {rows.map((a) => (
           <Row key={a.id}>
             <div>
-              <a href={`#/records/${a.record_id}`} className="font-semibold text-[var(--ink)] hover:underline">{a.title}</a>
-              <p className="text-xs text-[var(--muted)]">{a.type} · {money(a.amount)} · by {a.requested_by_name ?? a.requested_by} · {when(a.created_at)}{a.note ? ` · “${a.note}”` : ''}</p>
+              <a href={`#/records/${a.record_id}`} className="font-semibold text-ink hover:underline">{a.title}</a>
+              <p className="text-xs text-muted">{a.type} · {money(a.amount)} · by {a.requested_by_name ?? a.requested_by} · {when(a.created_at)}{a.note ? ` · “${a.note}”` : ''}</p>
             </div>
             <div className="flex items-center gap-2">
-              {approver && a.requested_by !== me ? <DecideButtons approvalId={a.id} onDone={load} /> : <span className="text-xs text-[var(--muted)]">{a.requested_by === me ? 'your submission' : ''}</span>}
+              {approver && a.requested_by !== me ? <DecideButtons approvalId={a.id} onDone={load} /> : <span className="text-xs text-muted">{a.requested_by === me ? 'your submission' : ''}</span>}
             </div>
           </Row>
         ))}

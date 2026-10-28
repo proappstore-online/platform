@@ -21,21 +21,21 @@ export function PlaceDetail({ place, category, onChanged, compact }: { place: Pl
   }
   return (
     <article aria-label={place.name}>
-      {place.image_key ? <img src={imageUrl(place.image_key)} alt="" className={`mb-3 w-full rounded-[var(--radius)] object-cover ${compact ? 'max-h-40' : 'max-h-80'}`} /> : null}
-      <h2 className={`display-font font-semibold text-[var(--ink)] ${compact ? 'text-lg' : 'text-2xl'}`}>{place.name}</h2>
-      <p className="mt-1 text-sm text-[var(--muted)]">{[category ? `${category.icon} ${category.name}`.trim() : null, place.address].filter(Boolean).join(' · ')}</p>
-      <p className="text-xs text-[var(--muted)]">{fmtCoord(place.lat)}, {fmtCoord(place.lng)} · by {place.owner_name || 'a member'} · {when(place.updated_at)} {place.status === 'hidden' ? <Badge value="hidden" /> : null}</p>
-      {place.description ? <p className="mt-3 whitespace-pre-wrap text-sm text-[var(--ink)]">{place.description}</p> : null}
+      {place.image_key ? <img src={imageUrl(place.image_key)} alt="" className={`mb-3 w-full rounded-pas object-cover ${compact ? 'max-h-40' : 'max-h-80'}`} /> : null}
+      <h2 className={`display-font font-semibold text-ink ${compact ? 'text-lg' : 'text-2xl'}`}>{place.name}</h2>
+      <p className="mt-1 text-sm text-muted">{[category ? `${category.icon} ${category.name}`.trim() : null, place.address].filter(Boolean).join(' · ')}</p>
+      <p className="text-xs text-muted">{fmtCoord(place.lat)}, {fmtCoord(place.lng)} · by {place.owner_name || 'a member'} · {when(place.updated_at)} {place.status === 'hidden' ? <Badge value="hidden" /> : null}</p>
+      {place.description ? <p className="mt-3 whitespace-pre-wrap text-sm text-ink">{place.description}</p> : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        <a href={`#/p/${place.id}`} className="self-center text-sm text-[var(--accent)] hover:underline">{compact ? 'Open' : ''}</a>
-        <a href={`https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lng}#map=16/${place.lat}/${place.lng}`} target="_blank" rel="noreferrer" className="self-center text-sm text-[var(--muted)] hover:underline">Directions ↗</a>
+        <a href={`#/p/${place.id}`} className="self-center text-sm text-accent hover:underline">{compact ? 'Open' : ''}</a>
+        <a href={`https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lng}#map=16/${place.lat}/${place.lng}`} target="_blank" rel="noreferrer" className="self-center text-sm text-muted hover:underline">Directions ↗</a>
         {mine ? <>
           <Button size="sm" variant="secondary" onClick={() => { location.hash = `#/p/${place.id}/edit` }}>Edit</Button>
           {place.status === 'active' ? <Button size="sm" variant="ghost" onClick={() => setStatus('hidden')}>Hide</Button> : <Button size="sm" onClick={() => setStatus('active')}>Show</Button>}
           <Button size="sm" variant="danger" onClick={remove}>Delete</Button>
         </> : null}
       </div>
-      {msg ? <p role="alert" className="mt-2 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {msg ? <p role="alert" className="mt-2 text-sm text-danger">{msg}</p> : null}
     </article>
   )
 }
@@ -50,7 +50,7 @@ export function PlacePage({ id }: { id: string }) {
   }
   useEffect(() => { load() }, [id])
   return (
-    <Section title={place?.name ?? RECORD.noun[0]!.toUpperCase() + RECORD.noun.slice(1)} action={<a href={`#/?sel=${id}`} className="text-sm text-[var(--accent)] hover:underline">Show on map</a>}>
+    <Section title={place?.name ?? RECORD.noun[0]!.toUpperCase() + RECORD.noun.slice(1)} action={<a href={`#/?sel=${id}`} className="text-sm text-accent hover:underline">Show on map</a>}>
       {error ? <State kind={stateFor(error)} action={<Button size="sm" variant="secondary" onClick={load}>Retry</Button>} /> : null}
       {!error && place === undefined ? <State kind="loading" /> : null}
       {!error && place === null ? <State kind="empty" title="Not found" description="It may have been removed or hidden by its owner." /> : null}

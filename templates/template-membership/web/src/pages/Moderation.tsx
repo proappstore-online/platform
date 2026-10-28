@@ -37,7 +37,7 @@ function Dashboard() {
   }
 
   if (session.status === 'pending' || (session.status === 'signed-in' && !session.rolesLoaded)) {
-    return <Section title="Moderation"><p className="text-sm text-[var(--muted)]">One moment.</p></Section>
+    return <Section title="Moderation"><p className="text-sm text-muted">One moment.</p></Section>
   }
   if (!isAdmin) {
     return <Section title="Moderation"><Empty title="Admins only" description="App-wide moderation needs the app role admin, granted by the app's owner." /></Section>
@@ -45,13 +45,13 @@ function Dashboard() {
   const error = deleteGroup.error ?? listGroups.error
   return (
     <Section title="Moderation">
-      {error ? <p role="alert" className="mb-3 text-sm text-[var(--danger)]">{explain(error)}</p> : null}
+      {error ? <p role="alert" className="mb-3 text-sm text-danger">{explain(error)}</p> : null}
       {loadFailed ? <Button size="sm" variant="ghost" disabled={listGroups.pending} onClick={() => void load()}>Retry</Button> : null}
-      {groups === null ? (loadFailed ? null : <p className="text-sm text-[var(--muted)]">Loading groups…</p>) : groups.length === 0 ? <Empty title="No groups yet" /> : (
+      {groups === null ? (loadFailed ? null : <p className="text-sm text-muted">Loading groups…</p>) : groups.length === 0 ? <Empty title="No groups yet" /> : (
         <ul className="space-y-2">
           {groups.map((g) => (
             <Row key={g.id}>
-              <div className="text-sm"><span className="font-semibold text-[var(--ink)]">{g.name}</span> <span className="text-[var(--muted)]">· {g.member_count} members · /{g.slug}</span></div>
+              <div className="text-sm"><span className="font-semibold text-ink">{g.name}</span> <span className="text-muted">· {g.member_count} members · /{g.slug}</span></div>
               <Button size="sm" variant="ghost" disabled={deleteGroup.pending} onClick={() => remove(g)}>Delete</Button>
             </Row>
           ))}

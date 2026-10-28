@@ -88,7 +88,7 @@ export default function App() {
 function Routed() {
   const route = useRoute()
   const { active, loading } = useWorkspace()
-  if (loading) return <p className="p-8 text-sm text-[var(--muted)]">Loading your workspaces…</p>
+  if (loading) return <p className="p-8 text-sm text-muted">Loading your workspaces…</p>
   if (!active || route.name === 'join') return <Onboarding join={route.name === 'join'} />
   switch (route.name) {
     case 'dashboard': return <Dashboard />
@@ -107,9 +107,9 @@ function Routed() {
 /** A custom topbar only to add the workspace switcher; the navigation is AppShell's (`nav`), placed here. */
 function Header({ nav, right }: { nav: ReactNode; right: ReactNode }) {
   return (
-    <header className="sticky top-0 z-10 border-b border-[var(--line)] bg-[var(--panel-strong)] backdrop-blur">
+    <header className="sticky top-0 z-10 border-b border-line bg-panel-strong backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
-        <a href="#/" className="display-font text-lg font-bold text-[var(--ink)]">APPNAME</a>
+        <a href="#/" className="display-font text-lg font-bold text-ink">APPNAME</a>
         {nav}
         <WorkspaceSwitcher />
         <div className="flex items-center gap-2">{right}</div>
@@ -140,7 +140,7 @@ function WorkspaceSwitcher() {
         await app.kv.set(ACTIVE_WORKSPACE_KEY, e.target.value)
         location.reload()
       }}
-      className="rounded-[var(--radius-sm)] border border-[var(--line-strong)] bg-[var(--panel-strong)] px-2 py-1 text-xs text-[var(--ink)]"
+      className="rounded-pas-sm border border-line-strong bg-panel-strong px-2 py-1 text-xs text-ink"
     >
       {ws.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
     </select>

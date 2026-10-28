@@ -88,11 +88,11 @@ export function PlaceForm({ id }: { id?: string }) {
           </div>
           {STORAGE_ENABLED ? (
             <Field label="Photo">
-              <input aria-label="Photo" type="file" accept="image/*" onChange={(e) => addPhoto(e.target.files)} className="block text-sm text-[var(--muted)]" />
+              <input aria-label="Photo" type="file" accept="image/*" onChange={(e) => addPhoto(e.target.files)} className="block text-sm text-muted" />
             </Field>
           ) : null}
-          {d.image_key ? <div className="flex items-center gap-2"><img src={imageUrl(d.image_key)} alt="" className="h-16 w-24 rounded-[var(--radius-sm)] object-cover" /><Button type="button" variant="ghost" size="sm" onClick={() => set({ image_key: null })}>Remove photo</Button></div> : null}
-          {notice ? <p role="status" className="text-sm text-[var(--muted)]">{notice}</p> : null}
+          {d.image_key ? <div className="flex items-center gap-2"><img src={imageUrl(d.image_key)} alt="" className="h-16 w-24 rounded-pas-sm object-cover" /><Button type="button" variant="ghost" size="sm" onClick={() => set({ image_key: null })}>Remove photo</Button></div> : null}
+          {notice ? <p role="status" className="text-sm text-muted">{notice}</p> : null}
           {error && !(id && (error as { status?: number }).status === 403) ? <State kind={stateFor(error)} description={error instanceof Error ? error.message : undefined} /> : null}
           <div className="flex gap-2">
             <Button type="submit" loading={busy}>{id ? 'Save' : 'Add to the map'}</Button>
@@ -100,7 +100,7 @@ export function PlaceForm({ id }: { id?: string }) {
           </div>
         </div>
         <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Tap the map to place the point</p>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Tap the map to place the point</p>
           <MapView
             view={view}
             onViewChange={(v) => setView(v)}
@@ -108,7 +108,7 @@ export function PlaceForm({ id }: { id?: string }) {
             selectedId="draft"
             picking
             onPick={(p) => set({ lat: p.lat.toFixed(6), lng: p.lng.toFixed(6) })}
-            className="h-80 rounded-[var(--radius)] border border-[var(--line)] md:h-[28rem]"
+            className="h-80 rounded-pas border border-line md:h-[28rem]"
           />
         </div>
       </form>

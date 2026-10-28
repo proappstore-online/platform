@@ -28,7 +28,7 @@ export function Profile() {
 
   return (
     <Section title="Profile">
-      <p className="text-sm text-[var(--muted)]">Signed in as <strong className="text-[var(--ink)]">{me?.name}</strong>. Your display name can differ per group; nothing else about you is stored by this app.</p>
+      <p className="text-sm text-muted">Signed in as <strong className="text-ink">{me?.name}</strong>. Your display name can differ per group; nothing else about you is stored by this app.</p>
       <ul className="mt-4 max-w-xl space-y-2">
         {groups.map((g) => (
           <Row key={g.id}>
@@ -39,7 +39,7 @@ export function Profile() {
           </Row>
         ))}
       </ul>
-      {msg ? <p role="status" className="mt-3 text-sm text-[var(--muted)]">{msg}</p> : null}
+      {msg ? <p role="status" className="mt-3 text-sm text-muted">{msg}</p> : null}
     </Section>
   )
 }

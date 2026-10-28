@@ -44,16 +44,16 @@ export function Messages({ group }: { group: Group }) {
         <div className="flex-1"><Input aria-label="Message" placeholder={`Say something to ${group.name}`} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)} /></div>
         <Button type="submit">Post</Button>
       </form>
-      {msg ? <p role="alert" className="mb-2 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {msg ? <p role="alert" className="mb-2 text-sm text-danger">{msg}</p> : null}
       {rows.length === 0 ? <Empty title="No messages yet" /> : null}
       <ul className="space-y-2">
         {rows.map((m) => (
-          <li key={m.id} className="rounded-[var(--radius-sm)] border border-[var(--line)] p-3">
-            <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
-              <span><strong className="text-[var(--ink)]">{m.display_name ?? m.user_id}</strong> · {when(m.created_at)}</span>
-              {m.user_id === me || isMod(group) ? <button type="button" onClick={() => remove(m)} className="text-[var(--danger)] hover:underline">Delete</button> : null}
+          <li key={m.id} className="rounded-pas-sm border border-line p-3">
+            <div className="flex items-center justify-between gap-2 text-xs text-muted">
+              <span><strong className="text-ink">{m.display_name ?? m.user_id}</strong> · {when(m.created_at)}</span>
+              {m.user_id === me || isMod(group) ? <button type="button" onClick={() => remove(m)} className="text-danger hover:underline">Delete</button> : null}
             </div>
-            <p className="mt-1 whitespace-pre-wrap text-sm text-[var(--ink)]">{m.content}</p>
+            <p className="mt-1 whitespace-pre-wrap text-sm text-ink">{m.content}</p>
           </li>
         ))}
       </ul>

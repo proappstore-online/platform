@@ -19,9 +19,9 @@ export function Activity({ group }: { group: Group }) {
       {rows.length === 0 ? <Empty title="Nothing yet" description="Joins, role changes, events and RSVPs land here in the same transaction as the change." /> : null}
       <ul className="space-y-1 text-sm">
         {rows.map((a) => (
-          <li key={a.id} className="border-b border-[var(--line)] py-2">
-            <span className="text-[var(--muted)]">{when(a.created_at)}</span> · <strong className="text-[var(--ink)]">{a.display_name ?? a.user_id}</strong> · {a.action}
-            {a.metadata && a.metadata !== '{}' ? <code className="ml-2 text-xs text-[var(--muted)]">{a.metadata}</code> : null}
+          <li key={a.id} className="border-b border-line py-2">
+            <span className="text-muted">{when(a.created_at)}</span> · <strong className="text-ink">{a.display_name ?? a.user_id}</strong> · {a.action}
+            {a.metadata && a.metadata !== '{}' ? <code className="ml-2 text-xs text-muted">{a.metadata}</code> : null}
           </li>
         ))}
       </ul>

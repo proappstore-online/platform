@@ -11,7 +11,7 @@ export function MinePage() {
   const load = async () => { try { setPlaces(await q<Place>('list_my_places')); setError(null) } catch (e) { setError(e) } }
   useEffect(() => { load() }, [])
   return (
-    <Section title={`My ${RECORD.plural}`} action={<a href="#/new" className="text-sm font-semibold text-[var(--accent)] hover:underline">+ Add</a>}>
+    <Section title={`My ${RECORD.plural}`} action={<a href="#/new" className="text-sm font-semibold text-accent hover:underline">+ Add</a>}>
       {error ? <State kind={stateFor(error)} action={<Button size="sm" variant="secondary" onClick={load}>Retry</Button>} /> : null}
       {!error && places === null ? <State kind="loading" /> : null}
       {places && places.length === 0 ? <State kind="empty" title={`You haven't added a ${RECORD.noun} yet`} /> : null}

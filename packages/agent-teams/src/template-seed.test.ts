@@ -206,9 +206,24 @@ describe('seedFiles — src/index.css follows ADR-011', async () => {
     expect(css).not.toMatch(/^\.text-muted\b/m);
   });
 
-  it('puts the component classes in @layer components and body in @layer base', () => {
+  it('ships no component catalogue (.card/.btn/.input/.badge) and puts what remains in @layer base', () => {
     expect(css).toMatch(/@layer base \{\s*body \{/);
-    expect(css).toMatch(/@layer components \{[\s\S]*\.btn \{[\s\S]*\.badge-warning[\s\S]*\}\n$/);
+    for (const cls of ['card', 'btn', 'btn-primary', 'input', 'badge', 'empty-state']) expect(css, cls).not.toMatch(new RegExp(`^\\s*\\.${cls}\\b`, 'm'));
+    expect(css).not.toContain('@layer components');
+  });
+
+  it('maps panel-strong, panel-quiet and accent-deep too, defined in both themes', () => {
+    for (const t of ['panel-strong', 'panel-quiet', 'accent-deep']) {
+      expect(css).toContain(`--color-${t}: var(--${t});`);
+      expect(css.match(new RegExp(`^\\s*--${t}:`, 'gm'))?.length, t).toBe(2);
+    }
+  });
+
+  it('writes the scaffold markup in mapped utilities: no [var(--token)] and no catalogue class', () => {
+    const app = seedFiles('test-app').get('src/App.tsx')!;
+    expect(app).not.toMatch(/\[var\(--(ink|muted|line|accent|panel|paper)\)\]/);
+    expect(app).not.toMatch(/className="[^"]*\b(btn|card|badge)\b/);
+    expect(app).toContain('text-ink');
+    expect(app).toContain('border-line');
   });
 });
-

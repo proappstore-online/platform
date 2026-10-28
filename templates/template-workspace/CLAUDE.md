@@ -28,3 +28,10 @@ Platform conventions, SDK modules and the Application Standard: https://proappst
 - Transitions carry `AND status = …` guards; creates are idempotent by client id.
 - Schema lives in `migrations.json`, additive only; never edit an applied migration.
 - Add a negative test to `qa/actions.mjs` for every scoped action you add.
+
+## Styling
+
+Tailwind 4 utilities on the PAS tokens ([ADR-011](https://docs.proappstore.online/adr/011-tailwind-on-pas-tokens/)), three layers in order:
+SDK components (`@proappstore/sdk/ui`), then utilities in `className` (`text-ink`, `text-muted`, `bg-panel`, `border-line`,
+`bg-accent`, `text-danger`, `rounded-pas`), then `web/src/index.css`, which holds only the tokens, `@theme inline` and `@layer base`.
+Never add feature classes to `index.css`, and never write `text-[var(--ink)]`. Details: https://docs.proappstore.online/ui/#styling

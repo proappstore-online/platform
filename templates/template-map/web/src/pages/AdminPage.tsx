@@ -45,25 +45,25 @@ export function AdminPage() {
 
   return (
     <Section title="Admin">
-      <h2 className="display-font text-lg font-semibold text-[var(--ink)]">Categories</h2>
+      <h2 className="display-font text-lg font-semibold text-ink">Categories</h2>
       <form onSubmit={addCategory} className="mt-2 flex flex-wrap items-end gap-2">
         <div className="min-w-40"><Field label="Name"><Input aria-label="Category name" value={cat.name} onChange={(e) => setCat({ ...cat, name: e.target.value })} /></Field></div>
         <div className="w-20"><Field label="Icon"><Input aria-label="Category icon" value={cat.icon} onChange={(e) => setCat({ ...cat, icon: e.target.value })} placeholder="☕" /></Field></div>
-        <Field label="Colour"><input aria-label="Category colour" type="color" value={cat.color} onChange={(e) => setCat({ ...cat, color: e.target.value })} className="h-9 w-12 rounded border border-[var(--line)]" /></Field>
+        <Field label="Colour"><input aria-label="Category colour" type="color" value={cat.color} onChange={(e) => setCat({ ...cat, color: e.target.value })} className="h-9 w-12 rounded border border-line" /></Field>
         <Button type="submit" size="sm">Add category</Button>
       </form>
       <ul className="mt-2 flex flex-wrap gap-2">
         {categories.map((c) => (
-          <li key={c.id} className="flex items-center gap-2 rounded-full border border-[var(--line)] px-3 py-1 text-sm">
+          <li key={c.id} className="flex items-center gap-2 rounded-full border border-line px-3 py-1 text-sm">
             <span aria-hidden="true" className="inline-block h-3 w-3 rounded-full" style={{ background: c.color }} />
-            <span className="text-[var(--ink)]">{c.icon} {c.name}</span>
-            <span className="text-xs text-[var(--muted)]">{stats.find((s) => s.id === c.id)?.active_count ?? 0} active</span>
-            <button type="button" aria-label={`Delete category ${c.name}`} onClick={() => deleteCategory(c)} className="text-xs text-[var(--danger)] hover:underline">✕</button>
+            <span className="text-ink">{c.icon} {c.name}</span>
+            <span className="text-xs text-muted">{stats.find((s) => s.id === c.id)?.active_count ?? 0} active</span>
+            <button type="button" aria-label={`Delete category ${c.name}`} onClick={() => deleteCategory(c)} className="text-xs text-danger hover:underline">✕</button>
           </li>
         ))}
       </ul>
 
-      <h2 className="display-font mt-8 text-lg font-semibold text-[var(--ink)]">All {RECORD.plural}</h2>
+      <h2 className="display-font mt-8 text-lg font-semibold text-ink">All {RECORD.plural}</h2>
       <form role="search" onSubmit={(e) => { e.preventDefault(); load() }} className="mt-2 flex flex-wrap gap-2">
         <div className="min-w-40 flex-1"><Input aria-label="Search records" placeholder="Name or owner" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} /></div>
         <select aria-label="Status" value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })} className={selectClass + ' w-auto'}><option value="">Any status</option><option value="active">active</option><option value="hidden">hidden</option></select>
@@ -76,15 +76,15 @@ export function AdminPage() {
       {places && places.length ? (
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs uppercase tracking-wide text-[var(--muted)]"><th className="py-2">Name</th><th>Owner</th><th>Category</th><th>Status</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
+            <thead><tr className="text-left text-xs uppercase tracking-wide text-muted"><th className="py-2">Name</th><th>Owner</th><th>Category</th><th>Status</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
               {places.map((p) => (
-                <tr key={p.id} className="border-t border-[var(--line)]">
-                  <td className="py-2"><a href={`#/p/${p.id}`} className="font-medium text-[var(--ink)] hover:underline">{p.name}</a></td>
-                  <td className="text-[var(--muted)]">{p.owner_name || p.owner_id}</td>
+                <tr key={p.id} className="border-t border-line">
+                  <td className="py-2"><a href={`#/p/${p.id}`} className="font-medium text-ink hover:underline">{p.name}</a></td>
+                  <td className="text-muted">{p.owner_name || p.owner_id}</td>
                   <td><select aria-label={`Category for ${p.name}`} value={p.category_id ?? ''} onChange={(e) => recategorise(p, e.target.value)} className={selectClass + ' w-auto py-1'}><option value="">None</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></td>
                   <td><Badge value={p.status} /></td>
-                  <td className="text-[var(--muted)]">{when(p.updated_at)}</td>
+                  <td className="text-muted">{when(p.updated_at)}</td>
                   <td className="whitespace-nowrap text-right">
                     {p.status === 'active' ? <Button size="sm" variant="ghost" onClick={() => setStatus(p, 'hidden')}>Hide</Button> : <Button size="sm" variant="ghost" onClick={() => setStatus(p, 'active')}>Show</Button>}
                     <Button size="sm" variant="danger" onClick={() => remove(p)}>Delete</Button>
@@ -95,7 +95,7 @@ export function AdminPage() {
           </table>
         </div>
       ) : null}
-      {msg ? <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{msg}</p> : null}
+      {msg ? <p role="alert" className="mt-3 text-sm text-danger">{msg}</p> : null}
     </Section>
   )
 }

@@ -55,29 +55,29 @@ export function MapPage({ selected }: { selected: string | null }) {
     <div className="flex flex-1 flex-col md:flex-row" style={{ minHeight: 'calc(100dvh - 8rem)' }}>
       <div className="relative flex-1">
         <MapView view={view} onViewChange={onViewChange} markers={markers} selectedId={selected} onSelect={select} offline={!online} className="absolute inset-0" />
-        <div className="absolute left-2 right-14 top-2 z-10 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-2 shadow md:right-auto md:w-[28rem]">
-          <FilterBar value={filter} onChange={setFilter} categories={categories} onLocate={geo.locate} locating={geo.busy} extra={<a href="#/new" className="text-sm font-semibold text-[var(--accent)] hover:underline">+ Add</a>} />
-          {geo.error ? <p role="alert" className="mt-1 text-xs text-[var(--danger)]">{geo.error}</p> : null}
+        <div className="absolute left-2 right-14 top-2 z-10 rounded-pas border border-line bg-panel-strong p-2 shadow md:right-auto md:w-[28rem]">
+          <FilterBar value={filter} onChange={setFilter} categories={categories} onLocate={geo.locate} locating={geo.busy} extra={<a href="#/new" className="text-sm font-semibold text-accent hover:underline">+ Add</a>} />
+          {geo.error ? <p role="alert" className="mt-1 text-xs text-danger">{geo.error}</p> : null}
         </div>
-        <button type="button" onClick={() => setSheetOpen((o) => !o)} aria-expanded={sheetOpen} aria-controls="map-sheet" className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--line)] bg-[var(--panel-strong)] px-4 py-2 text-sm font-semibold text-[var(--ink)] shadow md:hidden">
+        <button type="button" onClick={() => setSheetOpen((o) => !o)} aria-expanded={sheetOpen} aria-controls="map-sheet" className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-line bg-panel-strong px-4 py-2 text-sm font-semibold text-ink shadow md:hidden">
           {state.kind === 'ready' ? `${state.total} ${state.total === 1 ? RECORD.noun : RECORD.plural} here` : 'List'}
         </button>
       </div>
-      <aside id="map-sheet" aria-label={`${RECORD.plural} in view`} className={`border-t border-[var(--line)] bg-[var(--paper)] md:w-96 md:border-l md:border-t-0 ${sheetOpen ? 'max-h-[55dvh]' : 'max-h-0 md:max-h-none'} overflow-y-auto transition-all md:max-h-none`}>
+      <aside id="map-sheet" aria-label={`${RECORD.plural} in view`} className={`border-t border-line bg-paper md:w-96 md:border-l md:border-t-0 ${sheetOpen ? 'max-h-[55dvh]' : 'max-h-0 md:max-h-none'} overflow-y-auto transition-all md:max-h-none`}>
         {selectedPlace ? (
           <div className="p-4">
-            <button type="button" onClick={() => select(null)} className="mb-2 text-xs text-[var(--muted)] hover:underline">← Back to the list</button>
+            <button type="button" onClick={() => select(null)} className="mb-2 text-xs text-muted hover:underline">← Back to the list</button>
             <PlaceDetail place={selectedPlace} category={byId.get(selectedPlace.category_id ?? '')} onChanged={reload} compact />
           </div>
         ) : (
           <div className="p-4">
-            <div className="mb-2 flex items-center justify-between text-xs text-[var(--muted)]">
+            <div className="mb-2 flex items-center justify-between text-xs text-muted">
               <span>{state.kind === 'ready' ? `${state.total} in view${state.total > state.places.length ? ` (showing ${state.places.length})` : ''}` : ''}</span>
-              <a href="#/list" className="font-semibold text-[var(--accent)] hover:underline">Full list</a>
+              <a href="#/list" className="font-semibold text-accent hover:underline">Full list</a>
             </div>
             {state.kind === 'loading' ? <State kind="loading" /> : null}
             {state.kind === 'offline' || state.kind === 'denied' || state.kind === 'error' ? <State kind={stateFor(new Error(state.message))} action={<Button size="sm" variant="secondary" onClick={reload}>Retry</Button>} /> : null}
-            {state.kind === 'ready' && sorted.length === 0 ? <State kind="empty" title={`No ${RECORD.plural} in this area`} description="Zoom out, clear the filters, or add one." action={<a href="#/new" className="text-sm font-semibold text-[var(--accent)] hover:underline">Add a {RECORD.noun}</a>} /> : null}
+            {state.kind === 'ready' && sorted.length === 0 ? <State kind="empty" title={`No ${RECORD.plural} in this area`} description="Zoom out, clear the filters, or add one." action={<a href="#/new" className="text-sm font-semibold text-accent hover:underline">Add a {RECORD.noun}</a>} /> : null}
             <ul aria-label={`${RECORD.plural} list`} className="space-y-2">
               {sorted.map((p) => <PlaceCard key={p.id} place={p} category={byId.get(p.category_id ?? '')} selected={p.id === selected} onSelect={() => select(p.id)} />)}
             </ul>
