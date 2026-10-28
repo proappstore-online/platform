@@ -8,6 +8,25 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.11
+
+Tailwind on PAS tokens becomes the one styling model for React apps (#491,
+[ADR-011](../adr/011-tailwind-on-pas-tokens.md)).
+
+- **Added** — none.
+- **Changed** — PAS-STACK-001 no longer says a React app MAY use any UI
+  framework: a React app MUST style with Tailwind 4 utilities on the PAS design
+  tokens, and apps not on Tailwind are outside the `css-discipline` check.
+  PAS-STACK-022 adds the three-layer rule (components, then Tailwind utilities
+  on token colours, with `index.css` holding only tokens and base layers) and
+  names the *CSS discipline* check as its enforcement. That check ships as a
+  warning first and becomes a failure after the fleet rollout (epic #496).
+  Both clauses' *Since* line is now 1.11.
+- **Withdrawn** — none.
+- **Editorial** — the stack table row for the toolchain reads Required for React
+  apps. App branding is stated plainly: it lives in the values of the PAS
+  tokens, and migrating changes how they are used, never what they are set to.
+
 ## 1.10
 
 Documentation reconciliation, 25 October 2026 (#485).

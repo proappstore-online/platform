@@ -4,7 +4,7 @@ description: "Application Standard requirements for external integrations and th
 
 # Integrations and platform services
 
-**Standard version 1.10** · Chapter `INT` · Part of the [Application Standard](./index.md)
+**Standard version 1.11** · Chapter `INT` · Part of the [Application Standard](./index.md)
 
 **Scope.** Proxy and secrets, AI, maps, notifications, email and SMS, webhooks, subscriptions and licenses, MCP tools.
 
@@ -25,5 +25,5 @@ provides and are not restated here.
 
 ## Clauses
 
-No clauses are published in this chapter at standard version 1.10. Clauses are
+No clauses are published in this chapter at standard version 1.11. Clauses are
 added in minor versions and listed in the [changelog](./changelog.md).

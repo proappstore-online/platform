@@ -4,7 +4,7 @@ description: "Understand the Application Standard audit model, clause applicabil
 
 # Audit model
 
-**Standard version 1.10** · Part of the [Application Standard](./index.md)
+**Standard version 1.11** · Part of the [Application Standard](./index.md)
 
 This page defines the vocabulary an audit uses: how applicability is decided,
 what counts as evidence, how a clause is verified, how results and severities

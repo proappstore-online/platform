@@ -4,7 +4,7 @@ description: "Application Standard requirements for app data, migrations, regist
 
 # Data, actions, and Workers
 
-**Standard version 1.10** · Chapter `DATA` · Part of the [Application Standard](./index.md)
+**Standard version 1.11** · Chapter `DATA` · Part of the [Application Standard](./index.md)
 
 **Scope.** D1 schema and migrations, registered actions, per-user/project/tenant row scoping, KV, counters, storage, rooms and Durable Objects, Workers and service bindings.
 

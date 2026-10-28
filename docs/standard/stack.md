@@ -4,7 +4,7 @@ description: "Choose the supported app stack and platform services using the App
 
 # Stack and platform services
 
-**Standard version 1.10** · Chapter `STACK` · Part of the [Application Standard](./index.md)
+**Standard version 1.11** · Chapter `STACK` · Part of the [Application Standard](./index.md)
 
 **Scope.** Supported runtime and toolchain; SDK and CLI use; the platform service to use for each application need, and the substitutes that are unsupported.
 
@@ -31,7 +31,7 @@ and [OPS](./ops.md) chapters.
 | `migrations.json` | **Required** where the app has a D1 schema | repo root | [PAS-STACK-008](#pas-stack-008) |
 | Runtime monitoring (`app.logs`, on by default) | **Required** | `initPro` options | [PAS-STACK-021](#pas-stack-021) |
 | SDK UI components and design tokens | **Required** tokens; components recommended | `web/` | [PAS-STACK-022](#pas-stack-022) |
-| React 19 + Vite 8 + Tailwind 4 | **Optional** (template choice) | `web/` | [PAS-STACK-001](#pas-stack-001) |
+| React 19 + Vite 8 + Tailwind 4 | **Required** for React apps ([ADR-011](../adr/011-tailwind-on-pas-tokens.md)) | `web/` | [PAS-STACK-001](#pas-stack-001) |
 | KV, counters, storage, rooms, roles, proxy, AI, maps, notifications, email/SMS/webhooks, subscription gates, MCP | **Optional capabilities** — but when the need exists, the platform primitive is the required way to meet it | SDK modules | [PAS-STACK-009](#pas-stack-009) – [PAS-STACK-023](#pas-stack-023) |
 | `e2e/` Playwright suite | **Optional** | runs after deploy | [PAS-STACK-005](#pas-stack-005) |
 | Custom domain | **Optional** | `pas domain add` | [PAS-STACK-004](#pas-stack-004) |
@@ -123,15 +123,15 @@ provides and are not restated here.
 
 ### PAS-STACK-001 — The app is a TypeScript, Node 22, pnpm project scaffolded from the platform template {#pas-stack-001}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.1
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.11
 
-**Rule.** The app MUST be a TypeScript project with `"engines": { "node": ">=22" }` and a pinned `packageManager: pnpm@…`, created with `pas create` from `proappstore-online/template-app`. It MAY use any UI framework; React 19 + Vite 8 + Tailwind 4 is the template's choice, not a requirement.
+**Rule.** The app MUST be a TypeScript project with `"engines": { "node": ">=22" }` and a pinned `packageManager: pnpm@…`, created with `pas create` from `proappstore-online/template-app`. A React app MUST style with Tailwind 4 utilities on the PAS design tokens ([ADR-011](../adr/011-tailwind-on-pas-tokens.md)); apps not on Tailwind are outside the `css-discipline` check.
 
 **Applicability.** All apps.
 
 **Rationale.** The deploy workflow, compliance checks, the CLI and the SDK are exercised against this toolchain. A hand-rolled project misses the workflows, `migrations.json`, `mcp.json` and `CLAUDE.md` the template ships, and each missing piece becomes its own audit failure.
 
-**Recommended implementation.** Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)); the template comes from the [approved-template catalogue](../templates/index.md), which records the copied revision on the app. Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Swap the frontend framework inside `web/` if you wish; keep `web/dist` as the build output the deploy workflow locates.
+**Recommended implementation.** Run `pas create <app-id>` (see [CLI overview](../cli-overview.md#create)); the template comes from the [approved-template catalogue](../templates/index.md), which records the copied revision on the app. Keep the root `package.json` `engines`, `packageManager` and the `prebuild` compliance hook the template generates. Keep React 19 + Vite 8 + Tailwind 4 in `web/` and style as [PAS-STACK-022](#pas-stack-022) describes; keep `web/dist` as the build output the deploy workflow locates.
 
 **Conforming example.**
 
@@ -861,15 +861,23 @@ initPro({ appId: 'my-app', monitoring: { auto: false } })
 
 ### PAS-STACK-022 — UI is built on the SDK's components and design tokens {#pas-stack-022}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support* · **Since:** 1.1
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance checks *Brand fonts present*, *Brand tokens defined*, *No brand overrides*, *Dark mode support*, and the *CSS discipline* check ([ADR-011](../adr/011-tailwind-on-pas-tokens.md); a warning until the fleet rollout, then a failure) · **Since:** 1.11
 
-**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens and dark-mode scheme rather than overriding the brand. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
+**Rule.** The app SHOULD build its shell with `@proappstore/sdk/ui` (`AppShell`, or the composable `Avatar`, `ProfileMenu`, `ThemeToggle`, `SignInButton`, `GateScreen`, …) and MUST use the platform design tokens and dark-mode scheme rather than overriding the brand. A React app MUST style in the three layers of [ADR-011](../adr/011-tailwind-on-pas-tokens.md): components first, then Tailwind utilities on the token colours, with `index.css` holding only tokens and base layers. App owners control their product branding and MAY show no ProAppStore/PAS/PRO attribution, advertising or URL.
 
 **Applicability.** All apps with a user interface.
 
 **Rationale.** The shared design system and components provide accessible, well-tested auth, subscription and profile behaviour; re-implementing them re-implements those bugs. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn't — every app is different, so apps may use their own licensed fonts. They do not require platform marketing in the app UI.
 
 **Recommended implementation.** Wrap the whole app in `<AppShell app={app} branding="app" nav={…}>…</AppShell>`, listing every screen in `nav`. The shell provides the gates, the app-owned topbar, the main navigation and the resilience layer without platform advertising. Customise its chrome with `renderTopbar` and the exported components. Use the components and hooks inside screens, keeping the tokens and dark mode. `branding="platform"` remains an intentional opt-in for apps that want the legacy platform attribution. Never override the `--md-*`/brand CSS variables.
+
+Style in three layers, in this order of preference ([ADR-011](../adr/011-tailwind-on-pas-tokens.md), [Styling](../ui.md#styling)):
+
+1. **Components** for anything that repeats (buttons, cards, inputs, dialogs, empty states): `@proappstore/sdk/ui`, or app-local components.
+2. **Tailwind utilities on token colours** (`text-ink bg-panel border-line`, through the `@theme` mapping of the tokens) for layout and one-off styling, in the component's `className`.
+3. **`web/src/index.css`** holds only `@import "tailwindcss"`, `@source`, the token blocks (`:root`, `:root[data-theme='dark']`), `@theme`, and `@layer base` / `@layer components`. No unlayered rules, no feature classes, no hex outside the token blocks. `@media print` is allowed for print sheets.
+
+Branding stays with the app: its palette lives in the *values* of the PAS tokens (`--accent: #d86f4d` in `:root` and the dark block). Migrating to this model changes how the tokens are used, never what they are set to.
 
 **Conforming example.**
 

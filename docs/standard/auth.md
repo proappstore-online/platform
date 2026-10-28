@@ -4,7 +4,7 @@ description: "Application Standard requirements for app identity, sign-in sessio
 
 # Identity, sessions, and permissions
 
-**Standard version 1.10** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
+**Standard version 1.11** · Chapter `AUTH` · Part of the [Application Standard](./index.md)
 
 **Scope.** Platform-cookie authentication, sign-in and sign-out, platform/team/app RBAC, and permissions UI.
 
