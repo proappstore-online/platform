@@ -40,21 +40,65 @@ const CREATE_MIRROR = `CREATE TABLE IF NOT EXISTS _pas_entitlements (
   PRIMARY KEY (product, subject)
 )`;
 
+/**
+ * A table an app migration already created (chess-academy's 0061 does, so its paywall SQL works before the platform ships) is adopted,
+ * never dropped or recreated: the columns it lacks are added, and its rows stay. The contract is `product`, `subject` plus these.
+ * A NOT NULL column is added with a default so existing rows remain valid; `version` starts at 0, so the platform's copy of a row
+ * always replaces what the app had for the same (product, subject).
+ */
+const ADOPT_COLUMNS: Record<string, string> = {
+  status: "TEXT NOT NULL DEFAULT 'expired'",
+  period_end: 'INTEGER',
+  grace_until: 'INTEGER',
+  renews: 'INTEGER NOT NULL DEFAULT 0',
+  buyer_user_id: 'TEXT',
+  version: 'INTEGER NOT NULL DEFAULT 0',
+  updated_at: 'INTEGER NOT NULL DEFAULT 0',
+};
+/** The upsert's ON CONFLICT needs a key on (product, subject); an adopted table may have none. */
+const ADOPT_KEY = 'CREATE UNIQUE INDEX IF NOT EXISTS _pas_entitlements_product_subject ON _pas_entitlements (product, subject)';
+
 const UPSERT_MIRROR = `INSERT INTO _pas_entitlements (product, subject, status, period_end, grace_until, renews, buyer_user_id, version, updated_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(product, subject) DO UPDATE SET status = excluded.status, period_end = excluded.period_end, grace_until = excluded.grace_until,
     renews = excluded.renews, buyer_user_id = excluded.buyer_user_id, version = excluded.version, updated_at = excluded.updated_at
   WHERE excluded.version >= _pas_entitlements.version`;
 
-/** The statements of one push: create the table if the app does not have it yet, then one guarded upsert per row. */
-export function mirrorStatements(rows: MirrorRow[]): { sql: string; params?: unknown[] }[] {
+/**
+ * What it takes to make an existing `_pas_entitlements` hold the contract: an ADD COLUMN for each column it lacks, then the key.
+ * Throws when the table has no `product` and `subject`: it is not an entitlement table, and the platform does not alter it.
+ */
+export function adoptionStatements(existing: readonly string[]): { sql: string }[] {
+  const have = new Set(existing.map((c) => c.toLowerCase()));
+  if (!have.has('product') || !have.has('subject')) {
+    throw new Error('_pas_entitlements exists without the product and subject columns, so it is not an entitlement table and is left alone');
+  }
   return [
-    { sql: CREATE_MIRROR },
+    ...Object.entries(ADOPT_COLUMNS).filter(([name]) => !have.has(name)).map(([name, def]) => ({ sql: `ALTER TABLE _pas_entitlements ADD COLUMN ${name} ${def}` })),
+    { sql: ADOPT_KEY },
+  ];
+}
+
+/**
+ * The statements of one push, then one guarded upsert per row. `existing` is the column list of the app's `_pas_entitlements` (empty when
+ * it has none): without a table it is created; with one it is adopted (see {@link adoptionStatements}).
+ */
+export function mirrorStatements(rows: MirrorRow[], existing: readonly string[] = []): { sql: string; params?: unknown[] }[] {
+  return [
+    ...(existing.length === 0 ? [{ sql: CREATE_MIRROR }] : adoptionStatements(existing)),
     ...rows.map((r) => ({
       sql: UPSERT_MIRROR,
       params: [r.product_key, r.subject, r.status, r.period_end, r.grace_until, r.renews, r.buyer_user_id, r.version, r.updated_at],
     })),
   ];
+}
+
+/** The columns of the app's `_pas_entitlements`, lowercased; empty when the app has no such table. A refusal throws, so the rows stay dirty. */
+async function existingColumns(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, appId: string): Promise<string[]> {
+  const res = await forwardToDataWorker(env as Env, appId, 'query', { sql: 'PRAGMA table_info(_pas_entitlements)' }, null);
+  if (!res.ok) throw new Error(`column discovery refused (${res.status})`);
+  const body = (await res.json()) as { rows?: { name?: unknown }[] };
+  return (body.rows ?? []).map((r) => String(r.name ?? '').toLowerCase()).filter((n) => n !== '');
 }
 
 /** Push one app's dirty rows. Returns how many rows were mirrored; a failed push mirrors none and leaves them dirty. */
@@ -68,7 +112,8 @@ export async function mirrorApp(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTE
 
   let ok = false;
   try {
-    const res = await forwardToDataWorker(env as Env, appId, 'batch', { statements: mirrorStatements(rows) }, null);
+    const statements = mirrorStatements(rows, await existingColumns(env, appId));
+    const res = await forwardToDataWorker(env as Env, appId, 'batch', { statements }, null);
     ok = res.ok;
     if (!ok) console.warn('[billing] mirror push refused', { appId, status: res.status });
   } catch (e) {

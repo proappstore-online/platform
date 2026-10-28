@@ -31,8 +31,12 @@ const rows = async () => (await env.DB.prepare("SELECT subject, status, version,
 interface Push { statements: { sql: string; params?: unknown[] }[]; token: string | null }
 let pushes: Push[] = [];
 const dataWorker = () => fetchMock.get(`https://pas-data-club.${env.DATA_WORKER_HOST}`);
-/** The app's data worker accepts one push and records it. */
-const accepts = (status = 200) => dataWorker().intercept({ path: '/batch', method: 'POST' }).reply(status, (req) => {
+/** The app's data worker accepts one push and records it. Each push first asks which columns the app's `_pas_entitlements` has (#508). */
+const accepts = (status = 200, columns: string[] = []) => {
+  dataWorker().intercept({ path: '/query', method: 'POST' }).reply(200, { rows: columns.map((name) => ({ name })) });
+  return acceptsBatch(status);
+};
+const acceptsBatch = (status: number) => dataWorker().intercept({ path: '/batch', method: 'POST' }).reply(status, (req) => {
   const headers = Object.fromEntries(Object.entries((req.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]));
   pushes.push({ ...(JSON.parse(String(req.body)) as { statements: Push['statements'] }), token: headers['x-internal-token'] ?? null });
   return status === 200 ? { results: [] } : { error: 'internal server error' };
@@ -72,6 +76,40 @@ describe('the mirror statements, run on a real D1 (#508)', () => {
   it('carries the empty subject and NULLs', async () => {
     await push([row({ subject: '', period_end: null, buyer_user_id: null })]);
     expect((await env.DB.prepare("SELECT period_end, buyer_user_id FROM _pas_entitlements WHERE subject = ''").first())).toEqual({ period_end: null, buyer_user_id: null });
+  });
+});
+
+describe('adopting a _pas_entitlements the app already created, on a real D1 (#508)', () => {
+  const row = (over: Partial<MirrorRow> = {}): MirrorRow => ({ product_key: 'child_term', subject: 'kid-a', status: 'active', period_end: 100, grace_until: null, renews: 0, buyer_user_id: 'gh:2', version: 1, updated_at: 1, ...over });
+  // chess-academy's migration 0061 shape: the contract columns, no `version`.
+  const LEGACY = `CREATE TABLE _pas_entitlements (product TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, period_end INTEGER, grace_until INTEGER,
+    renews INTEGER NOT NULL DEFAULT 0, buyer_user_id TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (product, subject))`;
+  const columns = async () => ((await env.DB.prepare('PRAGMA table_info(_pas_entitlements)').all<{ name: string }>()).results ?? []).map((c) => c.name);
+  const push = async (rs: MirrorRow[]) => { for (const st of mirrorStatements(rs, await columns())) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run(); };
+
+  it('adds the missing column, keeps the app\'s rows and key, and the platform\'s row wins for the same (product, subject)', async () => {
+    await env.DB.prepare(LEGACY).run();
+    await env.DB.prepare("INSERT INTO _pas_entitlements VALUES ('child_term', 'kid-old', 'active', 5, NULL, 0, 'gh:9', 5)").run();
+    await env.DB.prepare("INSERT INTO _pas_entitlements VALUES ('child_term', 'kid-a', 'expired', 1, NULL, 0, 'gh:9', 5)").run();
+    await push([row()]);
+    expect(await columns()).toContain('version');
+    const all = (await env.DB.prepare('SELECT subject, status, version FROM _pas_entitlements ORDER BY subject').all<Record<string, unknown>>()).results;
+    expect(all).toEqual([{ subject: 'kid-a', status: 'active', version: 1 }, { subject: 'kid-old', status: 'active', version: 0 }]);
+    await push([row({ status: 'expired', version: 0 })]); // an older push cannot undo it
+    expect((await env.DB.prepare("SELECT status FROM _pas_entitlements WHERE subject = 'kid-a'").first())).toEqual({ status: 'active' });
+  });
+
+  it('a push through the app\'s data worker carries the ALTER and the key before the rows, and they apply on the legacy table', async () => {
+    await env.DB.prepare(LEGACY).run();
+    await seedPurchase('one_time');
+    accepts(200, ['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'updated_at']);
+    await handleAppBillingEvent(env.DB, oneOff(), at('2026-01-11T00:00:00Z'), async (appId) => { await mirrorApp(env, appId); });
+    const [p] = pushes;
+    expect(p!.statements[0]!.sql).toBe('ALTER TABLE _pas_entitlements ADD COLUMN version INTEGER NOT NULL DEFAULT 0');
+    expect(p!.statements[1]!.sql).toMatch(/^CREATE UNIQUE INDEX IF NOT EXISTS/);
+    expect(p!.statements.map((st) => st.sql).join(' ')).not.toMatch(/DROP|CREATE TABLE/);
+    for (const st of p!.statements) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run();
+    expect((await env.DB.prepare('SELECT subject, status, version FROM _pas_entitlements ORDER BY subject').all()).results).toHaveLength(3);
   });
 });
 
