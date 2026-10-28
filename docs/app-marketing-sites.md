@@ -75,6 +75,19 @@ deploy, and because only a successful, verified activation moves the pointer,
 the previous site keeps serving. Editing the folder and pushing publishes a new
 revision; re-running a deploy for the same commit is a no-op.
 
+## Unedited template copy: the `marketing-content` check (#498)
+
+An app can publish `marketing/` exactly as scaffolded: the template's headline and benefits, the default operator on the legal pages, no contact, no imagery. `pas check` (every app's prebuild and `compliance.yml`) now reads `marketing/src/site.ts` and warns on:
+
+| Rule | Flags |
+|---|---|
+| `template-copy` | the headline `Explore <name>.`, the summary sentence, benefit titles and bodies, or how-it-works steps that are still the template's own words |
+| `operator-contact` | the default operator `The <name> team` (or none), no `contactEmail`, no `governingLaw` for the Terms |
+| `imagery` | no hero image and no screenshots; without a hero image the social preview is the app icon |
+| `placeholder` | an `APPNAME` the scaffold never replaced |
+
+It only recognises the template's strings, so any copy an owner has written passes. It is a **warning** in this release and does not stop a deploy. Blocking the first activation needs the same signal in the deploy step, and the deploy summary and console need to show it; both are still to do.
+
 ## Adding the site to an existing app: `pas marketing add` (#410)
 
 New apps get `marketing/` from `template-app`. For an app created before it,

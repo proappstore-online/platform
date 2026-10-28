@@ -2,6 +2,7 @@ import { checkAccessibilityStatic } from './checks/accessibility-static.js';
 import { checkBrandFonts } from './checks/brand-fonts.js';
 import { checkBrandTokens } from './checks/brand-tokens.js';
 import { checkCssDiscipline } from './checks/css-discipline.js';
+import { checkMarketingContent } from './checks/marketing-content.js';
 import { checkBundleSize } from './checks/bundle-size.js';
 import { checkClaudeMdSlim } from './checks/claude-md-slim.js';
 import { checkDarkMode } from './checks/dark-mode.js';
@@ -74,6 +75,7 @@ export {
   checkBrandFonts,
   checkBrandTokens,
   checkCssDiscipline,
+  checkMarketingContent,
   checkBundleSize,
   checkClaudeMdSlim,
   checkDarkMode,
@@ -130,6 +132,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'brand-tokens', run: checkBrandTokens },
   { id: 'no-brand-overrides', run: checkNoBrandOverrides },
   { id: 'css-discipline', run: checkCssDiscipline },
+  { id: 'marketing-content', run: checkMarketingContent },
   { id: 'no-scroll', run: checkNoScroll },
   { id: 'viewport-support', run: checkViewportSupport },
   { id: 'unsafe-vh', run: checkUnsafeVh },
