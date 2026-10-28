@@ -530,7 +530,8 @@ export function excerpt(text: string): string {
 
 class InvokeTimeout extends Error {}
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+/** `invoke()`'s race against its budget — e.g. HOOK_TIMEOUT_MS (#257). Exported for its own timing test; the real worker round trip is covered in runtime-tests. */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     p,

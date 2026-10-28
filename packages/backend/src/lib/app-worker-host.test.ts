@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APP_MODULE, BODY_EXCERPT_BYTES, MAX_BUNDLE_BYTES, SHIM_MODULE,
-  appWorkerHost, appWorkerShimSha, bundleSha256, excerpt, loaderId, parseBundle,
+  appWorkerHost, appWorkerShimSha, bundleSha256, excerpt, loaderId, parseBundle, withTimeout,
 } from './app-worker-host.js';
 import { HttpError } from './auth.js';
 import type { Env } from '../types.js';
@@ -107,6 +107,29 @@ describe('appWorkerHost backend switch', () => {
     await appWorkerHost(env).remove('a');
     expect(String(run.mock.calls[0])).toMatch(/token_hash = NULL[\s\S]*event_key_ct = NULL[\s\S]*config_version = config_version \+ 1/);
     expect(del).toHaveBeenCalledWith(['_app-workers/a/s/app.js']);
+  });
+});
+
+// #257: invoke()'s race against its budget (HOOK_TIMEOUT_MS = 60_000 for hooks). Only
+// the budget value was asserted before (hooks.test.ts); this exercises the race itself
+// on virtual time, since a real 40 s/70 s wait has no place in this suite.
+describe('withTimeout (#257)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a handler that takes 40 s succeeds within a 60 s budget', async () => {
+    const slow = new Promise<string>((resolve) => { setTimeout(() => resolve('ok'), 40_000); });
+    const result = withTimeout(slow, 60_000);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(await result).toBe('ok');
+  });
+
+  it('a handler that outlives the budget times out instead of hanging', async () => {
+    const hung = new Promise<string>((resolve) => { setTimeout(() => resolve('too late'), 70_000); });
+    const result = withTimeout(hung, 60_000);
+    const assertion = expect(result).rejects.toThrow('timed out after 60000 ms');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await assertion;
   });
 });
 
