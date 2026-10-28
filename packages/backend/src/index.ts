@@ -15,6 +15,8 @@ import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
 import { appBillingRoutes } from './routes/app-billing.js';
+import { appBillingAccountRoutes } from './routes/app-billing-account.js';
+import { fillChargeFees } from './lib/billing-ledger.js';
 import { sweepEntitlements } from './lib/entitlement-sweep.js';
 import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
@@ -318,6 +320,7 @@ v1.route('/', mcpGrantRoutes);
 v1.route('/', passkeyRoutes);
 v1.route('/', subscriptionRoutes);
 v1.route('/', appBillingRoutes); // #507: checkout for an app's own products
+v1.route('/', appBillingAccountRoutes); // #509: a buyer's own purchases, the portal, the owner's ledger, the enable flag
 v1.route('/', licenseRoutes);
 v1.route('/', storageRoutes);
 v1.route('/', mapsRoutes);
@@ -417,6 +420,8 @@ export default {
     // every five-minute tick before the less frequent maintenance work.
     // #508: entitlements whose term or grace ran out by the clock, and any mirror push that has not reached an app yet.
     ctx.waitUntil(sweepEntitlements(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[billing] entitlement sweep failed: ${(e as Error).message}`)));
+    // #509: Stripe's fee on charges that belong to an app purchase, read a few at a time.
+    ctx.waitUntil(fillChargeFees(env).catch((e) => console.error(`[billing] fee lookup failed: ${(e as Error).message}`)));
     ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
     const tickAt = event.scheduledTime ?? Date.now();
     // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled

@@ -14,6 +14,7 @@ import { SMS } from './sms.js';
 import { Storage } from './storage.js';
 import { Account } from './account.js';
 import { SubscriptionApi } from './subscription.js';
+import { BillingApi } from './billing.js';
 import { LicenseApi } from './license.js';
 import { Usage } from './usage.js';
 import { Email } from './email.js';
@@ -38,6 +39,8 @@ export type {
 } from './invites.js';
 export { Actions, ActionError } from './actions.js';
 export type { ActionVerifyResult, ActionCallOptions } from './actions.js';
+export { BillingApi } from './billing.js';
+export type { BillingProduct, BillingCheckoutRequest, BillingEntitlement, BillingPurchase, BillingMode, EntitlementStatus } from './billing.js';
 // #392: breadcrumbs, delivery health and React error-boundary capture.
 export type { Breadcrumb, BreadcrumbCategory, BreadcrumbData, LogHealth } from './logs.js';
 // #390: request context for app.logs.capture / captureException.
@@ -108,6 +111,8 @@ export class ProAppStore {
   readonly roles: Roles;
   readonly proxy: ApiProxy;
   readonly subscription: SubscriptionApi;
+  /** What this app sells (#509): products, checkout, the user's own purchases and entitlements, the customer portal. */
+  readonly billing: BillingApi;
   readonly license: LicenseApi;
   readonly db: Database;
   readonly storage: Storage;
@@ -155,6 +160,7 @@ export class ProAppStore {
     this.roles = new Roles(opts.appId, apiBase, this.auth);
     this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, apiBase, this.auth);
+    this.billing = new BillingApi(opts.appId, apiBase, this.auth);
     this.license = new LicenseApi(opts.appId, apiBase, this.auth);
     this.db = new Database(opts.appId, dataApiBase, this.auth);
     this.storage = new Storage(opts.appId, apiBase, this.auth, resolvePrivateApp(opts.visibility));

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { checkCommand } from './check.js';
 import { createApp } from './create.js';
+import { billingCommand } from './billing.js';
 import { domainCommand } from './domain.js';
 import { loginCommand } from './login.js';
 import { logoutCommand } from './logout.js';
@@ -68,6 +69,7 @@ program
 
 program.addCommand(checkCommand);
 program.addCommand(domainCommand);
+program.addCommand(billingCommand);
 program.addCommand(secretCommand);
 program.addCommand(proxyCommand);
 program.addCommand(integrateCommand);

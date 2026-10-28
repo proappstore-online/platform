@@ -8,9 +8,9 @@ Part of epic #506. An app declares the products it sells in `mcp.json`. The plat
 and runs Checkout on its own Stripe account. The app holds no Stripe key and runs no webhook receiver.
 
 !!! warning "What exists today"
-    Declaring products, the Stripe sync, app-authorized checkout (#507) and entitlements from Stripe's webhooks (#508) are built. The
-    SDK call, customer portal, CLI and the admin switch's API are not (#509). Checkout is **refused for every app** until an admin
-    enables billing for it, and that switch is a database flag until #509. Do not enable it for an app that takes real money before a
+    The whole flow is built: declaring products, the Stripe sync, app-authorized checkout (#507), entitlements from Stripe's webhooks
+    (#508), and the SDK, customer portal, CLI, revenue ledger and admin switch (#509). Checkout is **refused for every app** until a
+    platform admin enables billing for it (`PUT /v1/admin/apps/<id>/billing`). Do not enable it for an app that takes real money before a
     live test of the whole flow: it has only been exercised against signed test payloads and a mocked Stripe client.
 
 ## Declaring products
@@ -181,3 +181,65 @@ late or repeated push never overwrites newer state (`version`), so the copy can 
 backwards. `status` in the copy is the status when it was last written: an entitlement that has just run out is moved on by the next sweep.
 
 The Pro subscription endpoints (`/v1/checkout`, `/v1/portal`, `/v1/pricing`) are separate and unchanged.
+
+## The SDK
+
+```ts
+const products = await app.billing.products()            // the app's active products; 403 until billing is enabled
+const { url } = await app.billing.checkout({             // start Stripe checkout, then location.assign(url)
+  product: 'child_term', subjects: ['kid-a', 'kid-b'], renew: true,
+  successUrl: 'https://club.proappstore.online/thanks', cancelUrl: 'https://club.proappstore.online/',
+})
+const mine = await app.billing.entitlements({ subjects: ['kid-a'] })  // the SIGNED-IN USER's own entitlements only
+const receipts = await app.billing.purchases()           // their own purchases in this app
+const { url: portal } = await app.billing.portal('https://club.proappstore.online/account')  // cancel a renewal, receipts
+```
+
+Every call is the signed-in user's, and the server reads the user from the session, never from the request: one buyer cannot see or
+probe another's purchases or entitlements, and the portal opens for the caller's own Stripe customer only (and only if they bought
+something in this app). `return`/`success`/`cancel` URLs must be on the app's own origins. Use `entitlements()` to *show* state; enforce
+access in your SQL (below).
+
+## Recipe: a paywall for a per-child product
+
+1. Declare a product with `subject: "required"` and an `authorize` action (a query whose single row says `allowed = 1`):
+
+    ```sql
+    -- authorize (callers: ["billing"]): may this user buy these children?
+    SELECT 1 AS allowed WHERE (SELECT COUNT(*) FROM children
+      WHERE family_id = (SELECT family_id FROM members WHERE user_id = :__user_id)
+        AND id IN (SELECT value FROM json_each(:subjects_json))) = json_array_length(:subjects_json)
+    ```
+
+2. The parent calls `app.billing.checkout({ product, subjects })`. One purchase of three children is three entitlements, and a renewal
+   extends all three.
+3. Gate the data in SQL with a JOIN on `_pas_entitlements` (see above); show `app.billing.entitlements()` in the UI.
+4. `app.billing.portal(returnUrl)` is where the parent cancels a renewal and downloads receipts.
+
+## The revenue ledger and the CLI
+
+The platform sells through its own Stripe account, so what an app earned is attributed in a per-app ledger: for each paid purchase, the
+**gross** paid, what has been **refunded** (partial refunds included, a running total that never goes down), and **Stripe's fee**
+(read from the charge's balance transaction a few minutes after the payment; shown as pending until then). Net is gross less refunds
+less the fee. A charge is tied to its purchase when read, so the ledger is the same whichever of Stripe's events arrives first.
+
+```
+pas billing products     --app <id>     # the declared products, and whether billing is enabled
+pas billing purchases    --app <id>     # the ledger: gross, refunded, fee, net per purchase, and totals
+pas billing entitlements --app <id> [--product <key>]
+```
+
+These are for the app's **owner** (and platform admins) only; the server answers 403 to anyone else, and buyers never see fees or each
+other. The fee is in Stripe's balance currency, so a purchase made in another currency shows the fee in its own `feeCurrency` (`--json`).
+There is no payout in this ledger: it attributes revenue, it does not move money.
+
+## Enabling billing
+
+`app_billing.enabled` is off by default and re-registering a manifest never changes it. A platform admin sets it:
+
+```
+PUT /v1/admin/apps/<id>/billing   { "enabled": true }      GET /v1/admin/apps/<id>/billing
+```
+
+404 when the app declares no billing. With it off, `products()` and checkout answer 403 "billing is not enabled for this app"; a buyer's
+existing purchases, entitlements and portal keep working so nobody loses access to cancel a renewal.

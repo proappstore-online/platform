@@ -41,7 +41,7 @@ not create, provision, deploy or audit anything; hand those off.
    `app.auth`, `app.actions`, `app.db` (and `app.db.tenant()`), `app.kv`,
    `app.counters`, `app.storage`, `app.account` (per-app account deletion), `app.rooms`, `app.roles`, `app.invites`,
    `app.proxy`, `app.ai`, `app.maps`, `app.notifications`, `app.email`,
-   `app.sms`, `app.webhooks`, `app.subscription`, `app.license`,
+   `app.sms`, `app.webhooks`, `app.subscription`, `app.billing` (what the app itself sells, #509), `app.license`,
    `app.usage`, `app.logs`, `app.tokens`, and `app.worker` (the app's own
    server code — a gated prototype, never a default). Before citing a method, check it with
    `sdk_reference` (feature: `auth`, `kv`, `counters`, `rooms`, `proxy`,

@@ -26,7 +26,7 @@ const APP_ID = /^[a-z][a-z0-9-]{0,57}$/;
  * Redirect URLs may only go to the app's own origins (#507): its PAS subdomain, its active custom domains and their
  * subdomains, and localhost. A URL elsewhere would send a buyer, mid-payment, to a site the app does not control.
  */
-async function isAppRedirectUrl(db: D1Database, appId: string, raw: string): Promise<boolean> {
+export async function isAppRedirectUrl(db: D1Database, appId: string, raw: string): Promise<boolean> {
   let url: URL;
   try {
     url = new URL(raw);

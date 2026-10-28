@@ -144,6 +144,11 @@ export class Stripe {
     return this.get(`/v1/checkout/sessions/${encodeURIComponent(sessionId)}`);
   }
 
+  /** A balance transaction: `fee` is what Stripe kept, in the smallest unit of `currency` (#509 ledger). */
+  async getBalanceTransaction(id: string): Promise<{ id: string; fee: number; currency: string }> {
+    return this.get(`/v1/balance_transactions/${encodeURIComponent(id)}`);
+  }
+
   /**
    * Transfer funds from the platform's Stripe balance to a connected account.
    * Used by the monthly payout cron to pay developers their earned service fees.

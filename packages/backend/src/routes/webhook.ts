@@ -3,6 +3,7 @@ import type { Env } from '../types.js';
 import { verifyWebhookSignature } from '../lib/stripe.js';
 import { eventCarriesAppId } from '../lib/app-billing-events.js';
 import { handleAppBillingEvent } from '../lib/app-billing-handler.js';
+import { recordChargeEvent } from '../lib/billing-ledger.js';
 import { mirrorApp } from '../lib/entitlement-mirror.js';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
@@ -68,6 +69,14 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
 
   const event = JSON.parse(payload) as StripeEvent;
   const obj = event.data.object;
+
+  // #509: what a charge says (refund total, fee id) is kept for the revenue ledger, whichever path the event takes next.
+  try {
+    await recordChargeEvent(c.env.DB, event);
+  } catch (e) {
+    console.error('[billing] charge record failed', { type: event.type, error: e instanceof Error ? e.message : String(e) });
+    return c.text('charge record failed', 500);
+  }
 
   // #508: an event that carries our `app_id` belongs to an app's own purchase and never reaches the Pro handlers below. Those key a
   // checkout by `metadata.user_id` and would read an app purchase (which carries one too) as a Pro upgrade. Decided by the metadata
