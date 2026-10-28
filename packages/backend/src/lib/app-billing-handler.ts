@@ -77,7 +77,11 @@ async function applyFact(db: D1Database, fact: Exclude<AppBillingFact, { kind: '
   }
 }
 
-export async function handleAppBillingEvent(db: D1Database, event: unknown, now: number = Date.now()): Promise<BillingHandled> {
+/**
+ * `afterApplied` runs once the event is fully applied, with the app id: the route uses it to push the changed rows to the app's D1. It
+ * can never fail the event (the rows stay dirty and the sweep pushes them), so a failure in it is swallowed.
+ */
+export async function handleAppBillingEvent(db: D1Database, event: unknown, now: number = Date.now(), afterApplied?: (appId: string) => Promise<void>): Promise<BillingHandled> {
   const fact = parseAppBillingEvent(event);
   if (fact.kind === 'unrelated') return IGNORED;
   const raw = event as RawEvent;
@@ -94,5 +98,6 @@ export async function handleAppBillingEvent(db: D1Database, event: unknown, now:
   await applyFact(db, fact, eventTime(raw, now), now);
   await recomputePurchase(db, purchase.id, now);
   await db.prepare('UPDATE app_billing_events SET processed_at = ? WHERE event_id = ?').bind(Date.now(), eventId).run();
+  if (afterApplied) await afterApplied(fact.appId).catch((e) => console.warn('[billing] after-apply hook failed', { appId: fact.appId, error: e instanceof Error ? e.message : String(e) }));
   return { handled: true, purchaseId: purchase.id };
 }

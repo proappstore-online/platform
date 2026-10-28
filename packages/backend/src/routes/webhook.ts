@@ -3,6 +3,7 @@ import type { Env } from '../types.js';
 import { verifyWebhookSignature } from '../lib/stripe.js';
 import { eventCarriesAppId } from '../lib/app-billing-events.js';
 import { handleAppBillingEvent } from '../lib/app-billing-handler.js';
+import { mirrorApp } from '../lib/entitlement-mirror.js';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
 
@@ -73,7 +74,10 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
   // alone, so an app event the entitlements ignore (an unpaid session, a partial refund) still cannot fall through.
   if (eventCarriesAppId(event)) {
     try {
-      await handleAppBillingEvent(c.env.DB, event);
+      // Push the changed rows to the app's D1 after the response; a failed push leaves them dirty for the sweep.
+      await handleAppBillingEvent(c.env.DB, event, Date.now(), async (appId) => {
+        c.executionCtx.waitUntil(mirrorApp(c.env, appId).then(() => undefined, (e) => console.warn('[billing] mirror failed', { appId, error: e instanceof Error ? e.message : String(e) })));
+      });
     } catch (e) {
       // Not acknowledged: Stripe redelivers, and the handler is safe to repeat.
       console.error('[billing] app event failed', { type: event.type, error: e instanceof Error ? e.message : String(e) });

@@ -15,6 +15,7 @@ import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
 import { appBillingRoutes } from './routes/app-billing.js';
+import { sweepEntitlements } from './lib/entitlement-sweep.js';
 import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
 import { mapsRoutes } from './routes/maps.js';
@@ -414,6 +415,8 @@ export default {
     ctx.waitUntil(runScheduledActions({ env, now: event.scheduledTime ?? Date.now() }).catch((e) => console.error(`[schedule] executor failed: ${(e as Error).message}`)));
     // #355: broker delivery envelopes are intentionally short-lived. Sweep on
     // every five-minute tick before the less frequent maintenance work.
+    // #508: entitlements whose term or grace ran out by the clock, and any mirror push that has not reached an app yet.
+    ctx.waitUntil(sweepEntitlements(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[billing] entitlement sweep failed: ${(e as Error).message}`)));
     ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
     const tickAt = event.scheduledTime ?? Date.now();
     // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled

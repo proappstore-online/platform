@@ -77,7 +77,7 @@ const same = (a: EntitlementRow, e: Entitlement): boolean =>
   && a.renews === (e.renews ? 1 : 0) && a.buyer_user_id === e.buyerUserId && a.purchase_id === e.purchaseId;
 
 /** Recompute one subject. Returns true when the stored entitlement changed (its version rose). */
-async function recomputeSubject(db: D1Database, appId: string, productKey: string, subject: string, now: number): Promise<boolean> {
+export async function recomputeSubject(db: D1Database, appId: string, productKey: string, subject: string, now: number): Promise<boolean> {
   const entitlement = computeEntitlement(await factsFor(db, appId, productKey, subject), now);
   if (!entitlement) return false;
   const stored = await db.prepare('SELECT status, period_start, period_end, grace_until, renews, buyer_user_id, purchase_id FROM app_entitlements WHERE app_id = ? AND product_key = ? AND subject = ?')

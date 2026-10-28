@@ -8,10 +8,10 @@ Part of epic #506. An app declares the products it sells in `mcp.json`. The plat
 and runs Checkout on its own Stripe account. The app holds no Stripe key and runs no webhook receiver.
 
 !!! warning "What exists today"
-    This page covers the first of three parts (#507): declaring products, the Stripe sync, and **app-authorized checkout**.
-    Nothing yet receives Stripe's webhooks, so a completed payment does not yet create an entitlement (#508), and there is no
-    SDK call, customer portal, CLI or admin switch (#509). Checkout is therefore **refused for every app** until an admin
-    enables billing for it, and a purchase stays `pending`. Do not enable it for an app that takes real money.
+    Declaring products, the Stripe sync, app-authorized checkout (#507) and entitlements from Stripe's webhooks (#508) are built. The
+    SDK call, customer portal, CLI and the admin switch's API are not (#509). Checkout is **refused for every app** until an admin
+    enables billing for it, and that switch is a database flag until #509. Do not enable it for an app that takes real money before a
+    live test of the whole flow: it has only been exercised against signed test payloads and a mocked Stripe client.
 
 ## Declaring products
 
@@ -120,5 +120,64 @@ A buyer has one Stripe Customer across every app: the platform's, else the one a
 Only the app's own origins: its `<app>.proappstore.online` subdomain and any subdomain of it, its **active** custom domains and their
 subdomains, and `localhost`. HTTPS only (localhost may use HTTP), no credentials in the URL. A pending custom domain, another app's
 domain and look-alikes such as `club.proappstore.online.evil.example` are refused.
+
+## Entitlements
+
+A purchase becomes one **entitlement** per (product, subject): `active`, `grace`, `expired`, `refunded` or `canceled`, with
+`period_end`, `grace_until` and `renews`. A product with no subject has a single entitlement under the empty subject `''`.
+
+The platform receives Stripe's signed webhooks, tells an app's events apart by the `app_id` in their metadata (the Pro events keep their
+own path), and records what each event says. The entitlement is **computed from all the recorded facts every time**, never edited by an
+event, so replaying an event changes nothing, and events delivered in any order end in the same state.
+
+| Stripe event | Effect |
+|---|---|
+| `checkout.session.completed` | a paid one-off checkout is a payment of one term, for every subject it covered. A subscription is entitled by its invoices, not by the session |
+| `invoice.paid`, `invoice.payment_succeeded` | a payment of one interval, one per invoice id however many times it is reported |
+| `invoice.payment_failed` | `grace` until `period_end + grace_days`, then `expired`; a later payment clears it |
+| `customer.subscription.updated` | `cancel_at_period_end` switching on stops renewal but keeps the paid period; switching off restores it; an ended status is final. The newest event wins, by Stripe's own event time |
+| `customer.subscription.deleted` | `canceled` |
+| `charge.refunded` | `refunded` at once, when the charge is refunded **in full** |
+
+A payment buys one interval from the **previous `period_end`** (a renewal bought early does not lose the days left), or from the payment
+if the entitlement had lapsed. A purchase for three subjects makes three entitlements and a renewal extends all three. The term
+(interval and grace) is the one the buyer was sold at checkout, whatever the manifest says later.
+
+Stripe sends no event when a one-off term ends or a grace period runs out, so every platform tick (five minutes) a **sweep** moves them on:
+a one-off or non-renewing term at `period_end`, a grace period at `grace_until`. A renewing subscription just past `period_end` stays
+`active` for three days, waiting for Stripe's own `invoice.paid` or `invoice.payment_failed`, then expires.
+
+Limits worth knowing: a **partial refund** names no subject, so it changes no entitlement (handle it in Stripe or by hand). A refund of a
+charge made by a **subscription invoice** carries none of our metadata and is not yet resolved to its purchase. Payments made with a
+method that confirms later (`async_payment_succeeded`) are not handled yet.
+
+### Reading entitlements in your SQL
+
+The platform keeps a read-only copy in **your app's own database**, in a table it creates and maintains:
+
+```sql
+_pas_entitlements(product, subject, status, period_end, grace_until, renews, buyer_user_id, version, updated_at)
+-- primary key (product, subject); times in milliseconds
+```
+
+Your registered actions can `SELECT` and `JOIN` it, so the paywall is enforced in the same SQL as everything else:
+
+```sql
+SELECT c.* FROM children c
+  JOIN _pas_entitlements e ON e.product = 'child_term' AND e.subject = c.id
+ WHERE c.family_id = :family AND e.status IN ('active', 'grace')
+```
+
+Treat `grace` as still allowed, and show the buyer that payment is failing. **A forged client payload grants nothing**, because the table
+is written only by the platform.
+
+**Apps cannot write `_pas_*` tables.** Registration refuses an action whose SQL writes one, the migration lint refuses a migration that
+creates, alters, writes or drops one, and your data worker refuses raw SQL from an owner session that does (reading is fine). A table whose
+name starts with `_pas_` is reserved. The data worker's own check applies when that worker is next deployed (new apps now, existing apps on
+the next data-worker redeploy); registration and the migration lint apply immediately.
+
+The copy is pushed after each event and by the sweep. A push that fails (the app's database unreachable) is retried by the sweep, and a
+late or repeated push never overwrites newer state (`version`), so the copy can lag Stripe by a few minutes at worst but never goes
+backwards. `status` in the copy is the status when it was last written: an entitlement that has just run out is moved on by the next sweep.
 
 The Pro subscription endpoints (`/v1/checkout`, `/v1/portal`, `/v1/pricing`) are separate and unchanged.
