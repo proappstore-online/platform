@@ -140,6 +140,25 @@
       "live": false
     },
     {
+      "id": "css-discipline",
+      "name": "CSS discipline",
+      "clauses": [
+        {
+          "clauseId": "PAS-STACK-022",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022"
+        },
+        {
+          "clauseId": "PAS-STACK-001",
+          "url": "https://docs.proappstore.online/standard/stack/#pas-stack-001"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "all",
+      "limits": "Stylesheets of apps that depend on Tailwind (ADR-011): banned token aliases, unlayered rules, hex colours outside the token blocks and hand-written class selectors. Not that components are used or that the utilities are on token colours. A warning until the fleet rollout (#495).",
+      "live": false
+    },
+    {
       "id": "no-scroll",
       "name": "No scroll (games only)",
       "clauses": [

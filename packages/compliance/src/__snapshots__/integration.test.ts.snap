@@ -114,6 +114,32 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "css-discipline",
+    "citations": [
+      {
+        "clauseId": "PAS-STACK-022",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-022",
+      },
+      {
+        "clauseId": "PAS-STACK-001",
+        "url": "https://docs.proappstore.online/standard/stack/#pas-stack-001",
+      },
+    ],
+    "detail": "unlayered-rule 3 (.button, body, .hero); feature-classes 2 (.button, .hero)",
+    "evidence": {
+      "class": "source",
+      "detail": "unlayered-rule 3 (.button, body, .hero); feature-classes 2 (.button, .hero)",
+    },
+    "name": "CSS discipline",
+    "status": "warn",
+    "suggestions": [
+      "Run \`pas migrate tailwind-tokens --write\`, then move what remains into component className utilities (ADR-011).",
+      "Keep index.css to @import "tailwindcss", @source, the token blocks, @theme and @layer base/components.",
+      "Branding stays in the token values (--accent: …); migrating changes how tokens are used, not what they are set to.",
+    ],
+  },
+  {
+    "automation": "partial",
     "checkId": "dark-mode",
     "citations": [
       {

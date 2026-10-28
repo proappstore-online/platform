@@ -125,7 +125,7 @@ describe('mapFileSource', () => {
       ['web/src/index.css', '/* Manrope Fraunces */'],
     ]);
     const results = await runChecksFromFiles(files);
-    expect(results).toHaveLength(22);
+    expect(results).toHaveLength(23);
     const names = results.map((r) => r.name);
     expect(names).toContain('Accessibility static');
     expect(names).toContain('No unsafe 100vh');

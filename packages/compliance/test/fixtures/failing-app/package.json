@@ -1,4 +1,5 @@
 {
   "name": "APPNAME",
-  "private": true
+  "private": true,
+  "devDependencies": { "tailwindcss": "^4.0.0" }
 }
