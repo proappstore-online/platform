@@ -22,6 +22,7 @@ import { marketingCommand } from './marketing.js';
 import { permissionsCommand } from './permissions.js';
 import { brandCommand } from './brand.js';
 import { migrateCommand } from './migrate-tailwind-tokens.js';
+import { migrationsCommand } from './migrations-test.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
@@ -78,6 +79,7 @@ program.addCommand(sourcemapsCommand);
 program.addCommand(marketingCommand);
 program.addCommand(permissionsCommand);
 program.addCommand(migrateCommand);
+program.addCommand(migrationsCommand);
 program.addCommand(brandCommand);
 
 program.parseAsync().catch((err: unknown) => {

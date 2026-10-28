@@ -161,6 +161,26 @@ jobs:
             [ -f .vibe-check/badge.svg ] && cp .vibe-check/badge.svg "${{ steps.dist.outputs.dir }}/.vcqa/badge.svg" || true
           fi
 
+      - name: Test migrations on a fresh D1 (migrations.json chain + every mcp.json action)
+        if: hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'
+        run: |
+          # #503: apply the WHOLE chain to a fresh D1 (workerd's own engine, via miniflare) and run every action once
+          # with schema-valid sample params, BEFORE production applies anything. node:sqlite let a trigger through that
+          # broke every insert on D1 (bookkeeper #62 -> #63); this is the same SQLite the platform uses.
+          # Exit 1 = the app's fault (a migration statement or an action errors, other than an expected constraint
+          # rejection): the deploy fails and nothing ships. Exit 2 = the check could not start a D1 (miniflare/workerd
+          # flake, e.g. EPIPE): retried once, then it fails closed too. miniflare comes from npx, never from the app.
+          code=0
+          for attempt in 1 2; do
+            set +e
+            npx -y -p @proappstore/cli@latest -p miniflare@4.20250906.0 pas migrations test
+            code=$?
+            set -e
+            [ "$code" -ne 2 ] && break
+            echo "::warning::could not start a D1 to test against (attempt $attempt of 2)"
+          done
+          exit "$code"
+
       - name: Apply D1 migrations (migrations.json -> platform, keyless)
         if: hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'
         run: |

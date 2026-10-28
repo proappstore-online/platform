@@ -240,3 +240,75 @@ esac
     });
   });
 });
+
+describe('app-deploy.yml migration chain test (#503)', () => {
+  const NAME = 'Test migrations on a fresh D1 (migrations.json chain + every mcp.json action)';
+  const APPLY = 'Apply D1 migrations (migrations.json -> platform, keyless)';
+
+  const script = (): string => {
+    const body = step(NAME).split('run: |\n')[1];
+    expect(body, 'the step has a run block').toBeTruthy();
+    return body!.split('\n').map((l) => l.replace(/^ {10}/, '')).join('\n');
+  };
+
+  it('runs before production applies migrations, on the same condition, with miniflare pinned to the runtime tests\' version', () => {
+    expect(WORKFLOW.indexOf(`- name: ${NAME}`)).toBeGreaterThan(-1);
+    expect(WORKFLOW.indexOf(`- name: ${NAME}`)).toBeLessThan(WORKFLOW.indexOf(`- name: ${APPLY}`));
+    const cond = (name: string) => /\n {8}if: (.*)\n/.exec(step(name))![1];
+    expect(cond(NAME)).toBe(cond(APPLY));
+    const pinned = JSON.parse(readFileSync(new URL('../../runtime-tests/package.json', import.meta.url), 'utf8')).dependencies?.miniflare
+      ?? JSON.parse(readFileSync(new URL('../../runtime-tests/package.json', import.meta.url), 'utf8')).devDependencies?.miniflare;
+    expect(step(NAME)).toContain(`-p miniflare@${pinned}`);
+    expect(step(NAME)).toContain('pas migrations test');
+  });
+
+  describe('executed against a fake npx', () => {
+    /** `codes` is what successive npx runs exit with. */
+    function run(codes: number[]) {
+      const dir = mkdtempSync(join(tmpdir(), 'chain-'));
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(dir, 'codes'), codes.join('\n') + '\n');
+      writeFileSync(join(bin, 'npx'), `#!/bin/bash
+echo "$*" >> "${dir}/npx.log"
+code=$(head -n 1 "${dir}/codes"); tail -n +2 "${dir}/codes" > "${dir}/codes.next"; mv "${dir}/codes.next" "${dir}/codes"
+exit "\${code:-0}"
+`, { mode: 0o755 });
+      writeFileSync(join(dir, 'step.sh'), script());
+      const r = spawnSync('bash', ['-e', join(dir, 'step.sh')], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}` } });
+      const calls = (() => { try { return readFileSync(join(dir, 'npx.log'), 'utf8').trim().split('\n'); } catch { return []; } })();
+      return { code: r.status, out: r.stdout + r.stderr, calls };
+    }
+
+    it('passes when the chain tests clean, in one run', () => {
+      const r = run([0]);
+      expect(r.code).toBe(0);
+      expect(r.calls).toHaveLength(1);
+      expect(r.calls[0]).toMatch(/^-y -p @proappstore\/cli@latest -p miniflare@\S+ pas migrations test$/);
+    });
+
+    it("fails the deploy on the app's own failure (exit 1), without a retry", () => {
+      const r = run([1, 0]);
+      expect(r.code).toBe(1);
+      expect(r.calls).toHaveLength(1);
+    });
+
+    it('retries once when a D1 could not be started (exit 2), and passes if the second run does', () => {
+      const r = run([2, 0]);
+      expect(r.code).toBe(0);
+      expect(r.calls).toHaveLength(2);
+      expect(r.out).toContain('::warning::could not start a D1 to test against (attempt 1 of 2)');
+    });
+
+    it('fails closed when a D1 cannot be started twice', () => {
+      const r = run([2, 2]);
+      expect(r.code).toBe(2);
+      expect(r.calls).toHaveLength(2);
+    });
+
+    it('a failing app on the retry still fails the deploy', () => {
+      expect(run([2, 1]).code).toBe(1);
+    });
+  });
+});
+

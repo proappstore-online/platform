@@ -32,6 +32,7 @@ pas create <app-id> --with-worker   # also add worker/ — an app worker (see Ap
 pas check                           # run platform compliance checks locally
 pas brand icons                     # preview replacing the template's default icons with the app's lettermark (add --write to apply; custom icons are never touched)
 pas migrate tailwind-tokens         # preview rewriting text-[var(--muted)] to text-muted (add --write to apply)
+pas migrations test                 # apply migrations.json to a fresh D1 and run every mcp.json action once (needs miniflare: npx -p @proappstore/cli -p miniflare pas migrations test)
 
 # Publish
 pas publish                         # provision R2 route + D1 + Data Worker

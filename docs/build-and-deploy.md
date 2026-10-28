@@ -20,6 +20,17 @@ goes if we ever centralize. Decision record: [ADR-006](./adr/006-centralized-bui
    bare `vite build` (#204). The output (layout-adaptive: `dist/` or `web/dist/`)
    is `aws s3 sync`ed to the `pas-apps` R2 bucket under `apps/<app>/`, after
    `migrations.json` is applied and `mcp.json` is registered.
+   - **Migration chain test** (#503). Before `migrations.json` is applied to
+     production, the deploy applies the whole chain to a fresh D1 on workerd's own
+     engine (miniflare, fetched by `npx`, never a dependency of the app) and runs
+     every `mcp.json` action once with schema-valid sample params. It fails the
+     deploy on a migration statement that errors, and on an action whose SQL
+     errors for any reason other than a constraint rejection. This catches what
+     `node:sqlite` lets through, such as a trigger that applies cleanly but breaks
+     every insert. A constraint rejection with sample values (a foreign key, a unique
+     index, a trigger's `RAISE`) is reported, not failed. If the check cannot start
+     a D1 it retries once and then fails closed. Run it locally with
+     `npx -p @proappstore/cli@latest -p miniflare pas migrations test`.
    - **App worker step** ([App workers](./app-workers.md), ADR-009). This step
      is for apps with a `worker/package.json`. It runs between the migrations
      and the `mcp.json` registration, so a first deploy's hooks register
