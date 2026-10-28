@@ -400,16 +400,43 @@ html[data-text="sm"] { font-size: 14px; }
 html[data-text="lg"] { font-size: 18px; }
 html[data-text="xl"] { font-size: 20px; }
 
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
+/* ── Tokens as Tailwind colours (ADR-011) ─────────────────────────
+   Write text-ink, bg-panel, border-line, text-muted, rounded-pas in className.
+   \`inline\` keeps var(--ink) in the generated class, so the dark theme still switches it. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-deep: var(--paper-deep);
+  --color-ink: var(--ink);
+  --color-ink-strong: var(--ink-strong);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-panel: var(--panel);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --radius-pas: var(--radius);
+  --radius-pas-sm: var(--radius-sm);
+  --shadow-pas: var(--shadow);
 }
 
-/* ── Utility classes ──────────────────────────────────────────── */
+@layer base {
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* ── Component classes ────────────────────────────────────────────
+   Layered, so a Tailwind utility on the same element wins. Prefer utilities on tokens
+   (text-ink, bg-panel) for new UI; do not add feature classes here (ADR-011). */
+@layer components {
 .display-font { font-family: 'Fraunces', serif; }
-.text-muted { color: var(--muted); }
 
 /* Card component */
 .card {
@@ -459,6 +486,7 @@ body {
   text-align: center; padding: 3rem 1rem; color: var(--muted);
 }
 .empty-state h3 { color: var(--ink); font-weight: 700; margin-bottom: 0.5rem; }
+}
 `);
 
   // ── MCP scaffold ────────────────────────────────────────────

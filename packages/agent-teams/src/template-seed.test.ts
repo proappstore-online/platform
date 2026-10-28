@@ -171,3 +171,44 @@ describe('seedFiles — default icon is the lettermark of the app name (#505)', 
     expect(icon('door-drop')).toContain('aria-label="door-drop app icon"');
   });
 });
+
+/**
+ * ADR-011 / #492: the seeded index.css is the shape the standard asks of an app's stylesheet.
+ * It is read with the same scanner `pas check` runs (`css-discipline`), so the seed cannot drift
+ * from what the check enforces.
+ */
+describe('seedFiles — src/index.css follows ADR-011', async () => {
+  const { cssFindings, FEATURE_CLASS_BUDGET } = await import('../../compliance/src/checks/css-discipline.js');
+  const css = seedFiles('test-app').get('src/index.css')!;
+
+  it('has no banned alias, unlayered rule, colour literal outside the token blocks or per-screen dark override', () => {
+    const findings = cssFindings('src/index.css', css).filter((f) => f.rule !== 'feature-classes');
+    expect(findings).toEqual([]);
+  });
+
+  it('keeps its hand-written classes inside the budget the check warns above', () => {
+    const classes = new Set(cssFindings('src/index.css', css).filter((f) => f.rule === 'feature-classes').map((f) => f.what));
+    expect(classes.size).toBeLessThanOrEqual(FEATURE_CLASS_BUDGET);
+  });
+
+  it('maps the tokens to Tailwind colours with @theme inline, every mapping pointing at a token the seed defines', () => {
+    expect(css).toMatch(/@theme inline \{/);
+    const defined = new Set([...css.matchAll(/^\s*(--[\w-]+):/gm)].map((m) => m[1]));
+    const mapped = [...css.matchAll(/(--(?:color|radius|shadow)-[\w-]+):\s*var\((--[\w-]+)\)/g)];
+    expect(mapped.length).toBeGreaterThanOrEqual(15);
+    for (const [, name, target] of mapped) expect(defined.has(target!), `${name} -> ${target}`).toBe(true);
+    for (const utility of ['--color-ink', '--color-muted', '--color-panel', '--color-line', '--color-accent', '--color-danger', '--radius-pas']) {
+      expect(css, utility).toContain(`${utility}:`);
+    }
+  });
+
+  it('does not redefine .text-muted: the mapped colour generates it', () => {
+    expect(css).not.toMatch(/^\.text-muted\b/m);
+  });
+
+  it('puts the component classes in @layer components and body in @layer base', () => {
+    expect(css).toMatch(/@layer base \{\s*body \{/);
+    expect(css).toMatch(/@layer components \{[\s\S]*\.btn \{[\s\S]*\.badge-warning[\s\S]*\}\n$/);
+  });
+});
+
