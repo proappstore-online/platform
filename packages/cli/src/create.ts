@@ -215,13 +215,25 @@ ${hasRemote ? `
 `);
 }
 
+/**
+ * #499: what the browser tab, history and a shared link say is the app's display name ("Door Drop"), not its slug
+ * ("door-drop"). Only the HTML title and the og:/twitter: titles; URLs, descriptions and code keep the id.
+ */
+export function withDisplayTitle(content: string, appName: string, ext: string): string {
+  if (ext.toLowerCase() !== '.html') return content;
+  const name = appName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return content
+    .replace(/<title>\s*APPNAME\s*<\/title>/gi, `<title>${name}</title>`)
+    .replace(/(<meta\b[^>]*\b(?:property|name)\s*=\s*["'](?:og|twitter):title["'][^>]*\bcontent\s*=\s*["'])APPNAME(["'])/gi, `$1${name}$2`);
+}
+
 async function substituteAppName(dir: string, appId: string, appName: string): Promise<number> {
   let count = 0;
   for await (const file of walk(dir)) {
     if (!TEXT_EXTENSIONS.has(extname(file).toLowerCase())) continue;
     const content = await readFile(file, 'utf8');
     if (!content.includes('APPNAME')) continue;
-    await writeFile(file, content.split('APPNAME').join(appId));
+    await writeFile(file, withDisplayTitle(content, appName, extname(file)).split('APPNAME').join(appId));
     count++;
   }
   return count;

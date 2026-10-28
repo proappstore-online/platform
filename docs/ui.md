@@ -551,6 +551,20 @@ export function Empty({ title, action }: { title: string; action?: ReactNode }) 
 
 No class in `index.css`, no hex, and it follows dark mode by itself.
 
+### Fonts and the page title (#499)
+
+Load the brand fonts (Manrope for body text, Fraunces for headings) with a `<link>` in `web/index.html`, not an `@import` in `index.css`:
+
+```html
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;600;700&display=swap" rel="stylesheet" />
+```
+
+A Google Fonts `@import` with an optical-size range such as `opsz,wght@9..144` breaks Tailwind 4's CSS compilation (`CssSyntaxError: Invalid declaration`, seen in test builds). The *Brand fonts present* check accepts either place; it reads `.css`, `.scss` and `.html` files.
+
+The `<title>` is the app's display name ("Door Drop"), not its id. `pas create` writes the display name into the title and the `og:title` / `twitter:title` metas; the *App title* check warns on a title that is still `APPNAME` or exactly the app's id.
+
 ### Branding stays with the app
 
 An app's palette lives in the **values** of the PAS tokens, for example

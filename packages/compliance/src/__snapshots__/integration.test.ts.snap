@@ -21,6 +21,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "app-title",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
+    "detail": "no title; html-meta reports it",
+    "evidence": {
+      "class": "source",
+      "detail": "no title; html-meta reports it",
+    },
+    "name": "App title",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "brand-fonts",
     "citations": [
       {

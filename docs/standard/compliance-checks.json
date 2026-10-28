@@ -140,6 +140,21 @@
       "live": false
     },
     {
+      "id": "app-title",
+      "name": "App title",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "source",
+      "scope": "apps",
+      "limits": "Only a title that is still APPNAME or exactly the app's id; not that the title is a good one. A warning: the app works.",
+      "live": false
+    },
+    {
       "id": "css-discipline",
       "name": "CSS discipline",
       "clauses": [

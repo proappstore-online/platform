@@ -1,6 +1,7 @@
 import { checkAccessibilityStatic } from './checks/accessibility-static.js';
 import { checkBrandFonts } from './checks/brand-fonts.js';
 import { checkBrandTokens } from './checks/brand-tokens.js';
+import { checkAppTitle } from './checks/app-title.js';
 import { checkCssDiscipline } from './checks/css-discipline.js';
 import { checkMarketingContent } from './checks/marketing-content.js';
 import { checkBundleSize } from './checks/bundle-size.js';
@@ -74,6 +75,7 @@ export {
   checkAccessibilityStatic,
   checkBrandFonts,
   checkBrandTokens,
+  checkAppTitle,
   checkCssDiscipline,
   checkMarketingContent,
   checkBundleSize,
@@ -131,6 +133,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'brand-fonts', run: checkBrandFonts },
   { id: 'brand-tokens', run: checkBrandTokens },
   { id: 'no-brand-overrides', run: checkNoBrandOverrides },
+  { id: 'app-title', run: checkAppTitle },
   { id: 'css-discipline', run: checkCssDiscipline },
   { id: 'marketing-content', run: checkMarketingContent },
   { id: 'no-scroll', run: checkNoScroll },

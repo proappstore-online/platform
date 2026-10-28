@@ -63,6 +63,8 @@ export const CHECKS: readonly CheckMeta[] = [
     limits: 'That the canonical tokens are defined; not that the app uses them instead of hard-coded colours.' },
   { id: 'no-brand-overrides', name: 'No brand overrides', clauses: ['PAS-UI-001', 'PAS-STACK-022'], automation: 'partial', evidenceClass: 'source', scope: 'all',
     limits: 'Brand colour-token redefinitions only; the banned alias names themselves are caught by the platform design-system lint, not here. Fonts are no longer checked: the font rule has to stay for FAS (Free App Store), because those store apps need to look consistent with each other, but PAS (ProAppStore) doesn\'t — every app is different, so apps may use their own licensed fonts.' },
+  { id: 'app-title', name: 'App title', clauses: ['PAS-UI-020'], automation: 'partial', evidenceClass: 'source', scope: 'apps',
+    limits: 'Only a title that is still APPNAME or exactly the app\'s id; not that the title is a good one. A warning: the app works.' },
   { id: 'css-discipline', name: 'CSS discipline', clauses: ['PAS-STACK-001', 'PAS-STACK-022'], automation: 'partial', evidenceClass: 'source', scope: 'apps',
     limits: 'Stylesheets of Tailwind apps (ADR-011): banned token aliases, unlayered rules, colour literals outside the token blocks, per-screen dark overrides and a budget of 15 hand-written classes. Not that components are used or that utilities sit on token colours; game projects and apps without Tailwind are skipped. A warning in this release; #495 flips the first three to a failure.' },
   { id: 'marketing-content', name: 'Marketing site content', clauses: ['PAS-UI-020'], automation: 'partial', evidenceClass: 'source', scope: 'apps',

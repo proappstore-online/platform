@@ -116,4 +116,50 @@ describe('pas create provisioning', () => {
     expect(existsSync(join(dir, 'no-w', 'worker'))).toBe(false);
     expect(readFileSync(join(dir, 'no-w', 'pnpm-workspace.yaml'), 'utf8')).not.toContain('worker');
   });
+
+  it('puts the display name in the HTML titles and the id everywhere else (#499)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/catalogue.json')) {
+        return Response.json({ templates: [{
+          id: 'template-app', repo: 'proappstore-online/template-app', ref: 'main', status: 'approved', default: true, deprecation: null,
+        }] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    childProcess.spawn.mockImplementation((_cmd: string, args: string[]) => {
+      const handlers: Record<string, (code: number) => void> = {};
+      if (args[0] === 'clone') {
+        const target = args.at(-1)!;
+        mkdirSync(join(target, 'web'), { recursive: true });
+        writeFileSync(join(target, 'web', 'index.html'), [
+          '<meta property="og:title" content="APPNAME" />',
+          '<meta name="twitter:title" content="APPNAME" />',
+          '<meta property="og:url" content="https://APPNAME.proappstore.online/" />',
+          '<title>APPNAME</title>',
+        ].join('\n'));
+      }
+      queueMicrotask(() => handlers.exit?.(0));
+      return { on(event: string, handler: (code: number) => void) { handlers[event] = handler; return this; } };
+    });
+
+    await createApp('door-drop', { skipInstall: true, skipGit: true, skipProvision: true });
+    const html = readFileSync(join(dir, 'door-drop', 'web', 'index.html'), 'utf8');
+    expect(html).toContain('<title>Door Drop</title>');
+    expect(html).toContain('<meta property="og:title" content="Door Drop" />');
+    expect(html).toContain('<meta name="twitter:title" content="Door Drop" />');
+    expect(html).toContain('https://door-drop.proappstore.online/');
+    expect(html).not.toContain('APPNAME');
+  });
+});
+
+describe('withDisplayTitle (#499)', async () => {
+  const { withDisplayTitle } = await import('./create.js');
+
+  it('only touches HTML, only the titles, and escapes the name', () => {
+    expect(withDisplayTitle('<title>APPNAME</title>', 'A & B <x>', '.html')).toBe('<title>A &amp; B &lt;x&gt;</title>');
+    expect(withDisplayTitle('<title> APPNAME </title>', 'Shop', '.HTML')).toBe('<title>Shop</title>');
+    expect(withDisplayTitle('<title>APPNAME</title> APPNAME', 'Shop', '.html')).toBe('<title>Shop</title> APPNAME');
+    expect(withDisplayTitle('<title>APPNAME</title>', 'Shop', '.ts')).toBe('<title>APPNAME</title>');
+    expect(withDisplayTitle('<meta property="og:description" content="APPNAME" />', 'Shop', '.html')).toBe('<meta property="og:description" content="APPNAME" />');
+  });
 });
