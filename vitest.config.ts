@@ -30,6 +30,7 @@ export default defineConfig({
         'packages/*/src/__fixtures__/**',
         'packages/*/src/__snapshots__/**',
         'packages/*/src/test-helpers.ts',
+        'packages/backend/src/sqlite-d1.ts',
         'packages/backend/src/openapi-spec.ts',
         'packages/runtime-tests/**',
         'packages/e2e/**',
