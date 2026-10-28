@@ -276,6 +276,10 @@
       "description": "Mark a marketing-site enquiry handled (records you and the time), or handled: false to reopen it. Owner or platform admin only."
     },
     {
+      "name": "get_action_trace",
+      "description": "Read-only: explain a failed action from the traceId in its error \u2014 which action, status, fault verdict, safe errorCode, SQLite's error text and class for a tenant fault, and when. Owner or platform admin of that app only; server-side records, no request values."
+    },
+    {
       "name": "ownership_status",
       "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record \u2014 other parties by login only, never the owner's identity to a non-party."
     },

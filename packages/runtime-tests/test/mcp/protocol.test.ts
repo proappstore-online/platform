@@ -137,10 +137,10 @@ describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
     expect(await authority().readSeen(requestId)).toBe(true);
   });
 
-  it("publishes 74 annotated tools and no required token arguments on platform reads", async () => {
+  it("publishes 75 annotated tools and no required token arguments on platform reads", async () => {
     const { response, body } = await rpc(await access("gh:1"), "tools/list", {});
     expect(response.status).toBe(200);
-    expect(body.result.tools).toHaveLength(74);
+    expect(body.result.tools).toHaveLength(75);
     for (const tool of body.result.tools) {
       expect(typeof tool.annotations.readOnlyHint, tool.name).toBe("boolean");
       expect(tool.inputSchema.properties, tool.name).not.toHaveProperty("token");

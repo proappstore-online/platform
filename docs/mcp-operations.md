@@ -41,6 +41,10 @@ owner-visible operation log row for that request, found by the trace id with `GE
 over the platform's trusted hop to the data worker, never in a response. SQLite does not say which statement of a batch
 or which trigger failed, so the log shows the error text, not a statement index.
 
+The owner does not have to read the log by hand: the MCP tool `get_action_trace(app_id, trace_id)` takes the `traceId` from the
+failed action's error and returns the action, status, fault verdict, `errorCode`, the SQLite text with its class and the object it
+names, and the time. It reads only the app's own server-side records, for the app's owner or a platform admin, and shows no request values.
+
 The classifier accepts D1's primary constraint code, a direct named extended
 code, and the newer workerd suffix such as
 `SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)`. It still requires a

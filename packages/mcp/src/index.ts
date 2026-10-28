@@ -17,6 +17,7 @@ import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerEnquiryTools } from "./enquiry-tools.js";
+import { registerTraceTools } from "./trace-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
 import { registerOidcSessionTools } from "./oidc-session-tools.js";
@@ -111,6 +112,12 @@ export async function createPasMcpServer(env: Env, props: Record<string, unknown
 
     // ── Marketing-site enquiries, owner-only (#413) ─────────────
     registerEnquiryTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Why a failed action failed, from its trace id; owner-only (#502) ─
+    registerTraceTools(server, env, () => ({
       userId: userId,
       token: userToken,
     }));

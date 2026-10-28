@@ -113,6 +113,15 @@ report the registration.
 | `validate_admin_security` | Security/compatibility checks; `passesSecurityGates` |
 | `apply_admin_update` | Commit to `mcp.json`, then report the registration after deploy — **confirm**, **dry_run** |
 
+### Diagnostics (#502)
+
+`src/trace-tools.ts`, a thin read-only summary of the backend's owner-only `GET /v1/apps/:appId/incidents/:traceId`
+(#394), called with the connection's own session; the backend decides who may read.
+
+| Tool | Description |
+|------|-------------|
+| `get_action_trace` | Explain a failed action from the `traceId` in its error: action, HTTP status, fault verdict (tenant, platform, client), safe `errorCode`, SQLite's error text, class and named object for a tenant fault, and when. Server-side rows only (browser rows are counted, never echoed); no request values. Owner or platform admin of that app only. |
+
 ### Ownership transfer and recovery (#423)
 
 `src/ownership-tools.ts`, thin over the backend's `/v1/apps/:appId/ownership` routes with the
