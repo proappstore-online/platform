@@ -22,6 +22,25 @@ signals for optimistic concurrency and idempotency conflicts. Rejected D1 batche
 roll back every statement. Schema defects and infrastructure failures remain
 safe 5xx errors; their outcome may require reconciliation before retrying.
 
+### Naming a rejection from a trigger (#501)
+
+A trigger can say *why* it refused, so the caller knows what to change:
+
+```sql
+RAISE(ABORT, 'APP:sensitive_input')
+```
+
+returns HTTP 422 with `errorCode: "app.sensitive_input"` and the fixed message `action rejected by the app`. The
+message must be exactly `APP:` followed by 1 to 40 lowercase letters or underscores (`^APP:[a-z_]{1,40}$`); only that
+code is returned. Any other trigger text (a different case, spaces, digits, a longer name, anything around it) stays the
+generic `constraint_violation`. Document the codes your app uses for your own UI; the platform does not interpret them.
+
+For a 500 tenant fault (the app's own SQL or trigger failing, for example `no such column`), the response is still the
+generic safe 500 with a trace id. The SQLite text (one line, printable ASCII, at most 200 characters) is added to the
+owner-visible operation log row for that request, found by the trace id with `GET /v1/apps/:appId/logs`. It is sent only
+over the platform's trusted hop to the data worker, never in a response. SQLite does not say which statement of a batch
+or which trigger failed, so the log shows the error text, not a statement index.
+
 The classifier accepts D1's primary constraint code, a direct named extended
 code, and the newer workerd suffix such as
 `SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)`. It still requires a

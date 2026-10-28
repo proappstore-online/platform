@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireAppAccess, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
-import { DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
+import { DATA_FAULT_DETAIL_HEADER, DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import {
   actionCallers,
@@ -307,7 +307,7 @@ export async function forwardToDataWorker(env: Env, appId: string, endpoint: str
 
 /** A data-worker answer as the action's answer. A 5xx is thrown instead (#394): see DataWorkerFailure. */
 function passThrough(upstream: Response, text: string): Response {
-  if (upstream.status >= 500) throw new DataWorkerFailure(upstream.status, dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)));
+  if (upstream.status >= 500) throw new DataWorkerFailure(upstream.status, dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)), upstream.headers.get(DATA_FAULT_DETAIL_HEADER));
   return new Response(text, {
     status: upstream.status,
     headers: {

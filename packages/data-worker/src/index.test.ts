@@ -585,6 +585,81 @@ describe("fault verdict and trace context (#394)", () => {
     }
   });
 
+  // #501: an app trigger may name its rejection, RAISE(ABORT, 'APP:sensitive_input'), and nothing but that code is returned.
+  it.each([
+    ['APP:sensitive_input', 'app.sensitive_input'],
+    ['APP:x', 'app.x'],
+    ['APP:' + 'a'.repeat(40), 'app.' + 'a'.repeat(40)],
+    ['APP:needs_review_', 'app.needs_review_'],
+  ])('an app trigger code %s is a 422 with errorCode %s, and nothing else', async (code, errorCode) => {
+    for (const suffix of ['', '_TRIGGER', ' (extended: SQLITE_CONSTRAINT_TRIGGER)']) {
+      const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(`D1_ERROR: ${code}: SQLITE_CONSTRAINT${suffix}`) as never, INTERNAL_TOKEN));
+      expect(res.status, suffix).toBe(422);
+      expect(await res.json()).toEqual({ error: 'action rejected by the app', errorCode });
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(res.headers.get('X-PAS-Fault')).toBeNull();
+    }
+  });
+
+  it.each([
+    'APP:', 'APP:Sensitive', 'APP:sensitive input', 'APP:sensitive-input', 'APP:sensitive1', 'APP:' + 'a'.repeat(41),
+    'app:sensitive_input', 'XAPP:sensitive_input', 'APP:sensitive_input extra detail', 'APP:sensitive_input\nsecret', ' APP:sensitive_input',
+    'row 42 for alice@example.com APP:sensitive_input',
+  ])('anything that is not exactly APP:<a-z_ 1-40> stays the generic rejection, and the text is not returned: %j', async (message) => {
+    const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb(`D1_ERROR: ${message}: SQLITE_CONSTRAINT_TRIGGER`) as never, INTERNAL_TOKEN));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'action rejected by database constraint', errorCode: 'constraint_violation' });
+  });
+
+  it('an APP: code in a message that is not a constraint failure is not read as one', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await app.request('/query', internalQuery(JSON.stringify({ sql: 'SELECT secret FROM t' })), makeEnv(failingDb('D1_ERROR: APP:sensitive_input: SQLITE_ERROR') as never, INTERNAL_TOKEN));
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'internal server error' });
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  // #501: a 500 tenant fault carries SQLite's own text to the trusted backend hop, for the owner's operation log.
+  describe('tenant fault detail (#501)', () => {
+    const run = async (message: string, headers: Record<string, string>) => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        return await app.request('/query', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ sql: 'SELECT 1' }) }, makeEnv(failingDb(message) as never, INTERNAL_TOKEN));
+      } finally {
+        errSpy.mockRestore();
+      }
+    };
+    const internal = { 'X-Internal-Token': INTERNAL_TOKEN };
+
+    it('gives the trusted caller the SQLite text of a tenant fault, one printable line, without the D1 prefix', async () => {
+      const res = await run('D1_ERROR: no such column: emial: SQLITE_ERROR', internal);
+      expect(res.status).toBe(500);
+      expect(res.headers.get('X-PAS-Fault')).toBe('tenant');
+      expect(res.headers.get('X-PAS-Fault-Detail')).toBe('no such column: emial: SQLITE_ERROR');
+      expect(await res.json()).toEqual({ error: 'internal server error' });
+    });
+
+    it('bounds it to 200 characters and strips control and non-ASCII characters', async () => {
+      const res = await run(`D1_ERROR: no such column: ${'x'.repeat(400)}\r\nSet-Cookie: a=b é: SQLITE_ERROR`, internal);
+      const detail = res.headers.get('X-PAS-Fault-Detail')!;
+      expect(detail.length).toBeLessThanOrEqual(200);
+      expect(detail).toMatch(/^[\x20-\x7e]+$/);
+    });
+
+    it('does not send it to a caller that is not the trusted hop, nor for a platform fault', async () => {
+      const direct = await run('D1_ERROR: no such column: emial: SQLITE_ERROR', {});
+      expect(direct.headers.get('X-PAS-Fault-Detail')).toBeNull();
+      const wrong = await run('D1_ERROR: no such column: emial: SQLITE_ERROR', { 'X-Internal-Token': 'not-the-token' });
+      expect(wrong.headers.get('X-PAS-Fault-Detail')).toBeNull();
+      const platform = await run('D1_ERROR: Network connection lost.', internal);
+      expect(platform.headers.get('X-PAS-Fault')).toBe('platform');
+      expect(platform.headers.get('X-PAS-Fault-Detail')).toBeNull();
+    });
+  });
+
   it.each([
     'D1_ERROR: stale revision: SQLITE_ERROR (extended: SQLITE_CONSTRAINT_TRIGGER)',
     'D1_ERROR: stale revision: SQLITE_CONSTRAINT (extended: SQLITE_IOERR_WRITE)',

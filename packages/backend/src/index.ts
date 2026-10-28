@@ -253,7 +253,8 @@ app.onError(async (err, c) => {
         routePath: c.req.routePath ?? c.req.path,
         params: c.req.param() as Record<string, string | undefined>,
         status,
-        message: err instanceof Error ? err.message : String(err),
+        // #501: a tenant fault's SQLite text rides in the owner-only row, never in the response above.
+        message: dataFailure?.detail ? `${err instanceof Error ? err.message : String(err)}: ${dataFailure.detail}` : err instanceof Error ? err.message : String(err),
         traceId,
         spanId,
         parentSpanId,

@@ -433,7 +433,29 @@ function constraintResponse(err: Error): { status: 409 | 422; error: string; err
   if (signal === 'operation key conflict') {
     return { status: 409, error: 'operation key conflict', errorCode: 'operation_conflict' };
   }
+  // #501: an app's trigger may name its rejection: RAISE(ABORT, 'APP:sensitive_input') answers
+  // {errorCode: 'app.sensitive_input'}. Only a message that is EXACTLY APP:<lowercase letters and
+  // underscores, 1-40> is read; the code is all that is returned, and every other trigger message
+  // stays hidden behind the generic answer. The caller can tell what to change; nothing else leaks.
+  const appCode = /^APP:([a-z_]{1,40})$/.exec(signal)?.[1];
+  if (appCode) return { status: 422, error: 'action rejected by the app', errorCode: `app.${appCode}` };
   return { status: 422, error: 'action rejected by database constraint', errorCode: 'constraint_violation' };
+}
+
+/**
+ * #501: what SQLite said about a 500 tenant fault, bounded and header-safe, for the API's owner-only operation log. Sent only
+ * to the trusted backend hop (it holds the INTERNAL_TOKEN), never to a browser that reached this worker directly: it can name
+ * the app's own columns and triggers, which the end user has no use for. Printable ASCII only, one line, 200 characters.
+ */
+export const FAULT_DETAIL_HEADER = 'X-PAS-Fault-Detail';
+export function faultDetail(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message
+    .replace(/^D1_ERROR:\s*/, '')
+    .replace(/[^\x20-\x7e]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
 }
 
 app.onError((err, c) => {
@@ -456,6 +478,10 @@ app.onError((err, c) => {
   console.error('Unhandled error:', { traceId: traceIdOf(c.req.header('traceparent')), route: c.req.routePath, fault, err });
   const res = c.json({ error: 'internal server error' }, 500);
   res.headers.set('X-PAS-Fault', fault);
+  if (fault === 'tenant' && isInternal(c)) {
+    const detail = faultDetail(err);
+    if (detail) res.headers.set(FAULT_DETAIL_HEADER, detail);
+  }
   setCorsHeaders(res, origin);
   return res;
 });

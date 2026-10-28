@@ -37,6 +37,11 @@ describe('data worker with a real D1', () => {
     ['stale revision', 409, 'stale revision', 'stale_revision'],
     ['operation key conflict', 409, 'operation key conflict', 'operation_conflict'],
     ['private trigger value', 422, 'action rejected by database constraint', 'constraint_violation'],
+    // #501: a trigger names its rejection with exactly APP:<a-z_ 1-40>; only the code comes back.
+    ['APP:sensitive_input', 422, 'action rejected by the app', 'app.sensitive_input'],
+    ['APP:needs_review', 422, 'action rejected by the app', 'app.needs_review'],
+    ['APP:Sensitive', 422, 'action rejected by database constraint', 'constraint_violation'],
+    ['APP:sensitive_input and a private value', 422, 'action rejected by database constraint', 'constraint_violation'],
   ])('returns a safe %s rejection and rolls back the complete D1 batch', async (signal, status, error, errorCode) => {
     await env.DB.exec(`CREATE TABLE guarded (id TEXT PRIMARY KEY); CREATE TRIGGER reject_guarded BEFORE INSERT ON guarded WHEN NEW.id = 'reject' BEGIN SELECT RAISE(ABORT, '${signal}'); END;`);
     const response = await SELF.fetch('https://data/batch', internal({ statements: [

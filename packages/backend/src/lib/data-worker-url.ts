@@ -57,6 +57,8 @@ export function dataWorkerUrl(env: { DATA_WORKER_HOST?: string }, appId: string,
  */
 export const DATA_FAULT_HEADER = 'X-PAS-Fault';
 export type DataFault = 'platform' | 'tenant' | 'client' | 'unknown';
+/** #501: what SQLite said about a tenant fault, sent only to this API's trusted hop. Goes to the owner-only log, never to a caller. */
+export const DATA_FAULT_DETAIL_HEADER = 'X-PAS-Fault-Detail';
 
 export function dataFaultOf(value: string | null | undefined): DataFault {
   return value === 'platform' || value === 'tenant' || value === 'client' ? value : 'unknown';
@@ -74,7 +76,10 @@ export function isPlatformFault(fault: DataFault): boolean {
  * data worker's body is never copied: it can quote the app's SQL.
  */
 export class DataWorkerFailure extends HttpError {
-  constructor(status: number, readonly fault: DataFault) {
+  /** The bounded error text of a tenant fault (#501), for the owner's operation log only: the response never carries it. */
+  readonly detail: string | null;
+  constructor(status: number, readonly fault: DataFault, detail?: string | null) {
     super(`data worker returned ${status} (${fault} fault)`, status);
+    this.detail = detail?.trim() ? detail.slice(0, 200) : null;
   }
 }
