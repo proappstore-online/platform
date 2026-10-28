@@ -20,6 +20,7 @@ import { mcpAuthCommand } from './mcp-auth.js';
 import { sourcemapsCommand } from './sourcemaps.js';
 import { marketingCommand } from './marketing.js';
 import { permissionsCommand } from './permissions.js';
+import { migrateCommand } from './migrate-tailwind-tokens.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
@@ -75,6 +76,7 @@ program.addCommand(mcpAuthCommand);
 program.addCommand(sourcemapsCommand);
 program.addCommand(marketingCommand);
 program.addCommand(permissionsCommand);
+program.addCommand(migrateCommand);
 
 program.parseAsync().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
