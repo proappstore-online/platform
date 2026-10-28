@@ -21,6 +21,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "billing",
+    "citations": [
+      {
+        "clauseId": "PAS-DATA-012",
+        "url": "https://docs.proappstore.online/standard/data/#pas-data-012",
+      },
+    ],
+    "detail": "sells no products",
+    "evidence": {
+      "class": "configuration",
+      "detail": "sells no products",
+    },
+    "name": "Billing products",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "brand-fonts",
     "citations": [
       {

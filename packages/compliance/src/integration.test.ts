@@ -99,7 +99,7 @@ describe('failing-app fixture', () => {
     // - 'No scroll (games only)' skips because it's not a game project.
     // - 'PWA maskable icon' auto-passes when no manifest source is found
     //   to avoid double-reporting (PWA manifest check already fails).
-    expect(summary.pass.sort()).toEqual(['Accessibility static', 'No scroll (games only)', 'PWA maskable icon', 'Permissions declared', 'Template default icon']);
+    expect(summary.pass.sort()).toEqual(['Accessibility static', 'Billing products', 'No scroll (games only)', 'PWA maskable icon', 'Permissions declared', 'Template default icon']);
   });
 });
 

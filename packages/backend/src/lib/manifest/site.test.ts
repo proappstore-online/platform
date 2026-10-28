@@ -19,7 +19,8 @@ describe('siteManifestFrom', () => {
     expect(picked.page_meta).toEqual([]);
     expect(picked.rooms).toEqual([]);
     expect(picked).not.toHaveProperty('extra');
-    expect(Object.keys(siteManifestFrom(null))).toHaveLength(13);
+    expect(Object.keys(siteManifestFrom(null))).toHaveLength(14);
+    expect(siteManifestFrom({ billing: { authorize_action: 'can_buy', products: [] } }).billing).toEqual({ authorize_action: 'can_buy', products: [] }); // #507
     expect(siteManifestFrom({ embed: { allow: ["https://example.com"] } }).embed).toEqual({ allow: ["https://example.com"] }); // #453
   });
 });

@@ -345,6 +345,25 @@ audit trail above with actor `system:retention` and action `platform_expired`.
 If your app keeps the review key on a row, expect a `404` for a document past
 its retention.
 
+## App billing (products your app sells)
+
+An app sells its own products through the platform's Stripe account (epic #506). Declare `billing`
+in `mcp.json` and start a purchase with one signed-in call (full contract in
+[App billing](./app-billing.md)):
+
+```ts
+const res = await fetch(`https://api.proappstore.online/v1/apps/${appId}/billing/checkout`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ product: 'child_term', subjects: ['child-1'], renew: false, successUrl, cancelUrl }),
+});
+const { url } = await res.json(); // redirect the browser to Stripe Checkout
+```
+
+The `app.billing.products()`, `.checkout()`, `.entitlements()` and `.portal()` SDK methods land
+with #509; until then the route above is the surface. The app's `authorize_action` decides who may
+buy; a 403 means it did not allow the purchase.
+
 ## Workers AI limits
 
 `app.ai` runs Workers AI on the platform's account, so each user is bounded (#218):

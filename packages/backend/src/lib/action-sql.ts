@@ -55,14 +55,15 @@ export interface ToolManifest {
   /** Require a recent authentication (session `auth_time` within STEP_UP_MAX_AGE_SECONDS) before
    *  the action runs (#231) — e.g. viewing an ID document. A stale caller gets `step_up_required`. */
   step_up?: boolean;
-  /** Who may run the action (#254, ADR-009 §2). Absent means `["user"]`, today's behaviour. */
+  /** Who may run the action (#254, ADR-009 §2). Absent means `["user"]`, today's behaviour.
+   *  "billing" (#507): the platform's checkout runs it as the buyer to authorize a purchase. */
   callers?: ActionCaller[];
 }
 
 /** #428: a staged action is callable only by the app's owner and team and by platform callers; a live one by anyone its auth admits. */
 export type ActionState = 'staged' | 'live';
 
-export const ACTION_CALLERS = ['user', 'worker', 'hook'] as const;
+export const ACTION_CALLERS = ['user', 'worker', 'hook', 'billing'] as const;
 export type ActionCaller = (typeof ACTION_CALLERS)[number];
 
 /** The action's callers, with the default applied. */

@@ -164,6 +164,7 @@ jobs:
             - MCP Operations: mcp-operations.md
             - Platform Roadmap: platform-roadmap.md
             - App Workers: app-workers.md
+            - App Billing: app-billing.md
             - Agent Customization: agent-customization.md
             - Architecture: architecture.md
             - Agent Teams Runtime: agent-teams-runtime-and-billing.md

@@ -47,7 +47,7 @@ export class Stripe {
     return this.post('/v1/billing_portal/sessions', body);
   }
 
-  async createCustomer(params: { email?: string; metadata?: Record<string, string> }): Promise<{ id: string }> {
+  async createCustomer(params: { email?: string; metadata?: Record<string, string>; idempotencyKey?: string }): Promise<{ id: string }> {
     const body = new URLSearchParams();
     if (params.email) body.set('email', params.email);
     if (params.metadata) {
@@ -55,7 +55,82 @@ export class Stripe {
         body.set(`metadata[${k}]`, v);
       }
     }
-    return this.post('/v1/customers', body);
+    return this.post('/v1/customers', body, params.idempotencyKey);
+  }
+
+  // ── App products (#507). The Pro flow above is untouched. ────────────────
+
+  /** Create the Stripe Product behind an app product. Idempotent per key for 24h. */
+  async createProduct(params: { name: string; metadata: Record<string, string>; idempotencyKey?: string }): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('name', params.name);
+    for (const [k, v] of Object.entries(params.metadata)) body.set(`metadata[${k}]`, v);
+    return this.post('/v1/products', body, params.idempotencyKey);
+  }
+
+  async updateProductName(productId: string, name: string): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('name', name);
+    return this.post(`/v1/products/${encodeURIComponent(productId)}`, body);
+  }
+
+  /** Create a Price. Prices are immutable in Stripe, so a changed amount is a new Price. */
+  async createPrice(params: {
+    product: string;
+    amount: number;
+    currency: string;
+    taxBehavior: string;
+    recurring?: { unit: string; count: number };
+    metadata: Record<string, string>;
+    idempotencyKey?: string;
+  }): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('product', params.product);
+    body.set('unit_amount', String(params.amount));
+    body.set('currency', params.currency);
+    body.set('tax_behavior', params.taxBehavior);
+    if (params.recurring) {
+      body.set('recurring[interval]', params.recurring.unit);
+      body.set('recurring[interval_count]', String(params.recurring.count));
+    }
+    for (const [k, v] of Object.entries(params.metadata)) body.set(`metadata[${k}]`, v);
+    return this.post('/v1/prices', body, params.idempotencyKey);
+  }
+
+  /** Archive a Price (active=false). Archived prices keep working for existing subscriptions; nothing is deleted. */
+  async archivePrice(priceId: string): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('active', 'false');
+    return this.post(`/v1/prices/${encodeURIComponent(priceId)}`, body);
+  }
+
+  /**
+   * Checkout for an app product. `mode` follows the buyer's renew choice: `subscription` for a
+   * recurring Price, `payment` for a one-time one. The ids ride on the session and on the
+   * resulting subscription / payment intent, so later webhooks route by metadata.app_id (#508).
+   */
+  async createAppCheckoutSession(params: {
+    customer: string;
+    priceId: string;
+    quantity: number;
+    mode: 'payment' | 'subscription';
+    successUrl: string;
+    cancelUrl: string;
+    metadata: Record<string, string>;
+  }): Promise<StripeCheckoutSession> {
+    const body = new URLSearchParams();
+    body.set('customer', params.customer);
+    body.set('mode', params.mode);
+    body.set('line_items[0][price]', params.priceId);
+    body.set('line_items[0][quantity]', String(params.quantity));
+    body.set('success_url', params.successUrl);
+    body.set('cancel_url', params.cancelUrl);
+    const nested = params.mode === 'subscription' ? 'subscription_data' : 'payment_intent_data';
+    for (const [k, v] of Object.entries(params.metadata)) {
+      body.set(`metadata[${k}]`, v);
+      body.set(`${nested}[metadata][${k}]`, v);
+    }
+    return this.post('/v1/checkout/sessions', body);
   }
 
   /**

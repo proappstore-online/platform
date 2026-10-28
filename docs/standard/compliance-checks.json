@@ -400,6 +400,21 @@
       "live": false
     },
     {
+      "id": "billing",
+      "name": "Billing products",
+      "clauses": [
+        {
+          "clauseId": "PAS-DATA-012",
+          "url": "https://docs.proappstore.online/standard/data/#pas-data-012"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Reads mcp.json only (#507): the products and the authorize_action contract are validated, not that the action's SQL really enforces who may buy.",
+      "live": false
+    },
+    {
       "id": "template-default-icon",
       "name": "Template default icon",
       "clauses": [

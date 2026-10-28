@@ -9,7 +9,7 @@
  */
 
 import { Hono } from 'hono';
-import { evaluateUnscoped, validateApprovals, validatePermissions, type UnscopedPolicyTool } from '@proappstore/compliance';
+import { evaluateUnscoped, validateApprovals, validateBilling, validatePermissions, type UnscopedPolicyTool } from '@proappstore/compliance';
 import { declaredPermissionsStatement } from '../lib/app-permissions.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
@@ -31,6 +31,7 @@ import { validateConnectors } from '../lib/manifest/connectors.js';
 import { validateRooms } from '../lib/manifest/rooms.js';
 import { validateEmbed } from '../lib/manifest/embed.js';
 import { validateIsolation } from '../lib/manifest/isolation.js';
+import { syncBillingToStripe } from '../lib/billing-sync.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -154,6 +155,8 @@ export async function replaceAppTools(
   if ('error' in embedResult) return { status: 400, payload: { error: embedResult.error } };
   const isolationResult = validateIsolation(site.isolation);
   if ('error' in isolationResult) return { status: 400, payload: { error: isolationResult.error } };
+  const billingResult = validateBilling(site.billing, tools as ToolManifest[]);
+  if ('error' in billingResult) return { status: 400, payload: { error: billingResult.error } };
   // `to: "worker"` needs app workers turned on for this app — the flag, not a
   // finished deploy, so registration never depends on the worker step's order.
   if (hooksResult.hooks.some((h) => h.to === 'worker')) {
@@ -234,6 +237,22 @@ export async function replaceAppTools(
     ...(isolationResult.isolation
       ? [db.prepare('INSERT INTO app_isolation (app_id, mode, created_at) VALUES (?, ?, ?)').bind(appId, isolationResult.isolation, now)]
       : []),
+    // And the products the app sells (#507): replaced with the manifest. A product it no longer
+    // declares goes inactive, never deleted, so its Stripe ids and purchases survive a re-add.
+    db.prepare('DELETE FROM app_billing WHERE app_id = ?').bind(appId),
+    ...(billingResult.billing
+      ? [db.prepare('INSERT INTO app_billing (app_id, authorize_action, updated_at) VALUES (?, ?, ?)').bind(appId, billingResult.billing.authorize_action, now)]
+      : []),
+    db.prepare('UPDATE app_products SET active = 0, updated_at = ?2 WHERE app_id = ?1 AND active = 1 AND product_key NOT IN (SELECT value FROM json_each(?3))')
+      .bind(appId, now, JSON.stringify((billingResult.billing?.products ?? []).map((p) => p.key))),
+    ...(billingResult.billing?.products ?? []).map((p) =>
+      db.prepare(
+        `INSERT INTO app_products (app_id, product_key, name, amount, currency, tax_behavior, modes, interval_unit, interval_count, grace_days, subject, active, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)
+         ON CONFLICT(app_id, product_key) DO UPDATE SET name = excluded.name, amount = excluded.amount, currency = excluded.currency,
+           tax_behavior = excluded.tax_behavior, modes = excluded.modes, interval_unit = excluded.interval_unit, interval_count = excluded.interval_count,
+           grace_days = excluded.grace_days, subject = excluded.subject, active = 1, updated_at = excluded.updated_at`,
+      ).bind(appId, p.key, p.name, p.amount, p.currency, p.tax_behavior, JSON.stringify(p.modes), p.interval?.unit ?? null, p.interval?.count ?? null, p.grace_days, p.subject, now)),
     // And the worker section (#254): a manifest without it leaves the worker no secrets.
     db.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
     ...(workerResult.worker
@@ -294,6 +313,14 @@ export async function replaceAppTools(
     }
   }
   warnings.push(...unscoped.warnings);
+  // Deploy-time Stripe upsert (#507). A Stripe failure never fails the registration: the manifest is
+  // already stored, the failure is a warning, and a redeploy retries (every step is idempotent).
+  let billingSync: Awaited<ReturnType<typeof syncBillingToStripe>> | null = null;
+  if (billingResult.billing) {
+    billingSync = await syncBillingToStripe({ DB: db, STRIPE_SECRET_KEY: env?.STRIPE_SECRET_KEY }, appId)
+      .catch((e: unknown) => ({ products: 0, pricesCreated: 0, pricesArchived: 0, warnings: [`billing: Stripe sync failed (${(e as Error).message.slice(0, 200)}); redeploy to retry`] }));
+    warnings.push(...billingSync.warnings);
+  }
   const staged = [...states].filter(([, st]) => st === 'staged').map(([name]) => name);
   if (staged.length) {
     warnings.push(`${staged.length} action(s) are staged: only the app's owner and team, its worker, hooks and the scheduler can call them until the app goes live (enable its worker, or POST /v1/apps/${appId}/tools/promote)`);
@@ -318,6 +345,9 @@ export async function replaceAppTools(
       worker: workerResult.worker,
       hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       connectors: connectorsResult.connectors.map((k) => ({ name: k.name, kind: k.kind, modes: k.modes })),
+      billing: billingResult.billing
+        ? { authorize_action: billingResult.billing.authorize_action, products: billingResult.billing.products.map((p) => p.key), stripe: billingSync ? { prices_created: billingSync.pricesCreated, prices_archived: billingSync.pricesArchived } : null }
+        : null,
       rooms: roomsResult.rules.map((r) => ({ pattern: `${r.prefix}*`, authorize: r.authorize })),
       warnings },
   };

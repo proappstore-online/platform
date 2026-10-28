@@ -17,6 +17,7 @@ import { checkNoPlaceholders } from './checks/no-placeholders.js';
 import { checkNoScroll } from './checks/no-scroll.js';
 import { checkNoTracking } from './checks/no-tracking.js';
 import { checkPermissions } from './checks/permissions.js';
+import { checkBilling } from './checks/billing.js';
 import { checkTemplateDefaultIcon } from './checks/template-default-icon.js';
 import { checkPwaMeta } from './checks/pwa-meta.js';
 import { checkPwaOffline } from './checks/pwa-offline.js';
@@ -42,6 +43,9 @@ export {
   validatePermissions,
 } from './lib/permissions.js';
 export type { DeclaredPermission, PermissionInfo } from './lib/permissions.js';
+// #507: the billing section of mcp.json, shared with the platform's registration gate.
+export { validateBilling, BILLING_MODES, BILLING_INTERVAL_UNITS, BILLING_TAX_BEHAVIORS, BILLING_SUBJECTS, MAX_BILLING_PRODUCTS, PRODUCT_KEY } from './lib/billing-policy.js';
+export type { BillingConfig, BillingProduct, BillingMode, BillingActionShape } from './lib/billing-policy.js';
 // #426: the caller_unscoped policy, shared with the platform's registration gate.
 export {
   actionPersonalData,
@@ -89,6 +93,7 @@ export {
   checkNoScroll,
   checkNoTracking,
   checkPermissions,
+  checkBilling,
   checkTemplateDefaultIcon,
   checkPwaMeta,
   checkPwaOffline,
@@ -145,6 +150,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
   { id: 'deploy-workflow', run: checkDeployWorkflow },
   { id: 'permissions', run: checkPermissions },
+  { id: 'billing', run: checkBilling },
   { id: 'template-default-icon', run: checkTemplateDefaultIcon },
 ];
 

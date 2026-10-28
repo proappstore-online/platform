@@ -14,6 +14,7 @@ import { latencyBucket, recordHealth, REQUEST_METRIC_FAMILIES } from './lib/metr
 import type { Env } from './types.js';
 import { openapiSpec, openapiYaml } from './openapi-spec.js';
 import { subscriptionRoutes } from './routes/subscription.js';
+import { appBillingRoutes } from './routes/app-billing.js';
 import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
 import { mapsRoutes } from './routes/maps.js';
@@ -314,6 +315,7 @@ v1.route('/', mcpBrokerRoutes);
 v1.route('/', mcpGrantRoutes);
 v1.route('/', passkeyRoutes);
 v1.route('/', subscriptionRoutes);
+v1.route('/', appBillingRoutes);
 v1.route('/', licenseRoutes);
 v1.route('/', storageRoutes);
 v1.route('/', mapsRoutes);
