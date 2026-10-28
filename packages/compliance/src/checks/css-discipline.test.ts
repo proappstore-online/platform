@@ -139,3 +139,42 @@ describe('css-discipline — the check', () => {
     expect(Object.keys(RULE_SEVERITY).sort()).toEqual(['banned-alias', 'feature-classes', 'hex-outside-tokens', 'per-screen-dark-override', 'unlayered-rule']);
   });
 });
+
+// #493: the stylesheet is read by a brace-matching scanner rather than a CSS parser, so the shapes a parser would handle for free are
+// pinned here: statement at-rules, nesting, selector lists, and input that is not valid CSS.
+describe('css-discipline — shapes a real stylesheet has', () => {
+  it('statement at-rules (@import, @source, @layer order, @plugin) are plumbing, never a finding', () => {
+    expect(rules('@import "tailwindcss";\n@import url("x.css") layer(base);\n@layer theme, base, components, utilities;\n@source "../src";\n@plugin "x";')).toEqual([]);
+  });
+
+  it('a nested @media inside @layer is classified by where it sits, and print stays exempt at any depth', () => {
+    expect(rules('@layer components { @media (min-width: 40rem) { .a { color: red } } }')).toEqual(['feature-classes']);
+    expect(rules('@media (min-width: 40rem) { .a { color: red } }')).toEqual(['feature-classes', 'unlayered-rule']);
+    expect(rules('@layer components { @media print { .a { color: #000 } } }')).toEqual([]);
+  });
+
+  it('CSS nesting: a colour in a nested rule is found, and the parent counts once', () => {
+    expect(rules('@layer components { .a { color: var(--ink); &:hover { color: #ff0000 } } }')).toEqual(['feature-classes', 'hex-outside-tokens']);
+  });
+
+  it('a selector list is a token block only when every selector is one', () => {
+    expect(rules(':root, :root[data-theme="dark"] { --ink: #111 }')).toEqual([]);
+    expect(rules(':root, .card { --ink: #111 }')).toEqual(['feature-classes', 'hex-outside-tokens', 'unlayered-rule']);
+  });
+
+  it('@keyframes and @font-face: a colour in keyframes is a literal, @font-face is plumbing', () => {
+    expect(rules('@keyframes spin { from { color: #fff } to { color: rgb(0 0 0) } }')).toEqual(['hex-outside-tokens', 'hex-outside-tokens']);
+    expect(rules('@font-face { font-family: X; src: url(x.woff2#frag) }')).toEqual([]);
+  });
+
+  it('empty, whitespace-only and comment-only files are clean', () => {
+    for (const css of ['', '\n\n  \n', '/* nothing */']) expect(cssFindings('a.css', css)).toEqual([]);
+  });
+
+  it('input that is not valid CSS never throws or hangs, and still reports what it can read', () => {
+    for (const css of ['.a { color: red', '}}} .a { color: red }', '.a { /* unclosed', '@media {', '{', '.a { color: "unterminated }']) {
+      expect(() => cssFindings('a.css', css)).not.toThrow();
+    }
+    expect(rules('}}} .a { color: #fff }')).toContain('hex-outside-tokens');
+  });
+});
