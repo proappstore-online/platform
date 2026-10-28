@@ -58,3 +58,11 @@ pass with regenerated digests in `index.json`.
 
 This is an agent review of an editorial update, not a new human approval. The
 historical review rows above retain their original digests and dates.
+
+## Editorial maintenance — 28 October 2026
+
+Claude checked the #491 diff: all seven bundles update only their declared
+standard version and reference/output-template version labels from 1.10 to 1.11.
+Workflow instructions, tool allow-lists, credential handling and mutation/consent
+boundaries are unchanged. The repository validator and focused evaluation suite
+pass with regenerated digests in `index.json`.
