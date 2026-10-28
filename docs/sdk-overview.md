@@ -903,6 +903,14 @@ telemetry would reintroduce the account enumeration the login path prevents.
 - Client stack traces are **not** symbolicated yet; grouping still works, and
   `build_meta` identifies the deploy.
 
+## Selling your app's own products (billing)
+
+An app declares products in `mcp.json` and the platform sells them through its Stripe account: see [App billing](./app-billing.md).
+There is no `app.billing` SDK call yet (it arrives with #509, with the customer portal and entitlement reads). Until then a signed-in
+app calls the checkout endpoint itself, `POST /v1/apps/:appId/billing/checkout` with `{ product, subjects, renew, successUrl, cancelUrl }`,
+using the same session as every other SDK call, and redirects the buyer to the returned `url`. Checkout stays refused until an admin
+enables billing for the app.
+
 ## Framework-agnostic on purpose
 
 `@proappstore/sdk` does not pin React, Vue, Svelte, or any UI framework.

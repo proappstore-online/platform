@@ -173,6 +173,79 @@ export class Stripe {
     return this.post('/v1/transfers', body, params.idempotencyKey);
   }
 
+  // ── App products (#507): the platform's account sells apps' own products ──────────────────────────
+
+  /** A Product for an app's declared product. Idempotent per `idempotencyKey`, so a retried deploy never makes a second. */
+  async createProduct(params: { name: string; metadata: Record<string, string> }, idempotencyKey?: string): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('name', params.name);
+    for (const [k, v] of Object.entries(params.metadata)) body.set(`metadata[${k}]`, v);
+    return this.post('/v1/products', body, idempotencyKey);
+  }
+
+  async updateProduct(productId: string, params: { name: string }): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('name', params.name);
+    return this.post(`/v1/products/${encodeURIComponent(productId)}`, body);
+  }
+
+  /** A Price. Prices are immutable in Stripe: a changed amount is a new Price, the old one archived. */
+  async createPrice(params: {
+    productId: string;
+    amount: number;
+    currency: string;
+    taxBehavior: string;
+    interval?: { unit: string; count: number };
+    metadata: Record<string, string>;
+  }, idempotencyKey?: string): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('product', params.productId);
+    body.set('unit_amount', String(params.amount));
+    body.set('currency', params.currency);
+    body.set('tax_behavior', params.taxBehavior);
+    if (params.interval) {
+      body.set('recurring[interval]', params.interval.unit);
+      body.set('recurring[interval_count]', String(params.interval.count));
+    }
+    for (const [k, v] of Object.entries(params.metadata)) body.set(`metadata[${k}]`, v);
+    return this.post('/v1/prices', body, idempotencyKey);
+  }
+
+  /** Archive, never delete: receipts and subscriptions made at this price keep resolving. */
+  async archivePrice(priceId: string): Promise<{ id: string }> {
+    const body = new URLSearchParams();
+    body.set('active', 'false');
+    return this.post(`/v1/prices/${encodeURIComponent(priceId)}`, body);
+  }
+
+  /**
+   * Checkout for one app product: `quantity` seats of one Price, a one-off payment or a subscription. The metadata rides on
+   * the session and on the payment or subscription it creates, so the webhooks (#508) can route by app and purchase.
+   */
+  async createAppCheckoutSession(params: {
+    customer: string;
+    priceId: string;
+    quantity: number;
+    mode: 'payment' | 'subscription';
+    successUrl: string;
+    cancelUrl: string;
+    metadata: Record<string, string>;
+  }, idempotencyKey?: string): Promise<StripeCheckoutSession> {
+    const body = new URLSearchParams();
+    body.set('customer', params.customer);
+    body.set('mode', params.mode);
+    body.set('line_items[0][price]', params.priceId);
+    body.set('line_items[0][quantity]', String(params.quantity));
+    body.set('success_url', params.successUrl);
+    body.set('cancel_url', params.cancelUrl);
+    const carrier = params.mode === 'subscription' ? 'subscription_data' : 'payment_intent_data';
+    for (const [k, v] of Object.entries(params.metadata)) {
+      body.set(`metadata[${k}]`, v);
+      body.set(`${carrier}[metadata][${k}]`, v);
+    }
+    return this.post('/v1/checkout/sessions', body, idempotencyKey);
+  }
+
   private async post<T>(path: string, body: URLSearchParams, idempotencyKey?: string): Promise<T> {
     const response = await fetch(`https://api.stripe.com${path}`, {
       method: 'POST',

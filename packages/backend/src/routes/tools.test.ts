@@ -1385,12 +1385,13 @@ describe('POST /v1/apps/:appId/tools/internal — service-to-service (Agent Team
     expect(db.batch).toHaveBeenCalledTimes(1);
   });
 
-  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules / embed / isolation reset)', async () => {
+  it('treats empty/missing tools as a clear (200, DELETE + scheduled-state reset + page meta/sitemap/operator gate/operator view/visibility/worker/hooks/connectors/room rules / embed / isolation / billing reset)', async () => {
     const { res, db } = await internalPost({ tools: [] }, { 'X-Internal-Token': 'secret' });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, registered: 0, page_meta: 0, sitemap: false, operator: null, operator_view: null, visibility: { mode: 'public', roles: [] }, worker: null, rooms: [], permissions: [] });
     // #437: the declared permissions, and #453: the embed list, and #452: the isolation mode, are replaced with the rest (here: cleared).
-    expect(db.batch.mock.calls[0]![0]).toHaveLength(15);
+    // Two more than before (#507): the products deactivate and the authorize action clears, even when the app never sold anything.
+    expect(db.batch.mock.calls[0]![0]).toHaveLength(17);
     expect(db.batch.mock.calls[0]![0][1]!.bind).toHaveBeenCalledWith('test-app');
 
     const missing = await internalPost({}, { 'X-Internal-Token': 'secret' });

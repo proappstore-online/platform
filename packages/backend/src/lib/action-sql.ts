@@ -72,7 +72,8 @@ export const MCP_VIA_VALUE = 'mcp';
 /** #428: a staged action is callable only by the app's owner and team and by platform callers; a live one by anyone its auth admits. */
 export type ActionState = 'staged' | 'live';
 
-export const ACTION_CALLERS = ['user', 'worker', 'hook'] as const;
+// 'billing' (#507): the platform's own checkout runs it, to decide who may buy; no session, worker or hook can.
+export const ACTION_CALLERS = ['user', 'worker', 'hook', 'billing'] as const;
 export type ActionCaller = (typeof ACTION_CALLERS)[number];
 
 /** The action's callers, with the default applied. */

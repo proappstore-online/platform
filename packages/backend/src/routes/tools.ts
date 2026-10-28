@@ -31,6 +31,9 @@ import { validateConnectors } from '../lib/manifest/connectors.js';
 import { validateRooms } from '../lib/manifest/rooms.js';
 import { validateEmbed } from '../lib/manifest/embed.js';
 import { validateIsolation } from '../lib/manifest/isolation.js';
+import { validateBilling, type BillingManifest } from '../lib/manifest/billing.js';
+import { syncBillingProducts } from '../lib/billing-sync.js';
+import { Stripe } from '../lib/stripe.js';
 
 export const toolsRoutes = new Hono<{ Bindings: Env }>();
 
@@ -111,6 +114,41 @@ function gateUnscoped(
   return { warnings: verdict.warnings };
 }
 
+/**
+ * The declared billing section as rows (#507). Products are upserted (their Stripe ids survive), one the manifest stops
+ * declaring is deactivated, not deleted, and `app_billing.enabled` (the admin's switch for live money) is never touched.
+ */
+function billingStatements(db: D1Database, appId: string, billing: BillingManifest | null, now: number): D1PreparedStatement[] {
+  const keys = JSON.stringify((billing?.products ?? []).map((p) => p.key));
+  return [
+    db.prepare('UPDATE app_billing_products SET active = 0, updated_at = ?3 WHERE app_id = ?1 AND product_key NOT IN (SELECT value FROM json_each(?2))').bind(appId, keys, now),
+    ...(billing?.products ?? []).map((p) =>
+      db.prepare(
+        `INSERT INTO app_billing_products (app_id, product_key, name, amount, currency, tax_behavior, modes, interval_unit, interval_count, grace_days, subject, active, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)
+         ON CONFLICT(app_id, product_key) DO UPDATE SET name = excluded.name, amount = excluded.amount, currency = excluded.currency,
+           tax_behavior = excluded.tax_behavior, modes = excluded.modes, interval_unit = excluded.interval_unit, interval_count = excluded.interval_count,
+           grace_days = excluded.grace_days, subject = excluded.subject, active = 1, updated_at = excluded.updated_at`,
+      ).bind(appId, p.key, p.name, p.amount, p.currency, p.tax_behavior, JSON.stringify(p.modes), p.interval?.unit ?? null, p.interval?.count ?? null, p.grace_days, p.subject, now)),
+    // A manifest that declares billing records its authorize action; one that does not clears it (checkout then refuses). `enabled` stays.
+    db.prepare(
+      `INSERT INTO app_billing (app_id, authorize_action, enabled, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?3)
+       ON CONFLICT(app_id) DO UPDATE SET authorize_action = excluded.authorize_action, updated_at = excluded.updated_at`,
+    ).bind(appId, billing?.authorize_action ?? null, now),
+  ];
+}
+
+/** Mirror the products to Stripe after the manifest is stored. A Stripe failure never fails the deploy: it is a warning, and the next deploy retries. */
+async function syncBilling(env: Env | undefined, db: D1Database, appId: string, billing: BillingManifest | null): Promise<string[]> {
+  if (!billing || !env?.STRIPE_SECRET_KEY) return billing && !env?.STRIPE_SECRET_KEY ? ['billing: Stripe is not configured on this platform, so the products were recorded but not created in Stripe'] : [];
+  try {
+    const r = await syncBillingProducts(db, new Stripe(env.STRIPE_SECRET_KEY), appId);
+    return r.failed.map((f) => `billing: product "${f.key}" was not synced to Stripe (${f.error}); the next deploy retries`);
+  } catch (e) {
+    return [`billing: Stripe sync failed (${(e instanceof Error ? e.message : String(e)).slice(0, 200)}); the next deploy retries`];
+  }
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -156,6 +194,8 @@ export async function replaceAppTools(
   if ('error' in embedResult) return { status: 400, payload: { error: embedResult.error } };
   const isolationResult = validateIsolation(site.isolation);
   if ('error' in isolationResult) return { status: 400, payload: { error: isolationResult.error } };
+  const billingResult = validateBilling(site.billing, tools as ToolManifest[]);
+  if ('error' in billingResult) return { status: 400, payload: { error: billingResult.error } };
   // `to: "worker"` needs app workers turned on for this app — the flag, not a
   // finished deploy, so registration never depends on the worker step's order.
   if (hooksResult.hooks.some((h) => h.to === 'worker')) {
@@ -236,6 +276,7 @@ export async function replaceAppTools(
     ...(isolationResult.isolation
       ? [db.prepare('INSERT INTO app_isolation (app_id, mode, created_at) VALUES (?, ?, ?)').bind(appId, isolationResult.isolation, now)]
       : []),
+    ...billingStatements(db, appId, billingResult.billing, now),
     // And the worker section (#254): a manifest without it leaves the worker no secrets.
     db.prepare('DELETE FROM app_worker_manifest WHERE app_id = ?').bind(appId),
     ...(workerResult.worker
@@ -277,6 +318,7 @@ export async function replaceAppTools(
     .filter((tool) => tool.schedule)
     .map((tool) => ({ name: tool.name, cron: tool.schedule!.cron }));
   if (schedules.length) console.log(`[schedule] registered app=${appId} ${schedules.map((s) => `${s.name}@${s.cron}`).join(', ')}`);
+  const billingWarnings = await syncBilling(env, db, appId, billingResult.billing);
   const warnings: string[] =
     cost.bytes > MANIFEST_BYTES_SOFT_LIMIT
       ? [
@@ -284,6 +326,7 @@ export async function replaceAppTools(
             'every MCP session on this app carries it in context on every call — consider slimming descriptions or adopting progressive disclosure',
         ]
       : [];
+  warnings.push(...billingWarnings);
   // Count headroom (#109): a second, independent warning as the manifest nears
   // the hard cap, so the limit is announced while there is still room to plan.
   // A hook whose secret the owner has not set yet registers, but cannot verify a delivery until they do.
