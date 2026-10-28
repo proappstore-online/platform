@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { verifyWebhookSignature } from '../lib/stripe.js';
+import { eventCarriesAppId } from '../lib/app-billing-events.js';
+import { handleAppBillingEvent } from '../lib/app-billing-handler.js';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
 
@@ -65,6 +67,20 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
 
   const event = JSON.parse(payload) as StripeEvent;
   const obj = event.data.object;
+
+  // #508: an event that carries our `app_id` belongs to an app's own purchase and never reaches the Pro handlers below. Those key a
+  // checkout by `metadata.user_id` and would read an app purchase (which carries one too) as a Pro upgrade. Decided by the metadata
+  // alone, so an app event the entitlements ignore (an unpaid session, a partial refund) still cannot fall through.
+  if (eventCarriesAppId(event)) {
+    try {
+      await handleAppBillingEvent(c.env.DB, event);
+    } catch (e) {
+      // Not acknowledged: Stripe redelivers, and the handler is safe to repeat.
+      console.error('[billing] app event failed', { type: event.type, error: e instanceof Error ? e.message : String(e) });
+      return c.text('app billing event failed', 500);
+    }
+    return c.json({ received: true });
+  }
 
   switch (event.type) {
     case 'checkout.session.completed': {

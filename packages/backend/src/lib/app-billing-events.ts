@@ -44,6 +44,15 @@ function invoicePeriodEnd(o: Obj): number {
   return end === null ? 0 : end * 1000;
 }
 
+/**
+ * True when the event carries our `metadata.app_id`, whether or not it parses into a fact. Routing uses this, not the parse:
+ * an app's unpaid session or partial refund is `unrelated` to the entitlements but must still never reach the Pro handler.
+ */
+export function eventCarriesAppId(event: unknown): boolean {
+  const o = asObj(asObj(asObj(event)?.data)?.object);
+  return !!o && ours(o) !== null;
+}
+
 export function parseAppBillingEvent(event: unknown): AppBillingFact {
   const e = asObj(event);
   const eventId = asStr(e?.id);

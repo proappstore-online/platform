@@ -64,6 +64,9 @@ interface ProductRow {
   product_key: string;
   modes: string;
   subject: string;
+  interval_unit: string | null;
+  interval_count: number | null;
+  grace_days: number;
 }
 
 // No `wrap`: a refusal answers through the platform's error handler, as JSON with a safe errorCode and the trace id (#390).
@@ -86,7 +89,7 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
 
   // Looked up under THIS app: another app's product key resolves to nothing here.
   if (typeof body.product !== 'string') throw new HttpError('product is required', 400);
-  const product = await db.prepare('SELECT product_key, modes, subject FROM app_billing_products WHERE app_id = ? AND product_key = ? AND active = 1')
+  const product = await db.prepare('SELECT product_key, modes, subject, interval_unit, interval_count, grace_days FROM app_billing_products WHERE app_id = ? AND product_key = ? AND active = 1')
     .bind(appId, body.product).first<ProductRow>();
   if (!product) throw new HttpError('unknown product', 400);
 
@@ -126,9 +129,10 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
   const purchaseId = crypto.randomUUID();
   const now = Date.now();
   await db.prepare(
-    `INSERT INTO app_purchases (id, app_id, product_key, buyer_user_id, subjects, quantity, mode, status, price_id, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?9)`,
-  ).bind(purchaseId, appId, product.product_key, user.id, JSON.stringify(subjects), Math.max(1, subjects.length), mode, price.stripe_price_id, now).run();
+    `INSERT INTO app_purchases (id, app_id, product_key, buyer_user_id, subjects, quantity, mode, status, price_id, interval_unit, interval_count, grace_days, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10, ?11, ?12, ?12)`,
+  // The term is snapshotted here (#508): a renewal is computed from the interval and grace the buyer paid for, whatever the manifest says later.
+  ).bind(purchaseId, appId, product.product_key, user.id, JSON.stringify(subjects), Math.max(1, subjects.length), mode, price.stripe_price_id, product.interval_unit, product.interval_count, product.grace_days, now).run();
 
   const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
   try {
