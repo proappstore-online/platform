@@ -1,6 +1,6 @@
 #!/bin/bash
 # Design system lint — run in CI to catch violations.
-# See DESIGN-SYSTEM.md for the full spec.
+# See docs/ui.md#styling for the full spec.
 set -euo pipefail
 
 FAIL=0
@@ -13,7 +13,7 @@ BANNED_VARS='var\(--bg\)|--bg\s*:|var\(--surface\b|--surface\s*:|var\(--border\b
 # what apps end up shipping. Test files may quote banned names as fixtures.
 # The top-level apps/ folder contains independent local repositories, not platform code.
 if grep -rn --exclude-dir=apps --exclude-dir=node_modules --exclude-dir=dist --include="*.css" --include="*.tsx" --include="*.jsx" --include="*.ts" -E "$BANNED_VARS" "${1:-.}" 2>/dev/null | grep -v node_modules | grep -v '.min.css' | grep -v 'prism' | grep -v 'test/fixtures' | grep -v '/dist/' | grep -v '\.test\.tsx\?:' ; then
-  echo "FAIL: Found banned CSS variable names. Use standard tokens from DESIGN-SYSTEM.md"
+  echo "FAIL: Found banned CSS variable names. Use standard tokens from docs/ui.md#styling"
   echo "  --bg → --paper, --surface → --panel, --border → --line, --glass → --panel"
   FAIL=1
 fi

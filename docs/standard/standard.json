@@ -1843,14 +1843,14 @@
       "kind": "Quality",
       "rule": "The app MUST support the dark scheme by styling `:root[data-theme=\"dark\"]` and MUST read and write the user's preference only through `useTheme` / `ThemeToggle`, which persist to `localStorage['stores-theme']` and set `document.documentElement.dataset.theme`. It MUST NOT use a `.dark` class, a second storage key, or `prefers-color-scheme` media queries to *apply* styles (they may be read to choose the default). The inline boot script in `index.html` MUST read the same `stores-theme` key.\n\n*",
       "applicability": "All apps with a user interface.\n\n*",
-      "rationale": "Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and `DESIGN-SYSTEM.md` use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.\n\n*",
+      "rationale": "Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and the design-system lint use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.\n\n*",
       "recommended_implementation": "Keep the template's boot script but change its key to `stores-theme`; define dark tokens under `:root[data-theme=\"dark\"]`; render `<ThemeToggle />`.\n\n*",
       "conforming_example": "```html\n<script>\n  (function(){ var p = localStorage.getItem('stores-theme') || 'system';\n    var dark = p === 'dark' || (p === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);\n    if (dark) document.documentElement.dataset.theme = 'dark'; })();\n</script>\n```\n\n*",
       "non_conforming_example": "```html\n<script>var pref = localStorage.getItem('fas:theme') ...</script>   <!-- different key from useTheme -->\n<style>html.dark { --paper: #111 }</style>                            <!-- class, not data-theme -->\n```\n\n*",
       "evidence": "Source: `web/index.html` boot script key; CSS selectors for dark tokens; `localStorage` keys containing `theme` (`grep -rn \"theme\" web/index.html web/src`).\n\n*",
       "remediation": "Change the key; move dark tokens to `[data-theme=\"dark\"]`; remove class toggles.\n\n*",
       "tests": "Toggling via `ThemeToggle` and reloading keeps the chosen scheme with no flash; `document.documentElement.dataset.theme` and `localStorage['stores-theme']` agree.\n\n*",
-      "supporting_links": "[UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), `~/dev/stores/DESIGN-SYSTEM.md` §3."
+      "supporting_links": "[UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), [UI — design tokens](../ui.md#design-tokens)."
     },
     {
       "id": "PAS-UI-003",
@@ -2039,7 +2039,7 @@
       "evidence": "Runtime: `document.documentElement.scrollWidth <= innerWidth` at 360 px and 640 px; long-URL fixture rendering; target sizes via devtools; Source: fixed widths, missing `min-width: 0`.\n\n*",
       "remediation": "Fix the widths; add wrapping; enlarge targets.\n\n*",
       "tests": "Browser test at 360 px and 640 px (qa-spec `screenshot` steps or Playwright viewport): no horizontal scroll, a 200-character URL wraps, all controls ≥ 44 px.\n\n*",
-      "supporting_links": "[Recipes — UI patterns](../recipes.md#ui-patterns), `~/dev/stores/DESIGN-SYSTEM.md` §5 (mobile ≤ 640 px)."
+      "supporting_links": "[Recipes — UI patterns](../recipes.md#ui-patterns), mobile ≤ 640 px ([UI — styling](../ui.md#styling))."
     },
     {
       "id": "PAS-UI-010",

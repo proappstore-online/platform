@@ -55,7 +55,7 @@ A dedicated settings screen, listed in `nav` like any other.
 ## Design Tokens
 
 SDK components reference the platform's canonical CSS custom properties (the
-contract in `DESIGN-SYSTEM.md`). ProAppStore uses a purple accent palette. The
+contract; see [Styling](#styling) for using them as Tailwind utilities). ProAppStore uses a purple accent palette. The
 old aliases `--bg`, `--surface`, `--surface-2`, `--border` and `--border-strong`
 are banned by the design-system lint — use the names below.
 
@@ -72,7 +72,7 @@ are banned by the design-system lint — use the names below.
 | `--accent` | `#7c3aed` | `#a78bfa` | Primary action (purple) |
 | `--accent-hover` | `#6d28d9` | `#7c3aed` | Action hover |
 | `--accent-soft` | `#f5f3ff` | `#2e1065` | Accent background |
-| `--danger` / `--success` / `--warning` (+ `-soft`) | see `DESIGN-SYSTEM.md` | | Semantic status colours |
+| `--danger` / `--success` / `--warning` (+ `-soft`) | light `#c74f43` / `#2f8f57` / `#c6862a`, dark `#ff7a72` / `#74d49a` / `#f0bd6e` | | Semantic status colours |
 | `--radius` | `0.75rem` | | Default border radius |
 | `--radius-sm` | `0.5rem` | | Small border radius |
 | `--shadow` | `0 1px 3px rgba(15,23,42,0.08)` | | Card shadow |
@@ -473,45 +473,87 @@ import { ThemeToggle } from '@proappstore/sdk/ui'
 | `@proappstore/sdk/hooks` | `useProAuth`, `useProSubscription`, `useProGate`, `useProNotifications`, `useTheme` |
 | `@proappstore/sdk/ui` | `NavBar`, `PageHeader`, `useDocumentTitle`, `useToast`, `useOnline`, `Avatar`, `SignInButton`, `ThemeToggle`, `TextSizeToggle`, `ProBadge`, `ProfileMenu`, `SubscriptionStatus`, `UpgradeCard`, `BillingButton`, `GateScreen`, `ProProfilePage`, `Button`, `Card`, `Input`, `Spinner`, `Modal`, `EmptyState`, `Tabs`, `Toast` |
 
-## CSS Classes (Design System)
+## Styling
 
-The app scaffold includes a design system in `src/index.css` with CSS custom properties and utility classes. Use these instead of inline Tailwind for consistent styling.
+React apps on PAS style with **Tailwind 4 utilities on the PAS design tokens**
+([ADR-011](adr/011-tailwind-on-pas-tokens.md)), in three layers, in this order
+of preference:
 
-### CSS Variables
+1. **Components** for anything that repeats (buttons, cards, inputs, dialogs,
+   empty states): `@proappstore/sdk/ui`, or app-local components (for example a
+   `web/src/design-system.tsx`).
+2. **Tailwind utilities on token colours** for layout and one-off styling,
+   written in the component's `className`.
+3. **`web/src/index.css`** holds only `@import "tailwindcss"`, `@source`, the
+   token blocks (`:root` and `:root[data-theme='dark']`), `@theme`, and
+   `@layer base` / `@layer components`. No unlayered rules, no feature classes,
+   no hex outside the token blocks. `@media print` is allowed for print sheets.
 
-| Variable | Purpose |
+Do not grow `index.css` with feature classes (`.invoice-row`, `.hero-card`).
+Write the utilities on the element, or lift the repeated markup into a component.
+
+### Token to utility
+
+The `@theme` block maps each [token](#design-tokens) to a Tailwind colour, so
+the utilities follow light and dark mode and the app's own token values:
+
+```css
+@import "tailwindcss";
+@source "../src";
+
+:root { --paper: #f8fafc; --ink: #1e293b; /* …the token values… */ }
+:root[data-theme='dark'] { --paper: #0f172a; --ink: #f1f5f9; /* … */ }
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --radius-pas: var(--radius);
+}
+```
+
+| Token | Utilities |
 | --- | --- |
-| `var(--accent)` | Brand accent color (configurable per app) |
-| `var(--ink)` | Primary text color |
-| `var(--muted)` | Secondary/subtle text |
-| `var(--paper)` | Page background |
-| `var(--line)` | Border color |
-| `var(--panel-hover)` | Hover state for panels/rows |
-| `var(--danger)` | Error/destructive state (`--danger-soft` for the background) |
+| `--paper` | `bg-paper` |
+| `--panel` | `bg-panel` |
+| `--panel-alt` | `bg-panel-alt` |
+| `--ink` | `text-ink` |
+| `--ink-strong` | `text-ink-strong` |
+| `--muted` | `text-muted` |
+| `--line` | `border-line`, `divide-line` |
+| `--line-strong` | `border-line-strong` |
+| `--accent` | `text-accent`, `bg-accent`, `border-accent` |
+| `--accent-hover` | `hover:bg-accent-hover` |
+| `--accent-soft` | `bg-accent-soft` |
+| `--danger` / `--success` / `--warning` | `text-danger`, `bg-danger-soft`, … |
+| `--radius` | `rounded-pas` |
+| `--radius-sm` | `rounded-pas-sm` |
 
-### Layout
+The old aliases (`--bg`, `--surface`, `--border`, `--glass`, `--error`) stay
+banned. Never write `text-[var(--muted)]`: use `text-muted`.
 
-`.card` — Panel with border, shadow, padding, rounded corners. Used for content sections, list items, forms.
+### A conforming component
 
-`.empty-state` — Centered message with icon + text + action button. Used for zero-data screens.
+```tsx
+export function Empty({ title, action }: { title: string; action?: ReactNode }) {
+  return (
+    <div className="rounded-pas border border-line bg-panel p-6 text-center">
+      <p className="text-ink">{title}</p>
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  )
+}
+```
 
-### Buttons
+No class in `index.css`, no hex, and it follows dark mode by itself.
 
-.btn .btn-primary
-.btn .btn-secondary
-.btn .btn-ghost
+### Branding stays with the app
 
-### Forms
-
-### Badges
-
-.badge .badge-accent
-.badge-success
-.badge-error
-
-### Typography
-
-| Class | Usage |
-| --- | --- |
-| `.display-font` | Display/heading font (Fraunces) |
-| (body) | Body font (Manrope) — inherited, no class needed |
+An app's palette lives in the **values** of the PAS tokens, for example
+`--accent: #d86f4d` in `:root` and in the dark block. Migrating an app to this
+model changes how the tokens are *used* (utilities instead of bespoke classes),
+never what they are *set to*. Keep the app's token values when you migrate.

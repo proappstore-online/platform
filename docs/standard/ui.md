@@ -101,7 +101,7 @@ provides and are not restated here.
 - [Architecture](../architecture.md)
 - [Browser auth session model](../auth-session-model.md)
 - [Build and deploy](../build-and-deploy.md)
-- `~/dev/stores/DESIGN-SYSTEM.md` (shared design system; enforced by `scripts/check-design-system.sh`)
+- [UI — Styling and design tokens](../ui.md#styling) (enforced by `scripts/check-design-system.sh`)
 
 ## Clauses
 
@@ -145,7 +145,7 @@ provides and are not restated here.
 
 **Applicability.** All apps with a user interface.
 
-**Rationale.** Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and `DESIGN-SYSTEM.md` use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.
+**Rationale.** Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and the design-system lint use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.
 
 **Recommended implementation.** Keep the template's boot script but change its key to `stores-theme`; define dark tokens under `:root[data-theme="dark"]`; render `<ThemeToggle />`.
 
@@ -172,7 +172,7 @@ provides and are not restated here.
 
 **Tests.** Toggling via `ThemeToggle` and reloading keeps the chosen scheme with no flash; `document.documentElement.dataset.theme` and `localStorage['stores-theme']` agree.
 
-**Supporting links.** [UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), `~/dev/stores/DESIGN-SYSTEM.md` §3.
+**Supporting links.** [UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), [UI — design tokens](../ui.md#design-tokens).
 
 ### PAS-UI-003 — Pages use semantic landmarks, one `h1`, ordered headings and a per-route title {#pas-ui-003}
 
@@ -412,7 +412,7 @@ manifest: { orientation: 'any', min_viewport_width: 360, display: 'standalone', 
 
 **Tests.** Browser test at 360 px and 640 px (qa-spec `screenshot` steps or Playwright viewport): no horizontal scroll, a 200-character URL wraps, all controls ≥ 44 px.
 
-**Supporting links.** [Recipes — UI patterns](../recipes.md#ui-patterns), `~/dev/stores/DESIGN-SYSTEM.md` §5 (mobile ≤ 640 px).
+**Supporting links.** [Recipes — UI patterns](../recipes.md#ui-patterns), mobile ≤ 640 px ([UI — styling](../ui.md#styling)).
 
 ### PAS-UI-010 — Safe areas and viewport units are handled with `env()` and `svh`/`dvh` {#pas-ui-010}
 

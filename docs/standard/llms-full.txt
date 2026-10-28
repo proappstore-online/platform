@@ -3337,7 +3337,7 @@ Applicability: All apps with a user interface.
 
 *
 
-Rationale: Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and `DESIGN-SYSTEM.md` use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.
+Rationale: Two mechanisms produce a first paint that disagrees with the toggle. **Known discrepancy:** the app scaffold's `index.html` boot script reads `fas:theme` while the SDK's `useTheme` and the design-system lint use `stores-theme`; `stores-theme` is canonical. An app generated from the template inherits the split until it edits the boot script.
 
 *
 
@@ -3374,7 +3374,7 @@ Tests: Toggling via `ThemeToggle` and reloading keeps the chosen scheme with no 
 
 *
 
-Supporting links: [UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), `~/dev/stores/DESIGN-SYSTEM.md` §3.
+Supporting links: [UI — ThemeToggle](../ui.md#themetoggle), [UI — patterns](../ui.md#patterns), [UI — design tokens](../ui.md#design-tokens).
 
 ### PAS-UI-003 — Pages use semantic landmarks, one `h1`, ordered headings and a per-route title
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-003
@@ -3712,7 +3712,7 @@ Tests: Browser test at 360 px and 640 px (qa-spec `screenshot` steps or Playwrig
 
 *
 
-Supporting links: [Recipes — UI patterns](../recipes.md#ui-patterns), `~/dev/stores/DESIGN-SYSTEM.md` §5 (mobile ≤ 640 px).
+Supporting links: [Recipes — UI patterns](../recipes.md#ui-patterns), mobile ≤ 640 px ([UI — styling](../ui.md#styling)).
 
 ### PAS-UI-010 — Safe areas and viewport units are handled with `env()` and `svh`/`dvh`
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-010
