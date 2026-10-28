@@ -19,7 +19,7 @@ Or run via `npx @proappstore/cli` for a one-off.
 
 ```bash
 # Auth
-pas login                           # GitHub device auth; writes a PAS session
+pas login [--provider google|github]  # browser sign-in (GitHub by default); writes a PAS session
 pas whoami                          # show current user
 pas logout                          # clear session
 
@@ -241,7 +241,8 @@ replace it with a branded preview image.
 
 ## Auth session
 
-`pas login` uses GitHub device auth, exchanges the GitHub token for a PAS
+`pas login` signs in with GitHub (the default) or, with `--provider google`, Google. GitHub and Google are separate accounts. It opens
+the platform's sign-in page, receives a one-time code on a local callback, exchanges it for a PAS
 session, and writes it to:
 
 ```text

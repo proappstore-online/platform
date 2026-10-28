@@ -45,6 +45,27 @@ export function SignInButton({
   );
 }
 
+export type SignInProvider = Exclude<AuthProvider, 'email'>;
+
+export interface SignInButtonsProps {
+  app?: ProAppStore;
+  /** Which sign-in providers to offer, in order. Default: GitHub and Google. */
+  providers?: SignInProvider[];
+}
+
+const PROVIDER_LABELS: Record<SignInProvider, string> = { github: 'Sign in with GitHub', google: 'Sign in with Google' };
+
+/** One sign-in button per provider (#489). GitHub and Google are separate accounts; an app may narrow the list. */
+export function SignInButtons({ app, providers = ['github', 'google'] }: SignInButtonsProps) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+      {providers.map((provider) => (
+        <SignInButton key={provider} {...(app ? { app } : {})} provider={provider} label={PROVIDER_LABELS[provider]} />
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ProBadge
 // ---------------------------------------------------------------------------

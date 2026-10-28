@@ -92,6 +92,22 @@ import { Avatar } from '@proappstore/sdk/ui'
 | `user` | `User | null` | - | User object |
 | `size` | `number` | `32` | Width/height in px |
 
+## SignInButtons
+
+One sign-in button per provider: **Sign in with GitHub** and **Sign in with Google**, on by default for every app with no config. GitHub
+and Google are separate accounts (no linking). `AppShell`, `GateScreen` and `ProProfilePage` use it for their signed-out screens; narrow
+the list with `providers`:
+
+```
+import { SignInButtons } from '@proappstore/sdk/ui'
+
+<SignInButtons app={app} />                          {/* GitHub + Google */}
+<SignInButtons app={app} providers={['github']} />   {/* GitHub only */}
+<AppShell app={app} providers={['github']}>…</AppShell>
+```
+
+`useAuth().signIn(provider?)` takes the same provider (`'github'` by default).
+
 ## SignInButton
 
 Platform-branded sign-in button.
@@ -471,7 +487,7 @@ import { ThemeToggle } from '@proappstore/sdk/ui'
 | `@proappstore/sdk/shell` | `AppShell` |
 | `@proappstore/sdk/shell.css` | The NavBar and shell styles as a stylesheet. Optional: AppShell injects them at render. |
 | `@proappstore/sdk/hooks` | `useProAuth`, `useProSubscription`, `useProGate`, `useProNotifications`, `useTheme` |
-| `@proappstore/sdk/ui` | `NavBar`, `PageHeader`, `useDocumentTitle`, `useToast`, `useOnline`, `Avatar`, `SignInButton`, `ThemeToggle`, `TextSizeToggle`, `ProBadge`, `ProfileMenu`, `SubscriptionStatus`, `UpgradeCard`, `BillingButton`, `GateScreen`, `ProProfilePage`, `Button`, `Card`, `Input`, `Spinner`, `Modal`, `EmptyState`, `Tabs`, `Toast` |
+| `@proappstore/sdk/ui` | `NavBar`, `PageHeader`, `useDocumentTitle`, `useToast`, `useOnline`, `Avatar`, `SignInButton`, `SignInButtons`, `ThemeToggle`, `TextSizeToggle`, `ProBadge`, `ProfileMenu`, `SubscriptionStatus`, `UpgradeCard`, `BillingButton`, `GateScreen`, `ProProfilePage`, `Button`, `Card`, `Input`, `Spinner`, `Modal`, `EmptyState`, `Tabs`, `Toast` |
 
 ## Styling
 

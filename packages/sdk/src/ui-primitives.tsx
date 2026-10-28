@@ -77,6 +77,25 @@ export function SignInButton({
   );
 }
 
+export interface SignInButtonsProps {
+  app: ProAppStore;
+  /** Which sign-in providers to offer, in order. Default: GitHub and Google. */
+  providers?: SignInButtonProps['provider'][];
+}
+
+const PROVIDER_LABELS = { github: 'Sign in with GitHub', google: 'Sign in with Google' } as const;
+
+/** One sign-in button per provider (#489). GitHub and Google are separate accounts; an app may narrow the list. */
+export function SignInButtons({ app, providers = ['github', 'google'] }: SignInButtonsProps) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+      {providers.map((provider = 'github') => (
+        <SignInButton key={provider} app={app} provider={provider} label={PROVIDER_LABELS[provider]} />
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ThemeToggle
 // ---------------------------------------------------------------------------
@@ -286,9 +305,11 @@ const menuItemStyle: React.CSSProperties = {
 interface ProfilePageProps {
   app: ProAppStore;
   showThemeToggle?: boolean;
+  /** Sign-in providers offered when signed out. Default: GitHub and Google. */
+  providers?: SignInButtonsProps['providers'];
 }
 
-function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
+function ProfilePage({ app, showThemeToggle = true, providers }: ProfilePageProps) {
   const { user, loading, signOut, deleteAccount } = useAuth(app);
   const { preference, setPreference } = useTheme();
 
@@ -300,7 +321,7 @@ function ProfilePage({ app, showThemeToggle = true }: ProfilePageProps) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
-        <SignInButton app={app} />
+        <SignInButtons app={app} {...(providers ? { providers } : {})} />
       </div>
     );
   }

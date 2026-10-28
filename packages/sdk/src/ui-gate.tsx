@@ -2,7 +2,7 @@
  * @proappstore/sdk/ui — GateScreen reusable gate UI.
  */
 import type { ProAppStore } from './index.js';
-import { SignInButton, UpgradeCard } from './ui-pro-components.js';
+import { SignInButtons, UpgradeCard, type SignInProvider } from './ui-pro-components.js';
 
 // ---------------------------------------------------------------------------
 // GateScreen (reusable gate UI)
@@ -14,10 +14,12 @@ export interface GateScreenProps {
   appName?: string | undefined;
   /** Suppress platform advertising while retaining the account and subscription gates. */
   branding?: 'platform' | 'app';
+  /** Sign-in providers to offer (#489). Default: GitHub and Google. */
+  providers?: SignInProvider[];
 }
 
 /** Renders the appropriate gate screen (loading, sign-in, or upgrade). */
-export function GateScreen({ gate, app, appName, branding = 'platform' }: GateScreenProps) {
+export function GateScreen({ gate, app, appName, branding = 'platform', providers }: GateScreenProps) {
   if (gate === 'loading') {
     // Neutral while auth (or the subscription) resolves (#241): never sign-in content.
     return (
@@ -37,7 +39,7 @@ export function GateScreen({ gate, app, appName, branding = 'platform' }: GateSc
           <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
             {branding === 'platform' ? 'Sign in to your ProAppStore account to continue.' : 'Sign in to continue.'}
           </p>
-          <SignInButton {...(app ? { app } : {})} />
+          <SignInButtons {...(app ? { app } : {})} {...(providers ? { providers } : {})} />
           {branding === 'platform' && (
             <p style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
               One account for all Pro apps.

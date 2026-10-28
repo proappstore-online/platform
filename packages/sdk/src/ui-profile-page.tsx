@@ -4,7 +4,7 @@
 import { type ReactNode } from 'react';
 import type { ProAppStore } from './index.js';
 import { useAuth, useSubscription, useTheme } from './hooks.js';
-import { SignInButton, ProBadge, BillingButton } from './ui-pro-components.js';
+import { SignInButtons, ProBadge, BillingButton, type SignInProvider } from './ui-pro-components.js';
 
 // ---------------------------------------------------------------------------
 // ProProfilePage
@@ -13,10 +13,12 @@ import { SignInButton, ProBadge, BillingButton } from './ui-pro-components.js';
 export interface ProProfilePageProps {
   app?: ProAppStore;
   showThemeToggle?: boolean;
+  /** Sign-in providers offered when signed out (#489). Default: GitHub and Google. */
+  providers?: SignInProvider[];
 }
 
 /** Full-page profile/settings with subscription info, billing, theme, danger zone. */
-export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePageProps) {
+export function ProProfilePage({ app, showThemeToggle = true, providers }: ProProfilePageProps) {
   const { user, loading, signOut, deleteAccount } = useAuth(app);
   const { subscription, isPro, loading: subLoading, upgrade } = useSubscription(app);
   const { preference, setPreference } = useTheme();
@@ -29,7 +31,7 @@ export function ProProfilePage({ app, showThemeToggle = true }: ProProfilePagePr
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>Sign in to view your profile.</p>
-        <SignInButton {...(app ? { app } : {})} />
+        <SignInButtons {...(app ? { app } : {})} {...(providers ? { providers } : {})} />
       </div>
     );
   }

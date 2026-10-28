@@ -104,7 +104,7 @@ Everything imports from '@proappstore/sdk' (also '@proappstore/sdk/ui'). All are
 - \`Tabs\` — \`tabs: { key, label, content }[]\`, \`defaultTab?\`.
 
 **Account and subscription**
-- \`Avatar\` — \`user\`, \`size?\`. \`SignInButton\` — \`app\`, \`label?\`, \`provider?\`.
+- \`Avatar\` — \`user\`, \`size?\`. \`SignInButton\` — \`app\`, \`label?\`, \`provider?\`. \`SignInButtons\` — \`app\`, \`providers?\` (default GitHub + Google; AppShell and GateScreen take \`providers\` too).
 - \`ProfileMenu\` — \`app?\`, \`showThemeToggle?\`, \`showBilling?\` (AppShell already renders one).
 - \`ProProfilePage\` — \`app?\`, \`showThemeToggle?\`: full account page.
 - \`ProBadge\` — \`size?\`. \`SubscriptionStatus\` — \`app?\`, \`showUpgrade?\`. \`UpgradeCard\` — \`app?\`, \`title?\`, \`description?\`, \`priceLabel?\`, \`features?\`. \`BillingButton\` — \`app?\`, \`label?\`, \`variant?\`.
@@ -281,7 +281,7 @@ useDocumentTitle('Cases — My App')
 import {
   initPro, AppShell, NavBar, PageHeader, useDocumentTitle, useToast, useOnline,
   Button, Card, Input, Modal, Spinner, EmptyState, Tabs, Toast,
-  Avatar, SignInButton, ProBadge, ProfileMenu, ProProfilePage, ThemeToggle, TextSizeToggle,
+  Avatar, SignInButton, SignInButtons, ProBadge, ProfileMenu, ProProfilePage, ThemeToggle, TextSizeToggle,
   SubscriptionStatus, UpgradeCard, BillingButton, GateScreen,
 } from '@proappstore/sdk'
 // Start with sdk_reference({ feature: 'shell' }); the full list: sdk_reference({ feature: 'components' }).
