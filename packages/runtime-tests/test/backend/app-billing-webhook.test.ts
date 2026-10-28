@@ -147,6 +147,53 @@ describe('a subscription', () => {
   });
 });
 
+describe('cancel at period end (#508)', () => {
+  const updated = (created: string, cancel: boolean, status = 'active') => evt('customer.subscription.updated', created, { id: 'sub_pur_1', status, cancel_at_period_end: cancel, metadata: OURS() });
+
+  it('stops renewal but keeps the paid period, then expires at period_end with no slack', async () => {
+    await seedPurchase('pur_1', 'recurring');
+    await handle(evt('invoice.paid', T0, invoice('in_1')));
+    await handle(updated('2026-02-01T00:00:00Z', true), at('2026-02-02T00:00:00Z'));
+    for (const r of await entitlements()) expect(r).toMatchObject({ status: 'active', renews: 0, period_end: at('2026-04-10T00:00:00Z') });
+    const { recomputePurchase } = await import('../../../backend/src/lib/entitlement-store');
+    await recomputePurchase(env.DB, 'pur_1', at('2026-04-10T00:00:00Z'));
+    for (const r of await entitlements()) expect(r.status).toBe('expired'); // a renewing subscription would still be inside its three-day slack
+  });
+
+  it('switching it off again restores renewal', async () => {
+    await seedPurchase('pur_1', 'recurring');
+    await handle(evt('invoice.paid', T0, invoice('in_1')));
+    await handle(updated('2026-02-01T00:00:00Z', true), at('2026-02-02T00:00:00Z'));
+    await handle(updated('2026-02-03T00:00:00Z', false), at('2026-02-04T00:00:00Z'));
+    for (const r of await entitlements()) expect(r).toMatchObject({ status: 'active', renews: 1 });
+  });
+
+  it('an older event never undoes a newer one, whatever order they arrive in', async () => {
+    await seedPurchase('pur_1', 'recurring');
+    await handle(evt('invoice.paid', T0, invoice('in_1')));
+    await handle(updated('2026-02-03T00:00:00Z', true), at('2026-02-04T00:00:00Z')); // newer: cancel
+    await handle(updated('2026-02-01T00:00:00Z', false), at('2026-02-05T00:00:00Z')); // older: not cancelling, arrives late
+    for (const r of await entitlements()) expect(r).toMatchObject({ status: 'active', renews: 0 });
+  });
+
+  it('replaying the event changes nothing', async () => {
+    await seedPurchase('pur_1', 'recurring');
+    await handle(evt('invoice.paid', T0, invoice('in_1')));
+    const e = updated('2026-02-01T00:00:00Z', true);
+    await handle(e, at('2026-02-02T00:00:00Z'));
+    const before = await entitlements();
+    expect(await handle(e, at('2026-02-02T00:00:01Z'))).toMatchObject({ duplicate: true });
+    expect(await entitlements()).toEqual(before);
+  });
+
+  it('an ended status is final even if it arrives before the last invoice', async () => {
+    await seedPurchase('pur_1', 'recurring');
+    await handle(updated('2026-02-01T00:00:00Z', false, 'canceled'), at('2026-02-02T00:00:00Z'));
+    await handle(evt('invoice.paid', T0, invoice('in_1')), at('2026-02-03T00:00:00Z'));
+    for (const r of await entitlements()) expect(r).toMatchObject({ status: 'canceled', renews: 0 });
+  });
+});
+
 describe('refund', () => {
   it('a full refund makes every subject refunded at once, with time still on the clock', async () => {
     await seedPurchase('pur_1', 'one_time');

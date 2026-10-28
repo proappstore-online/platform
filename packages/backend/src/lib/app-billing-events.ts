@@ -10,6 +10,7 @@ export type AppBillingFact =
   | { kind: 'purchase'; appId: string; userId: string; purchaseId: string; amount: number; currency: string; stripePaymentIntentId: string | null; stripeSubscriptionId: string | null; productType: 'one_time' | 'subscription'; intervalMonths: number | null; eventId: string }
   | { kind: 'renewal'; appId: string; userId: string; purchaseId: string; amount: number; currency: string; stripeInvoiceId: string; stripeSubscriptionId: string; periodEnd: number; eventId: string }
   | { kind: 'payment_failed'; appId: string; userId: string; purchaseId: string; stripeSubscriptionId: string; eventId: string }
+  | { kind: 'subscription_updated'; appId: string; userId: string; purchaseId: string; stripeSubscriptionId: string; cancelAtPeriodEnd: boolean; ended: boolean; eventId: string }
   | { kind: 'cancelled'; appId: string; userId: string; purchaseId: string; stripeSubscriptionId: string; eventId: string }
   | { kind: 'refunded'; appId: string; userId: string; purchaseId: string; stripeChargeId: string; eventId: string }
   | { kind: 'unrelated' };
@@ -80,6 +81,13 @@ export function parseAppBillingEvent(event: unknown): AppBillingFact {
     case 'invoice.payment_failed': {
       const sub = invoiceSubscription(o);
       return meta.purchaseId && sub ? { kind: 'payment_failed', ...base, stripeSubscriptionId: sub } : UNRELATED;
+    }
+    case 'customer.subscription.updated': {
+      const sub = asStr(o.id);
+      if (!meta.purchaseId || !sub) return UNRELATED;
+      // `cancel_at_period_end` turning on stops renewal but keeps the paid period; turning off again restores it. An ended status is final.
+      const ended = o.status === 'canceled' || o.status === 'incomplete_expired';
+      return { kind: 'subscription_updated', ...base, stripeSubscriptionId: sub, cancelAtPeriodEnd: o.cancel_at_period_end === true, ended };
     }
     case 'customer.subscription.deleted': {
       const sub = asStr(o.id);

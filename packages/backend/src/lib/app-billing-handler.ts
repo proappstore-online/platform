@@ -61,6 +61,12 @@ async function applyFact(db: D1Database, fact: Exclude<AppBillingFact, { kind: '
     case 'payment_failed':
       await touch(db, id, 'failed_at = MAX(COALESCE(failed_at, 0), ?)', at);
       return;
+    case 'subscription_updated':
+      // The cancel flag follows the newest event (an older one never undoes a newer one); an ended subscription is final whatever the order.
+      await touch(db, id,
+        'sub_cancel_at_period_end = CASE WHEN ?1 >= sub_event_at THEN ?2 ELSE sub_cancel_at_period_end END, sub_event_at = MAX(sub_event_at, ?1), sub_ended_at = CASE WHEN ?3 = 1 THEN COALESCE(sub_ended_at, ?1) ELSE sub_ended_at END',
+        at, fact.cancelAtPeriodEnd ? 1 : 0, fact.ended ? 1 : 0);
+      return;
     case 'cancelled':
       await touch(db, id, 'sub_ended_at = COALESCE(sub_ended_at, ?), sub_event_at = MAX(sub_event_at, ?)', at, at);
       return;

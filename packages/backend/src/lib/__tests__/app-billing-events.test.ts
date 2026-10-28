@@ -83,6 +83,32 @@ describe('cancelled (customer.subscription.deleted)', () => {
   });
 });
 
+describe('subscription_updated (customer.subscription.updated)', () => {
+  const updated = (over: Record<string, unknown> = {}) => ({ id: 'sub_1', object: 'subscription', status: 'active', cancel_at_period_end: false, metadata: OURS, ...over });
+
+  it('cancel-at-period-end switched on', () => {
+    expect(parseAppBillingEvent(event('customer.subscription.updated', updated({ cancel_at_period_end: true })))).toEqual({
+      kind: 'subscription_updated', appId: 'club', userId: 'gh:2', purchaseId: 'pur_1', stripeSubscriptionId: 'sub_1', cancelAtPeriodEnd: true, ended: false, eventId: 'evt_1',
+    });
+  });
+
+  it('switched off again: the buyer changed their mind', () => {
+    expect(parseAppBillingEvent(event('customer.subscription.updated', updated()))).toMatchObject({ kind: 'subscription_updated', cancelAtPeriodEnd: false, ended: false });
+  });
+
+  it('an ended status is final', () => {
+    for (const status of ['canceled', 'incomplete_expired']) {
+      expect(parseAppBillingEvent(event('customer.subscription.updated', updated({ status })))).toMatchObject({ kind: 'subscription_updated', ended: true });
+    }
+    expect(parseAppBillingEvent(event('customer.subscription.updated', updated({ status: 'past_due' })))).toMatchObject({ ended: false });
+  });
+
+  it('is unrelated for a Pro subscription, or without a purchase id', () => {
+    expect(parseAppBillingEvent(event('customer.subscription.updated', updated({ metadata: {} })))).toEqual({ kind: 'unrelated' });
+    expect(parseAppBillingEvent(event('customer.subscription.updated', updated({ metadata: { app_id: 'club' } })))).toEqual({ kind: 'unrelated' });
+  });
+});
+
 describe('refunded (charge.refunded)', () => {
   const charge = (over: Record<string, unknown> = {}) => ({ id: 'ch_1', object: 'charge', amount: 2000, amount_refunded: 2000, refunded: true, metadata: OURS, ...over });
 
@@ -108,7 +134,7 @@ describe('unrelated', () => {
   });
 
   it('an event type this layer does not handle, even with our metadata', () => {
-    expect(parseAppBillingEvent(event('customer.subscription.updated', { id: 'sub_1', metadata: OURS }))).toEqual({ kind: 'unrelated' });
+    expect(parseAppBillingEvent(event('customer.subscription.created', { id: 'sub_1', metadata: OURS }))).toEqual({ kind: 'unrelated' });
     expect(parseAppBillingEvent(event('payment_intent.created', { id: 'pi_1', metadata: OURS }))).toEqual({ kind: 'unrelated' });
   });
 
