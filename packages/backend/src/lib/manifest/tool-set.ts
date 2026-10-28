@@ -1,3 +1,4 @@
+import { writesReservedTable } from '../../../../data-worker/src/reserved-tables.js';
 import type { Env } from '../../types.js';
 import type { ToolManifest } from '../action-sql.js';
 import { dataWorkerUrl } from '../data-worker-url.js';
@@ -105,6 +106,15 @@ export async function validateToolSet(
   for (const tool of tools) {
     const err = validateManifest(tool, opts);
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
+  }
+
+  // #508: `_pas_*` tables are the platform's (the entitlement mirror). An action may read them and JOIN them; it may not write one,
+  // or an app could grant itself any entitlement.
+  for (const tool of tools) {
+    for (const [i, stmt] of toolStatements(tool).entries()) {
+      const reserved = writesReservedTable(stmt);
+      if (reserved) return { status: 400, payload: { error: `tool "${tool.name}": statement ${i + 1} writes ${reserved}; _pas_* tables are platform-owned and read-only for apps` } };
+    }
   }
 
   // Security lint: every statement of an authenticated tool — reads included —

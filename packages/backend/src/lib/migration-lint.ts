@@ -23,6 +23,7 @@
  *           (it runs only on future writes) with a warning.
  */
 import { parseStatements, type SqlStatement, type SqlToken } from '../../../data-worker/src/sql-statements.js';
+import { writesReservedTable } from '../../../data-worker/src/reserved-tables.js';
 
 interface MigrationLintError {
   /** The whole offending statement. */
@@ -224,6 +225,9 @@ function lintStatement(stmt: SqlStatement, warnings: string[]): MigrationLintErr
   if (!t.length) return null; // a comment-only fragment runs nothing
   const bad = structure(stmt);
   if (bad) return bad;
+  // #508: `_pas_*` tables belong to the platform; a migration may not create, alter, write or drop one.
+  const reserved = writesReservedTable(stmt.text);
+  if (reserved) return refuse(stmt, 'reserved-table', `${reserved} is a platform table (_pas_*): apps may read it, never write it.`);
   const head = w(t[0]);
   switch (head) {
     case 'CREATE': {

@@ -491,6 +491,56 @@ describe("splitSqlStatements", () => {
   });
 });
 
+// #508: `_pas_*` tables are the platform's. An owner's raw SQL and migrations may read them, never write them; the platform's own
+// trusted writes (the entitlement mirror) arrive with the internal token and pass.
+describe("reserved _pas_ tables (#508)", () => {
+  const owner = (path: string, body: unknown) => app.request(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, makeEnv());
+  const internal = (path: string, body: unknown, db = mockD1()) => app.request(path, {
+    method: "POST",
+    headers: { "X-Internal-Token": INTERNAL_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, makeEnv(db, INTERNAL_TOKEN));
+  const WRITE = "INSERT INTO _pas_entitlements (product, subject, status) VALUES ('t', 'x', 'active')";
+
+  it("refuses an owner's write on every raw route, and says why", async () => {
+    for (const [path, body] of [
+      ["/query", { sql: WRITE }],
+      ["/execute", { sql: "UPDATE _pas_entitlements SET status = 'active'" }],
+      ["/batch", { statements: [{ sql: "SELECT 1" }, { sql: "DELETE FROM _pas_entitlements" }] }],
+      ["/migrate", { migrations: [{ name: "0001", sql: "CREATE TABLE ok (x TEXT); DROP TABLE _pas_entitlements" }] }],
+    ] as const) {
+      const res = await owner(path, body);
+      expect(res.status, path).toBe(403);
+      expect(JSON.stringify(await res.json())).toMatch(/_pas_entitlements is a platform table/);
+    }
+  });
+
+  it("still lets an owner read and JOIN them", async () => {
+    const res = await owner("/query", { sql: "SELECT e.status FROM _pas_entitlements e JOIN orders o ON o.child = e.subject" });
+    expect(res.status).toBe(200);
+  });
+
+  it("lets the platform's own trusted write through", async () => {
+    const res = await internal("/execute", { sql: WRITE });
+    expect(res.status).toBe(200);
+    const batch = await internal("/batch", { statements: [{ sql: "CREATE TABLE IF NOT EXISTS _pas_entitlements (product TEXT, subject TEXT)" }, { sql: WRITE }] });
+    expect(batch.status).toBe(200);
+  });
+
+  it("does not treat a caller with a wrong internal token as the platform", async () => {
+    const res = await app.request("/execute", {
+      method: "POST",
+      headers: { "X-Internal-Token": "wrong", Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sql: WRITE }),
+    }, makeEnv(mockD1(), INTERNAL_TOKEN));
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("team-role gating on raw SQL (#78)", () => {
   const post = (path: string, env: ReturnType<typeof makeEnv>, body: unknown = { sql: "SELECT 1" }) =>
     app.request(path, {

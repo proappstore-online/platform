@@ -58,9 +58,9 @@ describe('deploy path filters track workspace imports (#322)', () => {
   it('counts relative imports into another package and build-time embeds, transitively', () => {
     expect([...bundledDeps('mcp').keys()].sort()).toEqual(['agent-teams', 'build-core', 'compliance']);
     expect(bundledDeps('mcp').get('agent-teams')).toMatch(/\.\.\/\.\.\/agent-teams\/src\/recipes\.js/);
-    // The backend bundles the data worker twice over: the build embeds its bundle, and (#455) the
-    // migration lint imports the shared SQL tokenizer from its source. Either reason is a bundle.
-    expect(bundledDeps('backend').get('data-worker')).toMatch(/data-worker\/src\/sql-statements\.js|embed-data-worker\.mjs embeds it/);
+    // The backend bundles the data worker several ways: the build embeds its bundle, (#455) the migration lint imports the shared
+    // SQL tokenizer from its source, and (#508) registration and the lint import the `_pas_` write checker. Any reason is a bundle.
+    expect(bundledDeps('backend').get('data-worker')).toMatch(/data-worker\/src\/(sql-statements|reserved-tables)\.js|embed-data-worker\.mjs embeds it/);
   });
 
   it('reads real imports only: not sample code in strings, not type-only imports', () => {

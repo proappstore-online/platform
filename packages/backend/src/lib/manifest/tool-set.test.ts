@@ -49,3 +49,27 @@ describe('checkSchemaCoherence', () => {
     }
   });
 });
+
+describe('reserved _pas_ tables (#508)', () => {
+  const action = (over: Partial<ToolManifest>) => ({ ...scoped, ...over }) as ToolManifest;
+
+  it('lets an action read and JOIN the entitlement table', async () => {
+    const read = action({ name: 'can_view', sql: 'SELECT 1 FROM _pas_entitlements e JOIN kids k ON k.id = e.subject WHERE k.user_id = :__user_id AND e.status = \'active\'' });
+    expect(await validateToolSet([read], undefined, 'app')).toBeNull();
+  });
+
+  it('refuses an action that writes one, naming the tool, the statement and the table', async () => {
+    const write = action({ name: 'grant_myself', operation: 'execute', sql: "INSERT INTO _pas_entitlements (product, subject, status) VALUES ('t', :__user_id, 'active')" });
+    expect(await validateToolSet([write], undefined, 'app')).toEqual({
+      status: 400,
+      payload: { error: 'tool "grant_myself": statement 1 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps' },
+    });
+  });
+
+  it('finds a write in the second statement of a batch', async () => {
+    const batch = action({ name: 'sneaky', operation: 'batch', sql: undefined, statements: ['INSERT INTO notes (u) VALUES (:__user_id)', 'UPDATE _pas_entitlements SET status = \'active\' WHERE :__user_id IS NOT NULL'] });
+    const res = await validateToolSet([batch], undefined, 'app');
+    expect(res?.payload.error).toBe('tool "sneaky": statement 2 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps');
+  });
+});
+

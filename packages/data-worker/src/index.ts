@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { splitSqlStatements } from './sql-statements.js';
+import { writesReservedTable } from './reserved-tables.js';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 
@@ -202,6 +203,16 @@ async function authorize(
   }
 }
 
+/**
+ * #508: `_pas_*` tables are the platform's (the entitlement mirror). A caller that is not the platform itself, an owner's raw SQL or
+ * migration, may read them and may not write them. The platform's own writes arrive over the trusted internal path and pass.
+ */
+function refuseReservedWrite(c: { req: { header(name: string): string | undefined }; env: Env }, sql: string): void {
+  if (isInternal(c)) return;
+  const reserved = writesReservedTable(sql);
+  if (reserved) throw new HTTPException(403, { message: `${reserved} is a platform table (_pas_*): apps may read it, never write it` });
+}
+
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
@@ -242,6 +253,7 @@ app.post('/query', async (c) => {
   await authorize(c, 'developer');
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
+  refuseReservedWrite(c, sql);
   const start = Date.now();
   const stmt = params ? c.env.DB.prepare(sql).bind(...params) : c.env.DB.prepare(sql);
   const result = await stmt.all();
@@ -255,6 +267,7 @@ app.post('/execute', async (c) => {
   await authorize(c, 'developer');
   const body = await c.req.json();
   const { sql, params } = validateSql(body);
+  refuseReservedWrite(c, sql);
   const start = Date.now();
   const stmt = params ? c.env.DB.prepare(sql).bind(...params) : c.env.DB.prepare(sql);
   const result = await stmt.run();
@@ -275,6 +288,7 @@ app.post('/batch', async (c) => {
   }
   const stmts = body.statements.map((raw) => {
     const { sql, params } = validateSql(raw);
+    refuseReservedWrite(c, sql);
     return params ? c.env.DB.prepare(sql).bind(...params) : c.env.DB.prepare(sql);
   });
   const results = await c.env.DB.batch(stmts);
@@ -301,6 +315,7 @@ app.post('/migrate', async (c) => {
   if (!Array.isArray(body.migrations) || body.migrations.length === 0) {
     throw new HTTPException(400, { message: 'migrations must be a non-empty array of {name, sql}' });
   }
+  for (const m of body.migrations) refuseReservedWrite(c, String(m.sql ?? ''));
 
   // Ensure migrations tracking table exists
   await c.env.DB.prepare(

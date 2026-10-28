@@ -216,3 +216,24 @@ describe('lint and executor split identically (#455)', () => {
     }
   });
 });
+
+describe('reserved _pas_ tables (#508)', () => {
+  it('refuses a migration that creates, alters, writes or drops a platform table, naming the rule', () => {
+    for (const sql of [
+      'CREATE TABLE _pas_entitlements (x TEXT)',
+      'ALTER TABLE _pas_entitlements ADD COLUMN x TEXT',
+      "INSERT INTO _pas_entitlements (product, subject, status) VALUES ('t', 'x', 'active')",
+      'DROP TABLE _pas_entitlements',
+      "CREATE TRIGGER t AFTER INSERT ON orders BEGIN UPDATE _pas_entitlements SET status = 'active'; END",
+    ]) refused(sql, 'reserved-table');
+  });
+
+  it('refuses it when the platform table is the second statement', () => {
+    refused('CREATE TABLE ok (x TEXT); ALTER TABLE _pas_entitlements ADD COLUMN y TEXT', 'reserved-table', 'ALTER TABLE _pas_entitlements ADD COLUMN y TEXT');
+  });
+
+  it('leaves an ordinary migration, and a lookalike name, alone', () => {
+    ok('CREATE TABLE pas_things (x TEXT); CREATE INDEX i ON pas_things (x)');
+  });
+});
+
