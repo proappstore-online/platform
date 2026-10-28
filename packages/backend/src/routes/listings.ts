@@ -6,6 +6,7 @@ import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib
 import { withinModerationRate } from '../lib/ai-budget.js';
 import { getAppVisibility } from '../lib/visibility.js';
 import { listingPermissionIds, listingPermissions } from '../lib/app-permissions.js';
+import { aboutOrigin } from './enquiries.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
 import {
@@ -82,6 +83,9 @@ listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
   return c.json({ ...publicDto, permissions });
 }));
 
+/** The revision names the host will serve (packages/host/src/marketing-site.ts): a commit SHA or a short slug. */
+const MARKETING_REVISION = /^[A-Za-z0-9_-]{1,80}$/;
+
 /**
  * Public list of every app + its (partial) listing. Powers the storefront
  * homepage cards so the icon a dev uploads via Console actually surfaces
@@ -101,11 +105,15 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
             l.theme_color,
             l.updated_at,
             p.declared_json,
-            p.detected_json
+            p.detected_json,
+            d.revision        AS marketing_revision
        FROM apps a
   LEFT JOIN app_listings l ON l.app_id = a.id
   LEFT JOIN app_permissions p ON p.app_id = a.id
   LEFT JOIN app_visibility v ON v.app_id = a.id
+  -- #497: the about- site is live when an activation points at a revision whose receipt says it was uploaded in full.
+  LEFT JOIN app_marketing_sites m ON m.app_id = a.id
+  LEFT JOIN app_marketing_deploys d ON d.app_id = a.id AND d.revision = m.active_revision AND d.status = 'uploaded'
       WHERE v.mode IS NULL OR v.mode <> 'private'  -- private apps (#259) are never listed
       ORDER BY a.created_at DESC`,
   ).all<{
@@ -117,6 +125,7 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     updated_at: number | null;
     declared_json: string | null;
     detected_json: string | null;
+    marketing_revision: string | null;
   }>();
   const apps = (results ?? []).map((r) => ({
     appId: r.app_id,
@@ -127,6 +136,9 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     updatedAt: r.updated_at ?? 0,
     // #437: the card's permission icon row (ids; names and icons come with the detail).
     permissions: listingPermissionIds(r.declared_json, r.detected_json),
+    // #497: the app's about- marketing site, only while one is active (and a revision the host will serve); null otherwise, so an
+    // unpublished site drops out of the inventory within the 60s cache. Not the owner-typed `websiteUrl` of the per-app listing.
+    websiteUrl: r.marketing_revision && MARKETING_REVISION.test(r.marketing_revision) ? aboutOrigin(r.app_id) : null,
   }));
   c.header('Cache-Control', 'public, max-age=60');
   return c.json({ apps });

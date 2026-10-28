@@ -176,6 +176,8 @@ repository can only write its own app's site; no standing secret is involved.
 | `POST /v1/apps/:id/marketing/rollback` `{revision?, expectedRevision?}` | the app's deploy or a platform admin: back to the named revision, or the most recently active one before the current, after the same integrity check. A supplied `expectedRevision` must still be active; the deploy sends its failed candidate so it cannot undo a newer run. Refused when no site is active: an unpublished site is republished, never resurrected. |
 | `GET /v1/apps/:id/marketing/deployments` | owner or admin: receipts (`app_marketing_deploys`, migration 0103) — revision, status, hashes, sizes, repository, workflow run and commit, activation time, which one is live. |
 
+**Storefront inventory (#497).** `GET /v1/storefront/apps` carries `websiteUrl` per app: `https://about-<id>.proappstore.online` while the app has an active marketing revision whose deploy receipt is `uploaded`, and `null` otherwise (never published, unpublished, rolled back to nothing, an upload that did not finish). It is derived from the deploy pipeline's own state, so the storefront catalogue takes it from this inventory rather than from a hand-edited `registry.json`, and an unpublished site drops out within the endpoint's 60-second cache. It is not the owner-typed `websiteUrl` of an app's own listing (`GET /v1/storefront/apps/:id`).
+
 `app_storefront_publication.listed` (written by the admin publish step and
 reconciled hourly from `registry.json`) is the storefront catalogue's listing
 state; it does not affect the marketing site.
