@@ -13,6 +13,10 @@ import { parseStatements, type SqlToken } from './sql-statements.js';
  * or RETURNING — including the paywall pattern `… WHERE NOT EXISTS (SELECT … FROM _pas_entitlements …)` — is a read and is left
  * alone. CREATE, ALTER, DROP, ATTACH and DETACH keep the conservative rule: refused when a `_pas_` name appears anywhere, so a
  * trigger body, index or view that touches one is still caught.
+ *
+ * #512: this guard is what stops an app granting itself entitlements, so a DML statement whose target `writeTarget()` cannot
+ * determine fails closed — refused when it mentions any `_pas_` name, exactly as DDL is — rather than passing through as an
+ * unrecognised shape would otherwise let it.
  */
 
 const RESERVED = /^_pas_/i;
@@ -107,7 +111,13 @@ export function writesReservedTable(sql: string): string | null {
     if (!DML_HEADS.has(dmlHead)) continue;
 
     const target = writeTarget(tokens, dmlIdx, dmlHead);
-    if (target !== null && RESERVED.test(target)) return target;
+    if (target === null) {
+      // #512: an unrecognised shape must not become a bypass — fail closed exactly as DDL does.
+      const reserved = tokens.map(nameOf).find((n): n is string => n !== null && RESERVED.test(n));
+      if (reserved) return reserved;
+      continue;
+    }
+    if (RESERVED.test(target)) return target;
   }
   return null;
 }

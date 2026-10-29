@@ -543,6 +543,30 @@ describe("reserved _pas_ tables (#508)", () => {
     }
   });
 
+  // #512: an unrecognised DML shape must fail closed, not pass through, when it mentions a _pas_ name.
+  it("fails closed on an unrecognised DML shape that mentions a _pas_ name", async () => {
+    for (const sql of [
+      "UPDATE 'x' SET status = 'active' WHERE _pas_entitlements IS NOT NULL",
+      "INSERT 1 INTO notes WHERE _pas_entitlements IS NOT NULL",
+      "DELETE 1 FROM notes WHERE _pas_entitlements IS NOT NULL",
+    ]) {
+      const res = await owner("/execute", { sql });
+      expect(res.status, sql).toBe(403);
+      expect(JSON.stringify(await res.json())).toMatch(/_pas_entitlements is a platform table/);
+    }
+  });
+
+  it("leaves the same unrecognised DML shape alone when it mentions no _pas_ name", async () => {
+    for (const sql of [
+      "UPDATE 'x' SET status = 'active' WHERE 1 = 1",
+      "INSERT 1 INTO notes WHERE 1 = 1",
+      "DELETE 1 FROM notes WHERE 1 = 1",
+    ]) {
+      const res = await owner("/execute", { sql });
+      expect(res.status, sql).toBe(200);
+    }
+  });
+
   it("lets the platform's own trusted write through", async () => {
     const res = await internal("/execute", { sql: WRITE });
     expect(res.status).toBe(200);

@@ -77,4 +77,22 @@ describe('writesReservedTable', () => {
       )`;
     expect(writesReservedTable(sql)).toBeNull();
   });
+
+  // #512: writeTarget() returns null for a DML shape it does not recognise. That must not become a bypass — fail
+  // closed when the unrecognised statement mentions a `_pas_` name, exactly as DDL already does.
+  it('fails closed when an unrecognised DML shape mentions a _pas_ name', () => {
+    for (const sql of [
+      "UPDATE 'x' SET status = 'active' WHERE _pas_entitlements IS NOT NULL",
+      "INSERT 1 INTO notes WHERE _pas_entitlements IS NOT NULL",
+      "DELETE 1 FROM notes WHERE _pas_entitlements IS NOT NULL",
+    ]) expect(writesReservedTable(sql), sql).toBe('_pas_entitlements');
+  });
+
+  it('leaves the same unrecognised DML shape alone when it mentions no _pas_ name', () => {
+    for (const sql of [
+      "UPDATE 'x' SET status = 'active' WHERE 1 = 1",
+      "INSERT 1 INTO notes WHERE 1 = 1",
+      "DELETE 1 FROM notes WHERE 1 = 1",
+    ]) expect(writesReservedTable(sql), sql).toBeNull();
+  });
 });

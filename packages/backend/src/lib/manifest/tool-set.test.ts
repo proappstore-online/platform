@@ -98,5 +98,34 @@ describe('reserved _pas_ tables (#508)', () => {
       expect(res?.payload.error, sql).toBe('tool "grant_myself": statement 1 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps');
     }
   });
+
+  // #512: a DML shape writeTarget() cannot determine the target of must fail closed, not pass through, when it mentions a
+  // `_pas_` name.
+  it('fails closed on an unrecognised DML shape that mentions a _pas_ name', async () => {
+    const write = action({ name: 'grant_myself', operation: 'execute', sql: "UPDATE 'x' SET status = 'active' WHERE _pas_entitlements IS NOT NULL" });
+    const res = await validateToolSet([write], undefined, 'app');
+    expect(res?.payload.error).toBe('tool "grant_myself": statement 1 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps');
+  });
+
+  it('leaves the same unrecognised DML shape alone when it mentions no _pas_ name', async () => {
+    const action1 = action({ name: 'harmless', operation: 'execute', sql: "UPDATE 'x' SET status = 'active' WHERE :__user_id IS NOT NULL" });
+    expect(await validateToolSet([action1], undefined, 'app')).toBeNull();
+  });
+
+  // chess-academy's paywalled actions, unaffected by the #512 fail-closed change.
+  it('still allows the chess-academy paywalled write after the fail-closed change', async () => {
+    const paywalled = action({
+      name: 'create_puzzle_attempt',
+      operation: 'execute',
+      sql: `INSERT INTO puzzle_attempts (user_id, puzzle_id)
+        SELECT :__user_id, 'p1'
+        WHERE NOT EXISTS (
+          SELECT 1 FROM puzzle_attempts pa
+          JOIN _pas_entitlements pe ON pe.subject = :__user_id
+          WHERE pa.user_id = :__user_id AND pe.status != 'active'
+        )`,
+    });
+    expect(await validateToolSet([paywalled], undefined, 'app')).toBeNull();
+  });
 });
 
