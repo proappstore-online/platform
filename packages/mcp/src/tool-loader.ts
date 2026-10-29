@@ -243,7 +243,7 @@ function inputSchemaFor(params: Record<string, ToolParam> | undefined): Record<s
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
   for (const [name, def] of Object.entries(params ?? {})) {
-    const type = def.type === 'integer' ? 'integer' : def.type === 'number' ? 'number' : def.type === 'boolean' ? 'boolean' : 'string';
+    const type = def.type === 'integer' || def.type === 'timestamp_ms' ? 'integer' : def.type === 'number' ? 'number' : def.type === 'boolean' ? 'boolean' : 'string';
     properties[name] = { type, description: def.description ?? name,
       ...(def.default !== undefined ? { default: def.default } : {}),
       ...(def.max !== undefined && (type === 'integer' || type === 'number') ? { maximum: def.max } : {}),
@@ -335,8 +335,9 @@ function buildZodSchema(params: Record<string, { type: string; description?: str
     let field: z.ZodTypeAny;
     switch (def.type) {
       case 'integer':
+      case 'timestamp_ms':
       case 'number':
-        field = (def.type === 'integer' ? z.number().int() : z.number()).describe(def.description ?? name);
+        field = (def.type === 'number' ? z.number() : z.number().int()).describe(def.description ?? name);
         if (def.max !== undefined) field = (field as z.ZodNumber).max(def.max);
         break;
       case 'boolean':

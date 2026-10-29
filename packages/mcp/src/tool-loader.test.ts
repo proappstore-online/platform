@@ -349,6 +349,33 @@ describe('registerAppTools', () => {
   });
 });
 
+describe('registerAppTools — timestamp_ms param type (#1395)', () => {
+  it('publishes a timestamp_ms param as an integer field, not a string', () => {
+    let shape: Record<string, { safeParse: (v: unknown) => { success: boolean } }> | undefined;
+    const fakeServer = {
+      tool: (_name: string, _desc: string, s: typeof shape) => { shape = s; },
+    };
+    registerAppTools(
+      fakeServer as never,
+      [{
+        app_id: 'hiring',
+        name: 'record_candidate_email',
+        description: 'Record an email',
+        operation: 'execute',
+        sql: 'INSERT INTO events (occurred_at) VALUES (:occurred_at)',
+        params: { occurred_at: { type: 'timestamp_ms' } },
+        requires_auth: true,
+      }],
+      () => ({ userId: 'u1', token: 'tok-1', roles: [] }),
+      api,
+      'https://api.proappstore.online',
+      {},
+    );
+    expect(shape!.occurred_at.safeParse(Date.now()).success).toBe(true);
+    expect(shape!.occurred_at.safeParse('not-a-number').success).toBe(false);
+  });
+});
+
 describe('registerAppTools — manifest names on the app-scoped session (#157)', () => {
   const fakeServer = () => {
     const names: string[] = [];

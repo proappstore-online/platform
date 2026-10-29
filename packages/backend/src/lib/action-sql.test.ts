@@ -71,6 +71,59 @@ describe('prepareActionQuery', () => {
   });
 });
 
+describe('timestamp_ms param type (#1395)', () => {
+  // Fixed and well above the ms floor so this block is immune to the real
+  // clock AND to an earlier test's un-restored `Date.now` spy (see the
+  // 'uses server time and UUID for magic params' test above).
+  const FIXED_NOW = 1_700_000_000_000;
+  const occursManifest: ToolManifest = {
+    name: 'record_event',
+    description: 'Record event',
+    operation: 'execute',
+    sql: 'INSERT INTO events (occurred_at) VALUES (:occurred_at)',
+    params: { occurred_at: { type: 'timestamp_ms' } },
+    requires_auth: true,
+  };
+
+  it('passes through a plausible millisecond epoch value unchanged', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    try {
+      const ms = FIXED_NOW - 1000;
+      expect(prepareActionQuery(occursManifest, { occurred_at: ms }, 'gh:1').params).toEqual([ms]);
+    } finally { now.mockRestore(); }
+  });
+
+  it('normalises a 10-digit UNIX-seconds value by multiplying it into milliseconds', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    try {
+      const seconds = Math.floor((FIXED_NOW - 1000) / 1000);
+      expect(prepareActionQuery(occursManifest, { occurred_at: seconds }, 'gh:1').params).toEqual([seconds * 1000]);
+    } finally { now.mockRestore(); }
+  });
+
+  it('rejects a non-integer value', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    try {
+      expect(() => prepareActionQuery(occursManifest, { occurred_at: FIXED_NOW + 0.5 }, 'gh:1'))
+        .toThrow('occurred_at must be an integer millisecond epoch timestamp');
+    } finally { now.mockRestore(); }
+  });
+
+  it('rejects a value too small to be a plausible timestamp even after seconds normalisation', () => {
+    expect(() => prepareActionQuery(occursManifest, { occurred_at: 5 }, 'gh:1'))
+      .toThrow('occurred_at must be a plausible millisecond epoch timestamp');
+  });
+
+  it('rejects a value far enough in the future to not be clock skew', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    try {
+      const farFuture = FIXED_NOW + 24 * 60 * 60 * 1000;
+      expect(() => prepareActionQuery(occursManifest, { occurred_at: farFuture }, 'gh:1'))
+        .toThrow('occurred_at must be a plausible millisecond epoch timestamp');
+    } finally { now.mockRestore(); }
+  });
+});
+
 describe('prepareActionBatch', () => {
   const batchManifest: ToolManifest = {
     name: 'create_thing_with_child',

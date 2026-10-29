@@ -108,6 +108,16 @@ interface PreparedQuery {
   params: unknown[];
 }
 
+/**
+ * Floor below which an integer cannot be a real millisecond epoch (roughly
+ * 2001-09-09) — anything smaller is a 10-digit UNIX-seconds value mistakenly
+ * sent where milliseconds are expected, which renders as 1970 once displayed
+ * (#1395). `timestamp_ms` normalises it instead of storing the wrong date.
+ */
+const MS_TIMESTAMP_FLOOR = 1_000_000_000_000;
+/** Clock-skew allowance for a `timestamp_ms` value — not a feature, just slack. */
+const MS_TIMESTAMP_FUTURE_DRIFT = 5 * 60 * 1000;
+
 export function prepareActionQuery(
   manifest: ToolManifest,
   input: Record<string, unknown>,
@@ -245,6 +255,18 @@ export function resolveToolParams(
           if (schema.max !== undefined && (value as number) < 0) throw new Error(`${name} must be >= 0`);
           if (schema.max !== undefined && (value as number) > schema.max) value = schema.max;
           break;
+        case 'timestamp_ms': {
+          const ms = Number(value);
+          if (!Number.isInteger(ms)) throw new Error(`${name} must be an integer millisecond epoch timestamp`);
+          // A caller that means UNIX seconds sends a value under the millisecond
+          // floor; normalise rather than silently storing a 1970 date (#1395).
+          const normalised = ms > 0 && ms < MS_TIMESTAMP_FLOOR ? ms * 1000 : ms;
+          if (normalised < MS_TIMESTAMP_FLOOR || normalised > Date.now() + MS_TIMESTAMP_FUTURE_DRIFT) {
+            throw new Error(`${name} must be a plausible millisecond epoch timestamp`);
+          }
+          value = normalised;
+          break;
+        }
         case 'number':
           value = Number(value);
           if (Number.isNaN(value)) throw new Error(`${name} must be a number`);
