@@ -11,7 +11,8 @@
  * Workers RPC carries an error's message across the boundary, not its class.
  */
 import type { Env } from '../types.js';
-import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from './action-sql.js';
+import { actionCallers, prepareActionBatch, prepareActionQuery, referencesChildFlag, type ToolManifest } from './action-sql.js';
+import { isChildAccount } from './user-flags.js';
 import { activeAppWorker } from './app-worker-host.js';
 import { sha256Hex } from './app-tokens.js';
 import { timingSafeEqual } from './bytes.js';
@@ -164,13 +165,15 @@ async function prepareWorkerCall(
   }
   const input = (params ?? {}) as Record<string, unknown>;
   const userId = caller?.id ?? SYSTEM_WORKER_USER;
+  // #513: a worker acting for a user binds that user's child flag; system:worker is not a person.
+  const isChild = caller && referencesChildFlag(manifest) ? await isChildAccount(env.DB, caller.id) : false;
   try {
     switch (manifest.operation) {
       case 'query':
       case 'execute':
-        return { name, endpoint: manifest.operation, statements: [prepareActionQuery(manifest, input, userId)], role };
+        return { name, endpoint: manifest.operation, statements: [prepareActionQuery(manifest, input, userId, isChild)], role };
       case 'batch':
-        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, userId), role };
+        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, userId, isChild), role };
       default:
         throw new WorkerCallError('Forbidden', `"${name}" is a ${manifest.operation} action, which workers cannot run`);
     }

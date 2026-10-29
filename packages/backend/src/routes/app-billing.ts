@@ -3,7 +3,8 @@ import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { Stripe } from '../lib/stripe.js';
 import { getAppVisibility, requireVisible } from '../lib/visibility.js';
-import { prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { prepareActionQuery, referencesChildFlag, type ToolManifest } from '../lib/action-sql.js';
+import { isChildAccount } from '../lib/user-flags.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import { forwardToDataWorker } from './actions.js';
 
@@ -115,7 +116,9 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
   if (tool.state === 'staged') throw new HttpError('this app is not live yet', 403);
   let payload: unknown;
   try {
-    payload = prepareActionQuery(JSON.parse(tool.manifest) as ToolManifest, { product: product.product_key, subjects_json: JSON.stringify(subjects) }, user.id);
+    const manifest = JSON.parse(tool.manifest) as ToolManifest;
+    const isChild = referencesChildFlag(manifest) ? await isChildAccount(db, user.id) : false;
+    payload = prepareActionQuery(manifest, { product: product.product_key, subjects_json: JSON.stringify(subjects) }, user.id, isChild);
   } catch {
     throw new HttpError('the authorize action could not be run', 500);
   }

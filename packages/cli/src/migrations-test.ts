@@ -68,15 +68,15 @@ export function sampleParam(schema: NonNullable<ActionManifest['params']>[string
 
 /**
  * The executor's own binding (backend `bindStatement`): `:name` becomes `?` and the values follow in order, with the
- * three magic names resolved. Mirrored here; a parity test holds it equal to the backend's.
+ * magic names resolved (`:__user_is_child` is 0 for the sample user, #513). Mirrored here; a parity test holds it equal to the backend's.
  */
-export function bindAction(sql: string, resolved: Record<string, unknown>, userId = 'sample-user', now = Date.now()): { sql: string; params: unknown[] } {
+export function bindAction(sql: string, resolved: Record<string, unknown>, userId = 'sample-user', now = Date.now(), isChild = false): { sql: string; params: unknown[] } {
   const names: string[] = [];
   const bound = sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_m, name: string) => {
     names.push(name);
     return '?';
   });
-  const magic: Record<string, () => unknown> = { __user_id: () => userId, __now: () => now, __uuid: () => crypto.randomUUID() };
+  const magic: Record<string, () => unknown> = { __user_id: () => userId, __user_is_child: () => (isChild ? 1 : 0), __now: () => now, __uuid: () => crypto.randomUUID() };
   const params = names.map((name) => {
     if (name in magic) return magic[name]!();
     if (name in resolved) return resolved[name];

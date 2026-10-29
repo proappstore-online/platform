@@ -854,5 +854,7 @@ function newCorrelationId(): string {
 function normalizeUser(data: User): User {
   if (!data.login) data.login = data.name || data.id;
   if (!data.name) data.name = data.login || data.id;
+  // A server that predates the field, or a session cached before it, is not a child: the flag only ever restricts, and the SQL enforces it.
+  data.isChild = data.isChild === true;
   return data;
 }

@@ -112,16 +112,25 @@ export function prepareActionQuery(
   manifest: ToolManifest,
   input: Record<string, unknown>,
   userId: string,
+  isChild = false,
 ): PreparedQuery {
   if (typeof manifest.sql !== 'string') {
     throw new Error(`tool ${manifest.name} has no sql`);
   }
-  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId);
+  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId, Date.now(), {}, isChild);
+}
+
+/**
+ * Whether an action's SQL asks for the caller's child flag (#513). The platform reads the flag from the account record only for an
+ * action that uses it, so every other action costs no extra read.
+ */
+export function referencesChildFlag(manifest: ToolManifest): boolean {
+  return [manifest.sql, ...(manifest.statements ?? [])].some((sql) => typeof sql === 'string' && /:__user_is_child\b/.test(sql));
 }
 
 /**
  * Prepare a batch tool: every statement binds against the SAME resolved param
- * pool, so a shared :param (or :__user_id / :__now) is identical across all
+ * pool, so a shared :param (or :__user_id / :__user_is_child / :__now) is identical across all
  * statements. :__uuid stays per-occurrence — ids that must correlate across
  * statements are client-supplied params.
  */
@@ -129,6 +138,7 @@ export function prepareActionBatch(
   manifest: ToolManifest,
   input: Record<string, unknown>,
   userId: string,
+  isChild = false,
 ): PreparedQuery[] {
   if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) {
     throw new Error(`tool ${manifest.name} has no statements`);
@@ -138,7 +148,7 @@ export function prepareActionBatch(
   // timestamp an earlier one wrote (`WHERE updated_at = :__now`), which must not
   // depend on the millisecond ticking over between two occurrences.
   const now = Date.now();
-  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now));
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, {}, isChild));
 }
 
 /**
@@ -149,8 +159,9 @@ export function prepareVerifyInput(
   manifest: ToolManifest,
   input: Record<string, unknown>,
   userId: string,
+  isChild = false,
 ): PreparedQuery {
-  return prepareActionQuery(manifest, input, userId);
+  return prepareActionQuery(manifest, input, userId, isChild);
 }
 
 /**
@@ -164,12 +175,13 @@ export function prepareVerifyWrites(
   input: Record<string, unknown>,
   userId: string,
   output: Record<string, unknown>,
+  isChild = false,
 ): PreparedQuery[] {
   if (!Array.isArray(manifest.statements) || manifest.statements.length === 0) return [];
   const resolved = resolveToolParams(manifest, input);
   const verdict = Object.fromEntries(Object.entries(output).map(([k, v]) => [`${VERIFY_PARAM_PREFIX}${k}`, v]));
   const now = Date.now();
-  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, verdict));
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, verdict, isChild));
 }
 
 function bindStatement(
@@ -178,9 +190,13 @@ function bindStatement(
   userId: string,
   now: number = Date.now(),
   extraMagic: Record<string, unknown> = {},
+  isChild = false,
 ): PreparedQuery {
   const magicValues: Record<string, () => unknown> = {
     __user_id: () => userId,
+    // #513: 1 for a child account, else 0. Read from the account record by the caller of this function, never from the request: a
+    // client-supplied param of the same name is not read, because a magic name is resolved before the request's params.
+    __user_is_child: () => (isChild ? 1 : 0),
     __now: () => now,
     __uuid: () => crypto.randomUUID(),
   };

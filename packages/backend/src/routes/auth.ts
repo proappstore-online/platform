@@ -108,9 +108,9 @@ async function appActionAllows(
 }
 
 async function authUserDto(env: Env, claims: SessionClaims) {
-  const row = await env.DB.prepare('SELECT login, avatar_url, date_of_birth FROM users WHERE id = ?')
+  const row = await env.DB.prepare('SELECT login, avatar_url, date_of_birth, is_child FROM users WHERE id = ?')
     .bind(claims.uid)
-    .first<{ login: string | null; avatar_url: string | null; date_of_birth: string | null }>();
+    .first<{ login: string | null; avatar_url: string | null; date_of_birth: string | null; is_child: number | null }>();
   const login = claims.login ?? row?.login ?? claims.uid;
   const avatarUrl = claims.avatarUrl ?? row?.avatar_url ?? null;
   return {
@@ -119,6 +119,9 @@ async function authUserDto(env: Env, claims: SessionClaims) {
     login,
     avatarUrl,
     dateOfBirth: row?.date_of_birth ?? null,
+    // #513: the same fact `:__user_is_child` binds in an action's SQL, so a UI gates on what the server enforces. Read from the account
+    // record; the caller's own flag only.
+    isChild: row?.is_child === 1,
     roles: claims.roles,
   };
 }

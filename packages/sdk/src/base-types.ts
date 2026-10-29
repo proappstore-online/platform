@@ -12,6 +12,11 @@ export interface User {
    * platform and cannot be changed without contacting support.
    */
   dateOfBirth: string | null;
+  /**
+   * Whether this is a child account (provisioned with `isChild`, no email, no real name). The server reads it from the account record,
+   * and a registered action's SQL sees the same fact as `:__user_is_child`: gate the UI on this, enforce in the SQL.
+   */
+  isChild: boolean;
 }
 
 /** Callback returned by subscribe methods — call to unsubscribe. */

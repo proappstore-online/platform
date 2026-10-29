@@ -118,6 +118,7 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
     if (tool.operation !== 'query') return 'requires_auth false is only allowed for query tools';
     const sql = sqlStatements[0] ?? '';
     if (/:__user_id\b/.test(sql)) return 'public query tools must not reference :__user_id';
+    if (/:__user_is_child\b/.test(sql)) return 'public query tools must not reference :__user_is_child';
     const limit = literalLimit(sql);
     if (limit === null) return 'public query tools must include a literal LIMIT of 500 or less';
     if (limit > 500) return 'public query tools must use LIMIT 500 or less';
@@ -136,7 +137,7 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
 
   // All :paramName in SQL must be declared in params (except magic params). A
   // verify tool's writes may also bind the verifier's declared outputs.
-  const magicParams = new Set(['__user_id', '__now', '__uuid']);
+  const magicParams = new Set(['__user_id', '__user_is_child', '__now', '__uuid']);
   if (tool.operation === 'verify') {
     for (const key of Object.keys(getVerifier(tool.verifier)!.outputs)) magicParams.add(`${VERIFY_PARAM_PREFIX}${key}`);
   }

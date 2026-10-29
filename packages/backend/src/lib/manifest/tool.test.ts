@@ -31,6 +31,12 @@ describe('validateManifest', () => {
     expect(validateManifest(query({ sql: 'SELECT * FROM items WHERE id = :id' }))).toBe('SQL references :id but it is not declared in params');
   });
 
+  it('accepts :__user_is_child as a server-owned param, and refuses it in a public query (#513)', () => {
+    expect(validateManifest(query({ sql: 'SELECT * FROM items WHERE user_id = :__user_id AND :__user_is_child = 0' }))).toBeNull();
+    const err = validateManifest(query({ requires_auth: false, sql: 'SELECT * FROM items WHERE :__user_is_child = 0 LIMIT 10' }));
+    expect(err).toMatch(/:__user_is_child/);
+  });
+
   it('holds public queries to a literal LIMIT and no :__user_id', () => {
     expect(validateManifest(query({ requires_auth: false, sql: 'SELECT * FROM items' }))).toBe('public query tools must include a literal LIMIT of 500 or less');
     expect(validateManifest(query({ requires_auth: false, sql: 'SELECT * FROM items LIMIT 501' }))).toBe('public query tools must use LIMIT 500 or less');

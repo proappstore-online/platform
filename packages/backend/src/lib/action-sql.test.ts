@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, type ToolManifest } from './action-sql.js';
+import { prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, type ToolManifest } from './action-sql.js';
 
 const manifest: ToolManifest = {
   name: 'list_mine',
@@ -168,5 +168,45 @@ describe('verify tools (#148)', () => {
     expect(prepareVerifyWrites({ ...verifyManifest, statements: undefined }, { game_id: 'g1' }, 'gh:1', { over: true })).toEqual([]);
     expect(() => prepareVerifyWrites(verifyManifest, { game_id: 'g1' }, 'gh:1', { over: true })).toThrow('Unresolved parameter: __verify_result');
     expect(() => prepareVerifyInput({ ...verifyManifest, sql: undefined }, { game_id: 'g1' }, 'gh:1')).toThrow('has no sql');
+  });
+});
+
+// #513: the caller's child flag sits next to :__user_id as a server-owned value, 1 or 0, never read from the request.
+describe(':__user_is_child (#513)', () => {
+  const guarded: ToolManifest = {
+    name: 'register_family', description: 'Register a family', operation: 'execute', requires_auth: true,
+    sql: 'INSERT INTO families (id, owner) SELECT :id, :__user_id WHERE :__user_is_child = 0',
+    params: { id: { type: 'string' } },
+  };
+
+  it('binds 1 for a child and 0 for anyone else, and defaults to 0', () => {
+    expect(prepareActionQuery(guarded, { id: 'f1' }, 'cred:kid', true).params).toEqual(['f1', 'cred:kid', 1]);
+    expect(prepareActionQuery(guarded, { id: 'f1' }, 'cred:adult', false).params).toEqual(['f1', 'cred:adult', 0]);
+    expect(prepareActionQuery(guarded, { id: 'f1' }, 'gh:1').params).toEqual(['f1', 'gh:1', 0]);
+  });
+
+  it('ignores a client-supplied __user_is_child, undeclared or declared as a param', () => {
+    expect(prepareActionQuery(guarded, { id: 'f1', __user_is_child: 0 }, 'cred:kid', true).params[2]).toBe(1);
+    const declared: ToolManifest = { ...guarded, params: { id: { type: 'string' }, __user_is_child: { type: 'integer', default: 0 } } };
+    expect(prepareActionQuery(declared, { id: 'f1', __user_is_child: 0 }, 'cred:kid', true).params[2]).toBe(1);
+  });
+
+  it('is the same value in every statement of a batch and in a verify tool\'s input and writes', () => {
+    const batch: ToolManifest = { name: 'b', description: 'b', operation: 'batch', requires_auth: true, params: {},
+      statements: ['UPDATE a SET x = 1 WHERE u = :__user_id AND :__user_is_child = 1', 'UPDATE b SET y = 1 WHERE u = :__user_id AND :__user_is_child = 1'] };
+    expect(prepareActionBatch(batch, {}, 'cred:kid', true).map((q) => q.params)).toEqual([['cred:kid', 1], ['cred:kid', 1]]);
+    expect(prepareActionBatch(batch, {}, 'cred:adult').map((q) => q.params)).toEqual([['cred:adult', 0], ['cred:adult', 0]]);
+
+    const verify: ToolManifest = { name: 'v', description: 'v', operation: 'verify', verifier: 'chess', requires_auth: true, params: {},
+      sql: 'SELECT moves FROM games WHERE owner = :__user_id AND :__user_is_child = 0', statements: ['UPDATE games SET done = 1 WHERE owner = :__user_id AND :__user_is_child = 0'] };
+    expect(prepareVerifyInput(verify, {}, 'cred:kid', true).params).toEqual(['cred:kid', 1]);
+    expect(prepareVerifyWrites(verify, {}, 'cred:kid', {}, true)[0]!.params).toEqual(['cred:kid', 1]);
+  });
+
+  it('referencesChildFlag sees it in sql or in any statement, and only as a whole name', () => {
+    expect(referencesChildFlag(guarded)).toBe(true);
+    expect(referencesChildFlag({ ...guarded, sql: undefined, statements: ['SELECT 1', 'SELECT :__user_is_child'] })).toBe(true);
+    expect(referencesChildFlag({ ...guarded, sql: 'SELECT :__user_id' })).toBe(false);
+    expect(referencesChildFlag({ ...guarded, sql: 'SELECT :__user_is_children' })).toBe(false);
   });
 });

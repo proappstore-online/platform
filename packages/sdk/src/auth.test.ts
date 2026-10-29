@@ -665,3 +665,42 @@ describe('Turnstile on register (#26)', () => {
     expect(await auth().turnstileSiteKey()).toEqual({ siteKey: null, action: 'register' });
   });
 });
+
+describe('User.isChild (#513)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function userFrom(me: Record<string, unknown>) {
+    const storage = new Map<string, string>([['pas:session', JSON.stringify({ token: 'tok', user: null })]]);
+    vi.stubGlobal('window', {
+      location: { hash: '', href: 'https://club.proappstore.online/' },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => (String(input).endsWith('/v1/auth/me')
+      ? new Response(JSON.stringify({ id: 'cred:x', login: 'x', avatarUrl: null, dateOfBirth: null, roles: ['user'], ...me }), { status: 200 })
+      : new Response(null, { status: 204 }))));
+    const auth = new Auth('club', 'https://api.proappstore.online');
+    await auth.init();
+    return auth.user;
+  }
+
+  it('is true for a child account, as the server reports it', async () => {
+    expect((await userFrom({ isChild: true }))?.isChild).toBe(true);
+  });
+
+  it('is false for an adult, and false when the server predates the field', async () => {
+    expect((await userFrom({ isChild: false }))?.isChild).toBe(false);
+    expect((await userFrom({}))?.isChild).toBe(false);
+  });
+
+  it('only a real true counts: a string or a number is not a child flag', async () => {
+    expect((await userFrom({ isChild: 'true' }))?.isChild).toBe(false);
+    expect((await userFrom({ isChild: 1 }))?.isChild).toBe(false);
+  });
+});

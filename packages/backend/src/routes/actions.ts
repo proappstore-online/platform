@@ -4,6 +4,7 @@ import { HttpError, optionalUser, requireAppAccess, requireRecentAuth, requireUs
 import { roleSubjects } from '../lib/role-subject.js';
 import { DATA_FAULT_DETAIL_HEADER, DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
+import { isChildAccount } from '../lib/user-flags.js';
 import {
   actionCallers,
   MCP_VIA_HEADER,
@@ -12,6 +13,7 @@ import {
   prepareActionQuery,
   prepareVerifyInput,
   prepareVerifyWrites,
+  referencesChildFlag,
   type ActionState,
   type ToolManifest,
 } from '../lib/action-sql.js';
@@ -198,7 +200,9 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   // #394: the data worker receives this request's trace with the API's span as
   // parent, so its Workers Logs line and this API's failure row join one trace.
   const traceparent = downstreamTraceparent(requestTrace(c.req.raw));
-  if (manifest.operation === 'verify') return runVerifyAction(c.env, appId, manifest, input, userId, token, traceparent);
+  // #513: the caller's child flag, from the account record and only for an action whose SQL asks for it. A public action has no caller.
+  const isChild = userId !== '' && referencesChildFlag(manifest) ? await isChildAccount(c.env.DB, userId) : false;
+  if (manifest.operation === 'verify') return runVerifyAction(c.env, appId, manifest, input, userId, token, traceparent, isChild);
   let endpoint: string;
   let payload: unknown;
   try {
@@ -206,10 +210,10 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // Batch tools run all statements in ONE D1 transaction on the data
       // worker — multi-step flows can't be left half-applied.
       endpoint = 'batch';
-      payload = { statements: prepareActionBatch(manifest, input, userId) };
+      payload = { statements: prepareActionBatch(manifest, input, userId, isChild) };
     } else {
       endpoint = manifest.operation === 'query' ? 'query' : 'execute';
-      payload = prepareActionQuery(manifest, input, userId);
+      payload = prepareActionQuery(manifest, input, userId, isChild);
     }
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
@@ -340,13 +344,14 @@ async function runVerifyAction(
   userId: string,
   token: string | null,
   traceparent: string,
+  isChild: boolean,
 ): Promise<Response> {
   const verifier = getVerifier(manifest.verifier);
   if (!verifier) throw new HttpError('action manifest is invalid: unknown verifier', 500);
 
   let query;
   try {
-    query = prepareVerifyInput(manifest, input, userId);
+    query = prepareVerifyInput(manifest, input, userId, isChild);
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
   }
@@ -366,7 +371,7 @@ async function runVerifyAction(
     return Response.json({ ok: false, verifier: verifier.id, error: outcome.error ?? 'verification failed', output: outcome.output }, { headers });
   }
 
-  const writes = prepareVerifyWrites(manifest, input, userId, outcome.output);
+  const writes = prepareVerifyWrites(manifest, input, userId, outcome.output, isChild);
   if (writes.length === 0) return Response.json({ ok: true, verifier: verifier.id, output: outcome.output }, { headers });
 
   const written = await forwardToDataWorker(env, appId, 'batch', { statements: writes }, token, traceparent);
@@ -394,6 +399,7 @@ function validatePublicManifestForExecution(manifest: ToolManifest): string | nu
   if (manifest.operation !== 'query') return 'operation must be query';
   const sql = manifest.sql ?? '';
   if (/:__user_id\b/.test(sql)) return 'must not reference :__user_id';
+  if (/:__user_is_child\b/.test(sql)) return 'must not reference :__user_is_child';
   if ((manifest.auth?.platform_roles?.length ?? 0) > 0 || (manifest.auth?.app_roles?.length ?? 0) > 0) {
     return 'must not declare auth roles';
   }

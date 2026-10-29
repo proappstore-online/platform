@@ -266,6 +266,7 @@ These are injected by the platform — **do not** declare them in `params`:
 | Placeholder | Resolves to |
 |-------------|-------------|
 | `:__user_id` | the calling user's id (forces `requires_auth: true`). Scope per-user rows with `WHERE user_id = :__user_id`. |
+| `:__user_is_child` | `1` when the calling account is a child account, else `0`; next to `:__user_id`, for an authenticated action only. Read from the account record, never from the request (a client-supplied `__user_is_child` is ignored). Refuse a child in the SQL that enforces it: `INSERT … SELECT … WHERE :__user_is_child = 0`. The SDK shows the same fact as `useAuth().user.isChild`; gate the UI on it, enforce here. A public (`requires_auth: false`) query cannot reference it. |
 | `:__now` | current time, ms since epoch. |
 | `:__uuid` | a fresh UUID (use for inserting primary keys). |
 | `:__verify_<output>` | on a `verify` tool's `statements` only: an output of the verifier (`:__verify_over`, `:__verify_result`, …). Never accepted from the client. |
