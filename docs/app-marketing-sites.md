@@ -86,7 +86,11 @@ An app can publish `marketing/` exactly as scaffolded: the template's headline a
 | `imagery` | no hero image and no screenshots; without a hero image the social preview is the app icon |
 | `placeholder` | an `APPNAME` the scaffold never replaced |
 
-It only recognises the template's strings, so any copy an owner has written passes. It is a **warning** in this release and does not stop a deploy. Blocking the first activation needs the same signal in the deploy step, and the deploy summary and console need to show it; both are still to do.
+It only recognises the template's strings, so any copy an owner has written passes. It is a **warning** in `pas check` and `compliance.yml`, and never stops a deploy there.
+
+The **"Publish marketing site" deploy step** (`.github/workflows/app-deploy.yml`) runs the same check again, right before upload, and reports its result to the run's job summary either way. If the check found anything and the `about-<app>` site has never answered a live request before (a plain `HEAD /` probe — the host's own "no active revision" signal, #497), the step stops there: it never uploads or activates, so the site never goes live on the template's copy. A redeploy of an app whose site is already live is never blocked this way — the owner is already past this gate once, and a template-copy warning on an edit they are actively making is `pas check`'s job, not the deploy's.
+
+Not here: a console report (`proappstore-online/console`, a separate repo) and prefilling owner/contact from the creator's developer profile at scaffold time. The latter was considered and set aside: `pas marketing add` and `add_marketing_site` (#421) write straight into the app's repo — the MCP path commits and pushes in the same call — so a prefilled real name and email would reach a public GitHub repo, and for `about-<app>` once pushed, a public site, without the owner choosing to put it there. The warning plus the first-activation block above close the bookkeeper#73 gap without that trade-off.
 
 ## Adding the site to an existing app: `pas marketing add` (#410)
 

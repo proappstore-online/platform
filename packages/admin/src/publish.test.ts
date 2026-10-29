@@ -521,6 +521,29 @@ describe("canonical deploy workflow — single source of truth", () => {
     expect(step).toContain("if (activation.previous && !activation.unchanged)");
   });
 
+  // #498: an about- site must not go live with the template's own copy (bookkeeper#73).
+  it("blocks the marketing site's first activation on unedited template copy, and always reports the check", () => {
+    const yaml = pipeline();
+    const at = (name: string) => yaml.indexOf(`- name: ${name}`);
+    const name = "Publish marketing site (marketing/ -> about-<app>, keyless)";
+    const step = yaml.slice(at(name), at("Trigger post-deploy QA flows (keyless — GitHub OIDC)"));
+    expect(step).toContain("npx -y @proappstore/cli@latest check --json");
+    expect(step).toContain("results.find((r) => r.name === 'Marketing site content')");
+    // The liveness probe and the check both run, and are decided, before anything is uploaded.
+    const checkAt = step.indexOf("marketingCheck.status !== 'pass'");
+    expect(checkAt).toBeGreaterThan(0);
+    expect(checkAt).toBeLessThan(step.indexOf("walk(DIST)"));
+    expect(checkAt).toBeLessThan(step.indexOf("'revisions/' + REVISION"));
+    // Reported to the run's job summary whether or not it blocks.
+    expect(step).toContain("process.env.GITHUB_STEP_SUMMARY");
+    expect(step).toContain("appendFileSync(process.env.GITHUB_STEP_SUMMARY");
+    // Blocks only while the site has never answered live; an already-live app's redeploy just warns.
+    expect(step).toContain("const blocks = !wasLive;");
+    expect(step).toContain("if (blocks) {");
+    expect(step).toMatch(/method: 'HEAD'.*cache: 'no-store'/);
+    expect(step).not.toMatch(/secrets\./);
+  });
+
   it("skips schema/action registration only in the canonical template source repo", () => {
     const golden = pipeline();
     expect(golden).toContain("hashFiles('migrations.json') != '' && github.event.repository.name != 'template-app'");

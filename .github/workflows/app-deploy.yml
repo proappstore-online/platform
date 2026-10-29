@@ -391,12 +391,51 @@ jobs:
           [ -x marketing/node_modules/.bin/astro ] || pnpm --dir marketing install --ignore-workspace --no-frozen-lockfile
           pnpm --dir marketing build
           node --input-type=module <<'JS'
+          import { execSync } from 'node:child_process';
           import { createHash } from 'node:crypto';
-          import { readdirSync, readFileSync, statSync } from 'node:fs';
+          import { appendFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
           import { join, relative, sep } from 'node:path';
           const { APP_ID, REVISION, ACTIONS_ID_TOKEN_REQUEST_URL: tokenUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: tokenAuth } = process.env;
           const API = 'https://api.proappstore.online/v1/apps/' + APP_ID + '/marketing/';
           const SITE = 'https://about-' + APP_ID + '.proappstore.online';
+
+          // #498: the about- site must not go live with the template's own copy (bookkeeper#73).
+          // pas check's "Marketing site content" result (packages/compliance/src/checks/marketing-content.ts)
+          // is the one source for what counts as unedited; run it here rather than duplicate its regexes,
+          // so a change to the check takes effect without touching this workflow. Reported to the deploy
+          // summary either way; blocks only the site's FIRST activation — a redeploy of an app already
+          // live keeps shipping, since the owner is already past this gate once.
+          let marketingCheck = null;
+          try {
+            // --json writes nothing else to stdout (packages/cli/src/check.ts): the whole thing parses.
+            const out = execSync('npx -y @proappstore/cli@latest check --json', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            marketingCheck = JSON.parse(out).results.find((r) => r.name === 'Marketing site content') ?? null;
+          } catch (e) {
+            // `pas check` exits 1 on any hard failure elsewhere in the repo; its JSON is still on stdout.
+            try {
+              marketingCheck = JSON.parse(String(e.stdout ?? '')).results.find((r) => r.name === 'Marketing site content') ?? null;
+            } catch {
+              console.log('::warning::marketing content check unavailable: ' + String(e.message ?? e).slice(0, 200));
+            }
+          }
+          let wasLive = false;
+          try {
+            const r = await fetch(SITE + '/', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+            wasLive = r.status === 200;
+            await r.body?.cancel().catch(() => {});
+          } catch { /* unreachable or never published: treat as not yet live */ }
+          if (marketingCheck && marketingCheck.status !== 'pass') {
+            const blocks = !wasLive;
+            const lines = ['### Marketing site content (#498)', '', (blocks ? ':no_entry: **blocks first activation** — ' : ':warning: ') + marketingCheck.detail];
+            for (const s of marketingCheck.suggestions ?? []) lines.push('- ' + s);
+            if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+            if (blocks) {
+              console.log('::error::marketing site never published; blocked on unedited template copy: ' + marketingCheck.detail);
+              process.exit(1);
+            }
+            console.log('::warning::marketing/src/site.ts: ' + marketingCheck.detail);
+          }
+
           // The platform's MARKETING_CONTENT_TYPES (backend lib/marketing-artifact.ts).
           const TYPES = { html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', xml: 'application/xml; charset=utf-8', txt: 'text/plain; charset=utf-8', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ico: 'image/x-icon', svg: 'image/svg+xml', woff2: 'font/woff2' };
           const DIST = 'marketing/dist';
