@@ -524,6 +524,25 @@ describe("reserved _pas_ tables (#508)", () => {
     expect(res.status).toBe(200);
   });
 
+  // #511: the write target decides it — an owner's paywalled write that only reads _pas_entitlements is allowed.
+  it("lets an owner's write through when it only reads _pas_entitlements, not write it", async () => {
+    const res = await owner("/execute", {
+      sql: "INSERT INTO puzzle_attempts (user_id) SELECT 'x' WHERE NOT EXISTS (SELECT 1 FROM puzzle_attempts pa JOIN _pas_entitlements pe ON pe.subject = pa.user_id)",
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("still refuses a write whose target is reserved, however it reaches it", async () => {
+    for (const sql of [
+      "UPDATE OR IGNORE [_pas_entitlements] SET status = 'active'",
+      "REPLACE INTO main._pas_entitlements (product, subject) VALUES (1, 2)",
+      "WITH e AS (SELECT 1) UPDATE _pas_entitlements SET status = 'active'",
+    ]) {
+      const res = await owner("/execute", { sql });
+      expect(res.status, sql).toBe(403);
+    }
+  });
+
   it("lets the platform's own trusted write through", async () => {
     const res = await internal("/execute", { sql: WRITE });
     expect(res.status).toBe(200);

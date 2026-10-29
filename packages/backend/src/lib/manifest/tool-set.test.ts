@@ -71,5 +71,32 @@ describe('reserved _pas_ tables (#508)', () => {
     const res = await validateToolSet([batch], undefined, 'app');
     expect(res?.payload.error).toBe('tool "sneaky": statement 2 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps');
   });
+
+  // #511: the write target decides it, not every mention — a paywalled write that only reads _pas_entitlements is allowed.
+  it('allows a paywalled write that writes its own table and only reads _pas_entitlements', async () => {
+    const paywalled = action({
+      name: 'create_puzzle_attempt',
+      operation: 'execute',
+      sql: `INSERT INTO puzzle_attempts (user_id, puzzle_id)
+        SELECT :__user_id, 'p1'
+        WHERE NOT EXISTS (
+          SELECT 1 FROM puzzle_attempts pa
+          JOIN _pas_entitlements pe ON pe.subject = :__user_id
+          WHERE pa.user_id = :__user_id AND pe.status != 'active'
+        )`,
+    });
+    expect(await validateToolSet([paywalled], undefined, 'app')).toBeNull();
+  });
+
+  it('still refuses a write whose target is reserved, however it reaches it', async () => {
+    for (const sql of [
+      "UPDATE OR IGNORE [_pas_entitlements] SET status = 'active' WHERE :__user_id IS NOT NULL",
+      "WITH e AS (SELECT 1) UPDATE _pas_entitlements SET status = 'active' WHERE :__user_id IS NOT NULL",
+    ]) {
+      const write = action({ name: 'grant_myself', operation: 'execute', sql });
+      const res = await validateToolSet([write], undefined, 'app');
+      expect(res?.payload.error, sql).toBe('tool "grant_myself": statement 1 writes _pas_entitlements; _pas_* tables are platform-owned and read-only for apps');
+    }
+  });
 });
 

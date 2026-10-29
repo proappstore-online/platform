@@ -14,6 +14,17 @@ describe('writesReservedTable', () => {
     ]) expect(writesReservedTable(sql), sql).toBeNull();
   });
 
+  // #511: a write whose TARGET is an app table but that only READS `_pas_*` in a subquery, JOIN, WHERE or CTE is allowed —
+  // this is the paywall pattern the billing docs prescribe.
+  it('lets a write read _pas_entitlements as long as the write target is not reserved', () => {
+    for (const sql of [
+      "INSERT INTO t (x) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM _pas_entitlements WHERE status = 'active')",
+      "UPDATE t SET x = 1 WHERE EXISTS (SELECT 1 FROM _pas_entitlements WHERE subject = t.id)",
+      'DELETE FROM t WHERE id IN (SELECT subject FROM _pas_entitlements)',
+      'WITH e AS (SELECT * FROM _pas_entitlements) INSERT INTO t SELECT * FROM e',
+    ]) expect(writesReservedTable(sql), sql).toBeNull();
+  });
+
   it('refuses every way of writing one', () => {
     for (const sql of [
       "INSERT INTO _pas_entitlements (product, subject, status) VALUES ('t', 'x', 'active')",
@@ -33,6 +44,8 @@ describe('writesReservedTable', () => {
       'INSERT INTO [_pas_entitlements] (product) VALUES (1)',
       'INSERT INTO `_PAS_Entitlements` (product) VALUES (1)',
       'INSERT INTO main._pas_entitlements (product) VALUES (1)',
+      'UPDATE OR IGNORE [_pas_entitlements] SET status = \'active\'',
+      'REPLACE INTO main._pas_entitlements (product, subject) VALUES (1, 2)',
     ]) expect(writesReservedTable(sql), sql).toMatch(/_pas_/i);
   });
 
@@ -51,5 +64,17 @@ describe('writesReservedTable', () => {
     for (const sql of ['INSERT INTO pas_entitlements (x) VALUES (1)', 'DELETE FROM my_pas_table', 'UPDATE entitlements SET x = 1', 'INSERT INTO _pasx (x) VALUES (1)']) {
       expect(writesReservedTable(sql), sql).toBeNull();
     }
+  });
+
+  // chess-academy's real create_puzzle_attempt shape (#511): a paywalled write whose target is the app's own table.
+  it('allows the chess-academy create_puzzle_attempt shape', () => {
+    const sql = `INSERT INTO puzzle_attempts (user_id, puzzle_id, solved)
+      SELECT :__user_id, :puzzle_id, :solved
+      WHERE NOT EXISTS (
+        SELECT 1 FROM puzzle_attempts pa
+        JOIN _pas_entitlements pe ON pe.subject = :__user_id
+        WHERE pa.user_id = :__user_id AND pe.status = 'active'
+      )`;
+    expect(writesReservedTable(sql)).toBeNull();
   });
 });
