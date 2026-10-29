@@ -75,6 +75,17 @@ deploy, and because only a successful, verified activation moves the pointer,
 the previous site keeps serving. Editing the folder and pushing publishes a new
 revision; re-running a deploy for the same commit is a no-op.
 
+**Live acceptance (#408), checked 2026-10-29.** `GET https://about-bookkeeper.proappstore.online/`
+answers `200`, with the platform's static-site CSP/HSTS/`X-Frame-Options` headers and
+`X-PAS-Marketing-Revision: 14abcb38c2c6b9712b3a9cf2b990017bb6e81efb` — the SHA of bookkeeper's
+latest commit on `main` at the time (`fix: refresh service worker on navigation...`, pushed the
+same day, unrelated to marketing). That commit's own deploy republished the about- site with no
+separate publish step, satisfying the issue's acceptance directly: a normal app deploy puts the
+site live, and redeploying keeps it current. The remaining criterion — a broken build leaves the
+previous revision serving — is pinned at the code level (the rollback-on-failed-live-check logic
+above, and its tests in `packages/admin/src/publish.test.ts`), not reproduced against a live app:
+breaking a real app's deploy to prove it isn't worth the risk to a production app.
+
 ## Unedited template copy: the `marketing-content` check (#498)
 
 An app can publish `marketing/` exactly as scaffolded: the template's headline and benefits, the default operator on the legal pages, no contact, no imagery. `pas check` (every app's prebuild and `compliance.yml`) now reads `marketing/src/site.ts` and warns on:
