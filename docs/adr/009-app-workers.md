@@ -240,9 +240,10 @@ same app either.
   counted atomically on the per-invocation D1 record (an in-memory counter does
   not hold across isolates) (#254). The runtime `subRequests` limit (§5, §6 B.6)
   counts **every** subrequest — each `PAS` RPC **plus** every outbound `fetch`.
-  So `subRequests` = `PAS` budget + an outbound budget, sized from duperdash's
-  measured reconcile (#267). Setting `subRequests` to 200 starves any worker that
-  calls out.
+  So `subRequests` = 200 `PAS` calls + **300 outbound fetches** = 500 (#267),
+  sized with headroom over duperdash's measured reconcile (~15–20 GitHub
+  GraphQL page requests plus installation-token mints per run). Setting
+  `subRequests` to 200 starves any worker that calls out.
 - **Hook budget.** *Amended by #257.* A worker hook is acknowledged to the
   sender (202) and then delivered by the `pas-app-events` queue consumer, which
   is not bound by the 30 s `waitUntil` cap the first implementation lived under
