@@ -195,6 +195,21 @@ repository can only write its own app's site; no standing secret is involved.
 
 **Storefront inventory (#497).** `GET /v1/storefront/apps` carries `websiteUrl` per app: `https://about-<id>.proappstore.online` while the app has an active marketing revision whose deploy receipt is `uploaded`, and `null` otherwise (never published, unpublished, rolled back to nothing, an upload that did not finish). It is derived from the deploy pipeline's own state, so the storefront catalogue takes it from this inventory rather than from a hand-edited `registry.json`, and an unpublished site drops out within the endpoint's 60-second cache. It is not the owner-typed `websiteUrl` of an app's own listing (`GET /v1/storefront/apps/:id`).
 
+**One source for listing copy, not two (#504).** `registry.json` also hand-types `description` and
+`about` — the same facts as the owner's moderated `tagline` and `longDescription`
+(`PUT /v1/apps/:id/listing`, docs/publishing-flow.md) — so the two drift. The inventory now carries
+`longDescription` too, for the same reason it carries `websiteUrl`: a generator reading this endpoint
+can take `description`/`about` from `tagline`/`longDescription` instead of a second hand-typed copy.
+Decided as the one source over the alternative (the marketing site reading the platform listing): the
+marketing site's own content (`marketing/src/site.ts` — headline, summary, benefits, how-it-works) is
+deliberately **not** generated from anything (#409, "what the owner commits is what is published");
+having a generator re-fetch and overwrite it on every build would undo that model. The two already
+meet once, by design: `pas marketing add`'s scaffold-time prefill (#410) seeds `summary` from `tagline`
+when the app has a listing. `proFeatures` has no platform equivalent and no evident need for one —
+`benefits` on the marketing site already carries that story in more detail; the registry entry can
+drop the field rather than gain a new one to duplicate it. Applying this on the `registry.json` side
+is `proappstore-online/proappstore`'s `scripts/reconcile-catalogue.cjs`, a separate repo.
+
 `app_storefront_publication.listed` (written by the admin publish step and
 reconciled hourly from `registry.json`) is the storefront catalogue's listing
 state; it does not affect the marketing site.

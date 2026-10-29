@@ -101,6 +101,7 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     `SELECT a.id              AS app_id,
             l.icon_url,
             l.tagline,
+            l.long_description,
             l.category,
             l.theme_color,
             l.updated_at,
@@ -120,6 +121,7 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     app_id: string;
     icon_url: string | null;
     tagline: string | null;
+    long_description: string | null;
     category: string | null;
     theme_color: string | null;
     updated_at: number | null;
@@ -131,6 +133,9 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     appId: r.app_id,
     iconUrl: r.icon_url,
     tagline: r.tagline,
+    // #504: exposed in bulk so a catalogue generator (proappstore's registry.json reconciliation)
+    // can source its hand-maintained "about" copy from here instead of duplicating it.
+    longDescription: r.long_description,
     category: r.category,
     themeColor: r.theme_color,
     updatedAt: r.updated_at ?? 0,

@@ -80,3 +80,22 @@ describe('storefront inventory carries the about- site (#497)', () => {
     expect(urls.live).toBe('https://about-live.proappstore.online');
   });
 });
+
+// #504: registry.json (proappstore) hand-types `about` as a duplicate of this same listing
+// copy. Carrying longDescription in the bulk inventory lets a catalogue generator read it
+// from here instead — the same move #497 made for websiteUrl.
+describe('storefront inventory carries the moderated long description (#504)', () => {
+  async function longDescriptions(): Promise<Record<string, string | null>> {
+    const res = await SELF.fetch(`${BASE}/v1/storefront/apps`);
+    expect(res.status).toBe(200);
+    const { apps } = (await res.json()) as { apps: Array<{ appId: string; longDescription: string | null }> };
+    return Object.fromEntries(apps.map((a) => [a.appId, a.longDescription]));
+  }
+
+  it('carries the owner-written long description for an app with a listing, and null without one', async () => {
+    await env.DB.prepare("INSERT INTO app_listings (app_id, long_description, updated_at) VALUES ('live', 'Longer story about live.', 1)").run();
+    const descriptions = await longDescriptions();
+    expect(descriptions.live).toBe('Longer story about live.');
+    expect(descriptions.bare).toBeNull();
+  });
+});
