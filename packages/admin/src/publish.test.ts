@@ -912,6 +912,52 @@ describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, 
       .toEqual(["pnpm install --frozen-lockfile"]);
     expect(runStep(stepScript(golden(), "Install"), {}).calls).toEqual(["pnpm install --no-frozen-lockfile"]);
   });
+
+  // #499: a 'fail' result already fails Build closed, above — but as a wall of raw log; a
+  // 'warn' blocks nothing and shows nowhere. "Report compliance" runs pas check again and
+  // puts every result where a human glancing at the run actually sees it.
+  it("Report compliance: if: always() + continue-on-error, so it still runs (and explains why) when Build just failed", () => {
+    const yaml = golden();
+    const at = yaml.indexOf("- name: Report compliance (pas check)");
+    const step = yaml.slice(at, yaml.indexOf("- name: Locate build output"));
+    expect(step).toContain("if: always()");
+    expect(step).toContain("continue-on-error: true");
+    expect(step).not.toMatch(/secrets\./);
+  });
+
+  it("Report compliance: writes every pas check result to the job summary, flagging each fail/warn", () => {
+    const script = stepScript(golden(), "Report compliance (pas check)");
+    const dir = mkdtempSync(join(tmpdir(), "compliance-report-"));
+    const bin = join(dir, ".bin");
+    mkdirSync(bin);
+    const report = {
+      root: dir,
+      failed: 1,
+      results: [
+        { name: "Marketing site content", status: "warn", detail: "placeholder: APPNAME" },
+        { name: "App title", status: "fail", detail: "title is the app id" },
+      ],
+    };
+    // Same shape as a real `pas check --json` that found a hard failure: JSON on stdout, exit 1.
+    writeFileSync(join(bin, "npx"), `#!/bin/bash\ncat <<'REPORT'\n${JSON.stringify(report)}\nREPORT\nexit 1\n`);
+    chmodSync(join(bin, "npx"), 0o755);
+    const summary = join(dir, "summary.md");
+    writeFileSync(summary, "");
+    const res = spawnSync("bash", ["-e", "-c", script], {
+      cwd: dir,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: summary },
+      encoding: "utf8",
+    });
+    const written = readFileSync(summary, "utf8");
+    rmSync(dir, { recursive: true, force: true });
+    expect(res.status).toBe(0); // the script itself never exits non-zero on a bad report — GH's continue-on-error governs the step
+    expect(res.stdout).toContain("::error::App title: title is the app id");
+    expect(res.stdout).toContain("::warning::Marketing site content: placeholder: APPNAME");
+    expect(written).toContain("### Platform compliance (`pas check`)");
+    expect(written).toContain("1 check(s) failed");
+    expect(written).toContain("Marketing site content");
+    expect(written).toContain("App title");
+  });
 });
 
 describe("storefront registry: private apps (#259)", () => {

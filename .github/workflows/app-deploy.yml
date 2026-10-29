@@ -136,6 +136,40 @@ jobs:
           if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then pnpm build
           else (cd web 2>/dev/null || true; npx vite build); fi
 
+      - name: Report compliance (pas check)
+        # #499: a failing check otherwise has no visible consequence — the #204 gate above fails Build
+        # closed on a 'fail', but that's a wall of raw log; a 'warn' has none at all, blocking nothing
+        # and showing nowhere. if: always() so this still runs (and explains why) when Build just failed.
+        if: always()
+        continue-on-error: true
+        run: |
+          node --input-type=module <<'JS'
+          import { execSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          let report = null;
+          try {
+            // --json writes nothing else to stdout (packages/cli/src/check.ts): the whole thing parses.
+            const out = execSync('npx -y @proappstore/cli@latest check --json', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            report = JSON.parse(out);
+          } catch (e) {
+            // A 'fail' result exits 1; the JSON is still on stdout.
+            try { report = JSON.parse(String(e.stdout ?? '')); } catch { /* unavailable: report below */ }
+          }
+          if (!report) { console.log('::warning::compliance report unavailable (pas check did not return JSON)'); process.exit(0); }
+          const ICON = { pass: '✅', warn: '⚠️', fail: '❌' };
+          const lines = ['### Platform compliance (`pas check`)', ''];
+          lines.push(report.failed > 0
+            ? `**${report.failed} check(s) failed — Build fails closed on them (#204).**`
+            : '_No hard failures._');
+          lines.push('', '| | Check | Detail |', '|---|---|---|');
+          for (const r of report.results) lines.push(`| ${ICON[r.status] ?? r.status} | ${r.name} | ${String(r.detail).replace(/\|/g, '\\|')} |`);
+          if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          for (const r of report.results) {
+            if (r.status === 'fail') console.log('::error::' + r.name + ': ' + r.detail);
+            else if (r.status === 'warn') console.log('::warning::' + r.name + ': ' + r.detail);
+          }
+          JS
+
       - name: Locate build output
         id: dist
         run: |

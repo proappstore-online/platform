@@ -99,8 +99,14 @@ jobs:
 ```
 
 - **The pipeline:** `.github/workflows/app-deploy.yml` (`on: workflow_call`):
-  - the steps are the router, build, migrations, app worker, tool registration,
-    source maps, keyless R2 upload, marketing site, QA and E2E;
+  - the steps are the router, build, a compliance report, migrations, app worker,
+    tool registration, source maps, keyless R2 upload, marketing site, QA and E2E;
+  - **compliance report (#499):** `pas check` already runs as the app's own
+    `prebuild` and fails `Build` closed on a `fail` result (#204) — but closed
+    with no visible reason beyond a raw log, and a `warn` blocks nothing and
+    shows nowhere. "Report compliance" re-runs `pas check --json` right after
+    `Build` (`if: always()`, so it runs even when `Build` just failed) and
+    writes every result to the run's job summary.
   - this repo is public, so any repository can call it, including
     `ChessClubs-online/chess-clubs`.
 - **Releases:** the moving tag **`app-deploy-v1`**.
