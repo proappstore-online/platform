@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sqliteD1 } from '../sqlite-d1.js';
-import { adoptionStatements, mirrorApp, mirrorDirtyApps, mirrorStatements, type MirrorRow } from './entitlement-mirror.js';
+import { adoptionStatements, ensureMirrorTable, mirrorApp, mirrorDirtyApps, mirrorStatements, type MirrorRow } from './entitlement-mirror.js';
 import { sweepEntitlements } from './entitlement-sweep.js';
 
 // #508: the platform's entitlements are copied into each app's own D1 over the trusted data-worker path; a failed push leaves the rows
@@ -127,6 +127,50 @@ describe('adopting a _pas_entitlements the app already created (#508)', () => {
     expect(await mirrorApp(ENV(db), 'club')).toBe(0);
     warn.mockRestore();
     expect((await mirrored(db))[0]).toMatchObject({ mirrored_version: 0 });
+  });
+});
+
+describe('ensureMirrorTable (#510): the platform makes the table exist before a deploy applies an app\'s own migrations', () => {
+  it('with no pre-existing table: creates it, after asking which columns exist', async () => {
+    const sent = stubWorker();
+    await ensureMirrorTable(ENV(sqliteD1()), 'club');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toContain('pas-data-club');
+    expect(sent[0]!.url).toContain('/batch');
+    expect(sent[0]!.headers['X-Internal-Token']).toBe('internal-secret');
+    expect(sent[0]!.body.statements).toEqual([{ sql: expect.stringMatching(/^CREATE TABLE IF NOT EXISTS _pas_entitlements/) }]);
+  });
+
+  it('adopts a pre-existing table missing columns: one ALTER per missing column, then the key, never a DROP or CREATE', async () => {
+    const sent = stubWorker(200, ['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'updated_at']);
+    await ensureMirrorTable(ENV(sqliteD1()), 'club');
+    const sqls = sent[0]!.body.statements.map((s) => s.sql);
+    expect(sqls).toEqual(['ALTER TABLE _pas_entitlements ADD COLUMN version INTEGER NOT NULL DEFAULT 0', expect.stringMatching(/^CREATE UNIQUE INDEX IF NOT EXISTS/)]);
+    expect(sqls.join('\n')).not.toMatch(/DROP|CREATE TABLE/i);
+  });
+
+  it('a table already in its final shape: only the already-present index statement — a second call is a no-op on the shape', async () => {
+    const sent = stubWorker(200, ['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'version', 'updated_at']);
+    await ensureMirrorTable(ENV(sqliteD1()), 'club');
+    expect(sent[0]!.body.statements).toEqual([{ sql: expect.stringMatching(/^CREATE UNIQUE INDEX IF NOT EXISTS/) }]);
+    await ensureMirrorTable(ENV(sqliteD1()), 'club');
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body.statements).toEqual(sent[0]!.body.statements);
+  });
+
+  it('a same-named table that is not an entitlement table: throws, so the deploy that calls this sees the refusal', async () => {
+    stubWorker(200, ['id', 'note']);
+    await expect(ensureMirrorTable(ENV(sqliteD1()), 'club')).rejects.toThrow(/not an entitlement table/);
+  });
+
+  it('a refused batch push: throws, so the caller can fail the deploy instead of silently leaving the table absent', async () => {
+    stubWorker(500);
+    await expect(ensureMirrorTable(ENV(sqliteD1()), 'club')).rejects.toThrow(/ensureMirrorTable refused \(500\)/);
+  });
+
+  it('a refused column discovery: throws before any batch is sent', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (String(url).endsWith('/query') ? new Response('nope', { status: 500 }) : (() => { throw new Error('should not reach /batch'); })())));
+    await expect(ensureMirrorTable(ENV(sqliteD1()), 'club')).rejects.toThrow(/column discovery refused \(500\)/);
   });
 });
 

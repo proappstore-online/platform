@@ -4,6 +4,15 @@ import { splitSqlStatements } from '../../../data-worker/src/index.js';
 import { _resetJwksCache } from '../lib/github-oidc.js';
 import { testToken, TEST_SK } from '../test-helpers.js';
 
+// #510: every migrate call now also pushes `ensureMirrorTable`'s `/query` (PRAGMA discovery) and `/batch` (DDL) requests to the data
+// worker before anything else. Answer them harmlessly (no pre-existing table → CREATE_MIRROR) so tests about unrelated behavior keep
+// passing without having to know about the mirror; tests that care about it mock these URLs themselves.
+function mirrorMock(url: string): Response | null {
+  if (url.includes('/query')) return new Response(JSON.stringify({ rows: [] }), { status: 200 });
+  if (url.includes('/batch')) return new Response(JSON.stringify({ results: [] }), { status: 200 });
+  return null;
+}
+
 const ISSUER = 'https://token.actions.githubusercontent.com';
 const AUD = 'https://api.proappstore.online';
 const KID = 'test-key-1';
@@ -176,6 +185,8 @@ describe('POST /apps/:appId/migrate/oidc', () => {
         migrateHeaders = (init!.headers as Record<string, string>);
         return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
       }
+      const mirrored = mirrorMock(url);
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${url}`);
     }));
   });
@@ -209,11 +220,78 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'applied']);
   });
 
+  // #510: the platform guarantees `_pas_entitlements` exists before an app's own migrations run, so action SQL that JOINs it from
+  // day one has something to join against, instead of waiting for the first entitlement event to reach the sweep.
+  describe('ensures _pas_entitlements exists before the app\'s migrations run (#510)', () => {
+    it('with no pre-existing table: creates it empty, in the same batch pushed before the migrate forward', async () => {
+      const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(200);
+      const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const query = calls.find((c) => String(c[0]).includes('/query'));
+      expect(String(query![0])).toBe('https://pas-data-aiuniversity.serge-the-dev.workers.dev/query');
+      expect(JSON.parse((query![1] as RequestInit).body as string)).toEqual({ sql: 'PRAGMA table_info(_pas_entitlements)' });
+      const batch = calls.find((c) => String(c[0]).includes('/batch'));
+      expect(String(batch![0])).toBe('https://pas-data-aiuniversity.serge-the-dev.workers.dev/batch');
+      const { statements } = JSON.parse((batch![1] as RequestInit).body as string) as { statements: { sql: string }[] };
+      expect(statements).toEqual([{ sql: expect.stringContaining('CREATE TABLE IF NOT EXISTS _pas_entitlements') }]);
+      // the /query and /batch calls land before the migrate forward itself
+      expect(calls.findIndex((c) => String(c[0]).includes('/batch'))).toBeLessThan(calls.findIndex((c) => String(c[0]).includes('/migrate')));
+    });
+
+    it('with a table already in its final shape: a second deploy is a no-op on the mirror (only the already-present index statement)', async () => {
+      (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+        if (url.includes('/migrate')) return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
+        if (url.includes('/query')) {
+          return new Response(JSON.stringify({
+            rows: ['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'version', 'updated_at'].map((name) => ({ name })),
+          }), { status: 200 });
+        }
+        const mirrored = mirrorMock(url);
+        if (mirrored) return mirrored;
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(200);
+      const batch = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) => String(c[0]).includes('/batch'));
+      const { statements } = JSON.parse((batch![1] as RequestInit).body as string) as { statements: { sql: string }[] };
+      expect(statements).toEqual([{ sql: expect.stringContaining('CREATE UNIQUE INDEX IF NOT EXISTS') }]);
+    });
+
+    it('502 and audited failed when the mirror push is refused — the migrate forward never runs', async () => {
+      (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+        if (url.includes('/query')) return new Response(JSON.stringify({ rows: [] }), { status: 200 });
+        if (url.includes('/batch')) return new Response(JSON.stringify({ error: 'boom' }), { status: 500 });
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(502);
+      expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/migrate'))).toBe(false);
+      expect(migrationRows).toHaveLength(1);
+      expect(migrationRows[0]!.slice(0, 3)).toEqual(['aiuniversity', 'oidc', 'failed']);
+    });
+
+    it('an app migration that still creates _pas_entitlements is refused exactly as before (the linter rule is unchanged)', async () => {
+      const res = await call('aiuniversity',
+        { migrations: [{ name: '0061_family_billing_mode', sql: 'CREATE TABLE IF NOT EXISTS _pas_entitlements (product TEXT, subject TEXT, status TEXT, period_end TEXT, grace_until TEXT, renews TEXT, buyer_user_id TEXT, updated_at TEXT);' }] },
+        { Authorization: `Bearer ${await signToken()}` });
+      expect(res.status).toBe(422);
+      const body = await res.json() as { error: string };
+      expect(body.error).toContain('reserved-table');
+      expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).includes('/query') || String(c[0]).includes('/batch') || String(c[0]).includes('/migrate'))).toBe(false);
+    });
+  });
+
   it('is idempotent — reports already-applied names back from the data worker', async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
       if (url.includes('/migrate')) return new Response(JSON.stringify({ applied: [], already: ['0001_init'] }), { status: 200 });
+      const mirrored = mirrorMock(url);
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${url}`);
     });
     const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
@@ -322,6 +400,8 @@ describe('POST /apps/:appId/migrate/oidc', () => {
       const url = String(input);
       if (url.includes('/.well-known/jwks')) return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
       if (url.includes('/migrate')) return new Response(JSON.stringify({ error: 'boom' }), { status: 500 });
+      const mirrored = mirrorMock(url);
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${url}`);
     });
     const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
@@ -357,6 +437,8 @@ describe('POST /apps/:appId/migrate/oidc', () => {
           already: [],
         }), { status: 422 });
       }
+      const mirrored = mirrorMock(url);
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${url}`);
     });
     const res = await call('aiuniversity', { migrations: [additive] }, { Authorization: `Bearer ${await signToken()}` });
@@ -510,6 +592,8 @@ describe('POST /apps/:appId/migrate/internal', () => {
         migrateHeaders = (init!.headers as Record<string, string>);
         return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
       }
+      const mirrored = mirrorMock(String(input));
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${String(input)}`);
     }));
   });
@@ -568,6 +652,8 @@ describe('POST /apps/:appId/migrate/admin', () => {
         migrateHeaders = (init!.headers as Record<string, string>);
         return new Response(JSON.stringify({ applied: ['0007_repair_missing_column'], already: ['0001_init'] }), { status: 200 });
       }
+      const mirrored = mirrorMock(String(input));
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${String(input)}`);
     }));
   });
@@ -626,6 +712,8 @@ describe('POST /apps/:appId/migrate (owner session)', () => {
       if (String(input).includes('/migrate')) {
         return new Response(JSON.stringify({ applied: ['0001_init'], already: [] }), { status: 200 });
       }
+      const mirrored = mirrorMock(String(input));
+      if (mirrored) return mirrored;
       throw new Error(`unexpected fetch: ${String(input)}`);
     }));
   });

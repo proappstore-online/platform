@@ -156,9 +156,24 @@ method that confirms later (`async_payment_succeeded`) are not handled yet.
 The platform keeps a read-only copy in **your app's own database**, in a table it creates and maintains:
 
 ```sql
-_pas_entitlements(product, subject, status, period_end, grace_until, renews, buyer_user_id, version, updated_at)
--- primary key (product, subject); times in milliseconds
+CREATE TABLE _pas_entitlements (
+  product        TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  status         TEXT NOT NULL,     -- 'active' | 'grace' | 'expired' | 'refunded' | 'canceled'
+  period_end     INTEGER,           -- epoch MILLISECONDS (compare against Date.now(), not unixepoch()'s seconds), or NULL
+  grace_until    INTEGER,           -- epoch milliseconds, or NULL
+  renews         INTEGER NOT NULL,  -- 0 or 1
+  buyer_user_id  TEXT,
+  version        INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,  -- epoch milliseconds
+  PRIMARY KEY (product, subject)
+)
 ```
+
+The table — empty until your first sale — exists before your own migrations run (#510), so a product with a paywall can reference it
+in action SQL from the app's very first deploy; you never create or own this table yourself (a migration that tries to is refused by
+the migration lint, same as any other `_pas_*` write). `period_end` and `grace_until` are integers, not text, and in **milliseconds**,
+the same unit `Date.now()` returns in JS — not the seconds `unixepoch()`/`strftime('%s', ...)` give you in SQLite.
 
 Your registered actions can `SELECT` and `JOIN` it, so the paywall is enforced in the same SQL as everything else:
 

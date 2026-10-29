@@ -9,6 +9,7 @@ import { dataWorkerUrl } from '../lib/data-worker-url.js';
 import { replaceAppTools } from './tools.js';
 import { siteManifestFrom, type SiteManifest } from '../lib/manifest/site.js';
 import { isAppRepository } from '../lib/app-deploy-oidc.js';
+import { ensureMirrorTable } from '../lib/entitlement-mirror.js';
 
 /**
  * Keyless deploy credentials.
@@ -216,7 +217,6 @@ async function applyMigrations(
   if (!Array.isArray(migrations)) {
     return { status: 400, body: { error: 'migrations must be an array of {name, sql}' } };
   }
-  if (migrations.length === 0) return { status: 200, body: { ok: true, applied: [], note: 'no migrations' } };
 
   const warnings: string[] = [];
   for (const m of migrations as { name?: unknown; sql?: unknown }[]) {
@@ -234,6 +234,18 @@ async function applyMigrations(
       };
     }
   }
+
+  // #510: guarantee the (empty) `_pas_entitlements` mirror exists before anything below touches the app's D1 — every deploy, not just
+  // apps that turn out to use billing, since an empty table is harmless and the gap otherwise lasts until the first entitlement event.
+  try {
+    await ensureMirrorTable(env, appId);
+  } catch (e) {
+    const detail = (e as Error).message;
+    await recordMigrationAudit(env, appId, source, 'failed', null, null, `ensure _pas_entitlements failed: ${detail}`);
+    return { status: 502, body: { error: `ensure _pas_entitlements failed: ${detail}` } };
+  }
+
+  if (migrations.length === 0) return { status: 200, body: { ok: true, applied: [], note: 'no migrations' } };
 
   // Forward straight to the app's data worker on its workers.dev host with the platform
   // internal token — the same trusted path the actions executor uses (#153, #303 N20),

@@ -79,13 +79,18 @@ export function adoptionStatements(existing: readonly string[]): { sql: string }
   ];
 }
 
+/** Without a table it is created; with one it is adopted (see {@link adoptionStatements}). Shared by a row push and {@link ensureMirrorTable}. */
+function mirrorDdlStatements(existing: readonly string[]): { sql: string }[] {
+  return existing.length === 0 ? [{ sql: CREATE_MIRROR }] : adoptionStatements(existing);
+}
+
 /**
  * The statements of one push, then one guarded upsert per row. `existing` is the column list of the app's `_pas_entitlements` (empty when
  * it has none): without a table it is created; with one it is adopted (see {@link adoptionStatements}).
  */
 export function mirrorStatements(rows: MirrorRow[], existing: readonly string[] = []): { sql: string; params?: unknown[] }[] {
   return [
-    ...(existing.length === 0 ? [{ sql: CREATE_MIRROR }] : adoptionStatements(existing)),
+    ...mirrorDdlStatements(existing),
     ...rows.map((r) => ({
       sql: UPSERT_MIRROR,
       params: [r.product_key, r.subject, r.status, r.period_end, r.grace_until, r.renews, r.buyer_user_id, r.version, r.updated_at],
@@ -94,11 +99,23 @@ export function mirrorStatements(rows: MirrorRow[], existing: readonly string[] 
 }
 
 /** The columns of the app's `_pas_entitlements`, lowercased; empty when the app has no such table. A refusal throws, so the rows stay dirty. */
-async function existingColumns(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, appId: string): Promise<string[]> {
+async function existingColumns(env: Pick<Env, 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, appId: string): Promise<string[]> {
   const res = await forwardToDataWorker(env as Env, appId, 'query', { sql: 'PRAGMA table_info(_pas_entitlements)' }, null);
   if (!res.ok) throw new Error(`column discovery refused (${res.status})`);
   const body = (await res.json()) as { rows?: { name?: unknown }[] };
   return (body.rows ?? []).map((r) => String(r.name ?? '').toLowerCase()).filter((n) => n !== '');
+}
+
+/**
+ * Make the app's `_pas_entitlements` exist — empty, created or adopted — before anything else touches its D1 (#510). The deploy path
+ * calls this ahead of the app's own migrations, so action SQL that JOINs `_pas_entitlements` from day one has something to join
+ * against, instead of waiting for the first entitlement event to reach {@link mirrorApp}. Same trusted internal push as a row push;
+ * idempotent, since a table already in its final shape gets only `IF NOT EXISTS` / already-present statements.
+ */
+export async function ensureMirrorTable(env: Pick<Env, 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, appId: string): Promise<void> {
+  const statements = mirrorDdlStatements(await existingColumns(env, appId));
+  const res = await forwardToDataWorker(env as Env, appId, 'batch', { statements }, null);
+  if (!res.ok) throw new Error(`ensureMirrorTable refused (${res.status})`);
 }
 
 /** Push one app's dirty rows. Returns how many rows were mirrored; a failed push mirrors none and leaves them dirty. */

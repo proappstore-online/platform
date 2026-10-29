@@ -2,7 +2,7 @@ import { env as providedEnv, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { handleAppBillingEvent } from '../../../backend/src/lib/app-billing-handler';
-import { mirrorApp, mirrorStatements, type MirrorRow } from '../../../backend/src/lib/entitlement-mirror';
+import { ensureMirrorTable, mirrorApp, mirrorStatements, type MirrorRow } from '../../../backend/src/lib/entitlement-mirror';
 import { sweepEntitlements } from '../../../backend/src/lib/entitlement-sweep';
 import { mockNetwork } from './helpers';
 
@@ -110,6 +110,39 @@ describe('adopting a _pas_entitlements the app already created, on a real D1 (#5
     expect(p!.statements.map((st) => st.sql).join(' ')).not.toMatch(/DROP|CREATE TABLE/);
     for (const st of p!.statements) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run();
     expect((await env.DB.prepare('SELECT subject, status, version FROM _pas_entitlements ORDER BY subject').all()).results).toHaveLength(3);
+  });
+});
+
+describe('ensureMirrorTable at deploy, on a real D1 (#510)', () => {
+  const columns = async () => ((await env.DB.prepare('PRAGMA table_info(_pas_entitlements)').all<{ name: string }>()).results ?? []).map((c) => c.name);
+  // chess-academy's migration 0061 shape: the contract columns, no `version`.
+  const LEGACY = `CREATE TABLE _pas_entitlements (product TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, period_end INTEGER, grace_until INTEGER,
+    renews INTEGER NOT NULL DEFAULT 0, buyer_user_id TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY (product, subject))`;
+
+  it('no table yet: the deploy path creates it empty, before any entitlement event ever reaches mirrorApp', async () => {
+    accepts();
+    await ensureMirrorTable(env, 'club');
+    for (const st of pushes[0]!.statements) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run();
+    expect(await columns()).toEqual(['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'version', 'updated_at']);
+    expect((await env.DB.prepare('SELECT * FROM _pas_entitlements').all()).results).toEqual([]);
+  });
+
+  it('a pre-existing legacy table (the chess-academy 0061 placeholder): adopted, not dropped, and a re-deploy is a no-op on its shape', async () => {
+    await env.DB.prepare(LEGACY).run();
+    await env.DB.prepare("INSERT INTO _pas_entitlements VALUES ('child_term', 'kid-a', 'active', 100, NULL, 0, 'gh:9', 5)").run();
+    accepts(200, await columns());
+    await ensureMirrorTable(env, 'club');
+    for (const st of pushes[0]!.statements) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run();
+    expect(await columns()).toEqual(['product', 'subject', 'status', 'period_end', 'grace_until', 'renews', 'buyer_user_id', 'updated_at', 'version']);
+    // the app's row survives, untouched — only platform pushes ever write a row
+    expect((await env.DB.prepare('SELECT subject, status, version FROM _pas_entitlements').first())).toEqual({ subject: 'kid-a', status: 'active', version: 0 });
+
+    const shape = await columns();
+    accepts(200, shape);
+    await ensureMirrorTable(env, 'club');
+    for (const st of pushes[1]!.statements) await env.DB.prepare(st.sql).bind(...(st.params ?? [])).run();
+    expect(await columns()).toEqual(shape);
+    expect(pushes[1]!.statements).toHaveLength(1); // only the already-present index — no ALTER left to run
   });
 });
 

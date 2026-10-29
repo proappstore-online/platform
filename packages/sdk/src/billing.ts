@@ -4,6 +4,10 @@
  *
  * Every call is the signed-in user's: they only ever see what they bought. Who may buy, and what a purchase unlocks, is decided by
  * your app's own SQL (the `authorize` action, and a JOIN on `_pas_entitlements`), never by this client.
+ *
+ * `_pas_entitlements(product, subject, status, period_end, grace_until, renews, buyer_user_id, version, updated_at)` lives in your
+ * app's own D1, read-only, and exists (empty) before your own migrations ever run (#510) — you never create or migrate it yourself.
+ * `period_end` and `grace_until` are INTEGER, not TEXT, in epoch **milliseconds** (`Date.now()`'s unit, not `unixepoch()`'s seconds).
  */
 
 interface AuthLike {
