@@ -215,6 +215,12 @@ export interface Env {
    * Unset or malformed: the guard is off.
    */
   APP_WORKER_ACCOUNT_CEILING?: string;
+
+  /**
+   * #516: max apps that may hold `app_workers.enabled` at once (`parseAppWorkerCap`,
+   * routes/app-workers.ts). Unset or not a positive integer: the default, 5.
+   */
+  APP_WORKER_CAP?: string;
 }
 
 export interface PushSubscriptionRow {

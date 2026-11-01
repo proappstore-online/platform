@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
 import { makeEnv, testToken } from '../test-helpers.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { MAX_WORKER_OBJECT_BYTES } from '../lib/app-worker-calls.js';
-import { WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from './app-workers.js';
+import { parseAppWorkerCap, WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from './app-workers.js';
 
 // #385: the worker HTTP plane takes a full-size worker document (10 MiB) plus
 // multipart framing, refuses a larger body without buffering it, and only after
@@ -80,5 +80,21 @@ describe('worker HTTP size limits (#385)', () => {
     const direct = stream(WORKER_HTTP_MAX_REQUEST_BYTES);
     expect((await post(direct.body, { [APP_CONTEXT_HEADER]: 'other' })).status).toBe(403);
     expect(direct.pulled()).toBe(0);
+  });
+});
+
+describe('APP_WORKER_CAP is env-configurable (#516)', () => {
+  it('defaults to 5 when unset, and reads a configured positive integer', () => {
+    expect(parseAppWorkerCap(undefined)).toBe(5);
+    expect(parseAppWorkerCap('2')).toBe(2);
+    expect(parseAppWorkerCap('12')).toBe(12);
+  });
+
+  it('falls back to the default, never an unbounded cap, on a malformed value', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(parseAppWorkerCap('0')).toBe(5);
+    expect(parseAppWorkerCap('-1')).toBe(5);
+    expect(parseAppWorkerCap('not a number')).toBe(5);
+    expect(parseAppWorkerCap('2.5')).toBe(5);
   });
 });

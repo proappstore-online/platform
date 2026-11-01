@@ -4,8 +4,9 @@
  * Prototype gate (ADR-009 §5): a worker deploys and runs only for an app whose
  * `app_workers.enabled` flag a platform admin turned on, the flag can be turned
  * on only for a first-party app (owner in ADMIN_GITHUB_IDS), and at most
- * `APP_WORKER_CAP` apps hold it. Production keeps every flag off until #274 is
- * closed (ADR-009, "Trust assumptions").
+ * `APP_WORKER_CAP` apps hold it at once. The cap reads from the env var of the
+ * same name (`parseAppWorkerCap`, below), default 5; raising it is Serge's call
+ * (#516), not something to change here.
  *
  *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
  *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate and checks, needs a recent sign-in (#406, #440)
@@ -39,7 +40,16 @@ import { AppWorkerQuotaError, appWorkersOpen, appWorkerUsage, setAppWorkersOpen,
 /** One manual run per schedule per minute (#255). */
 const RUN_NOW_INTERVAL_MS = 60_000;
 
-const APP_WORKER_CAP = 5;
+const APP_WORKER_CAP_DEFAULT = 5;
+
+/** `APP_WORKER_CAP` (#516): max apps that may hold `app_workers.enabled` at once. Absent or not a positive integer -> the default; never an unbounded cap. */
+export function parseAppWorkerCap(raw: string | undefined): number {
+  if (raw === undefined) return APP_WORKER_CAP_DEFAULT;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) return n;
+  console.error(`[app-workers] APP_WORKER_CAP "${raw}" is not a positive integer; falling back to ${APP_WORKER_CAP_DEFAULT}`);
+  return APP_WORKER_CAP_DEFAULT;
+}
 
 export const appWorkerRoutes = new Hono<{ Bindings: Env }>();
 
@@ -140,13 +150,14 @@ appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {
   if (!already && !(await appWorkersOpen(c.env))) throw new HttpError('app workers are closed to new apps (account ceiling)', 409);
   // One statement, so two concurrent enables cannot both take the last slot.
   const now = Date.now();
+  const cap = parseAppWorkerCap(c.env.APP_WORKER_CAP);
   const res = await c.env.DB.prepare(
     `INSERT INTO app_workers (app_id, enabled, enabled_by, enabled_at)
      SELECT ?1, 1, ?2, ?3
       WHERE (SELECT COUNT(*) FROM app_workers WHERE enabled = 1 AND app_id <> ?1) < ?4
      ON CONFLICT(app_id) DO UPDATE SET enabled = 1, enabled_by = excluded.enabled_by, enabled_at = excluded.enabled_at`,
-  ).bind(appId, admin.id, now, APP_WORKER_CAP).run();
-  if (!res.meta.changes) throw new HttpError(`app worker cap reached (${APP_WORKER_CAP})`, 409);
+  ).bind(appId, admin.id, now, cap).run();
+  if (!res.meta.changes) throw new HttpError(`app worker cap reached (${cap})`, 409);
   // #428: enabling the worker is the app going live — what is staged becomes callable.
   const [promoted] = await c.env.DB.batch([
     c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId),

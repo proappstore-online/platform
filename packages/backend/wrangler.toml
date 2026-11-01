@@ -106,6 +106,9 @@ ADMIN_GITHUB_IDS = "gh:2824906"
 # Revisit with duperdash's measured usage before #267.
 APP_WORKER_ACCOUNT_CEILING = '{ "cpu_ms": 36000000, "invocations": 100000 }'
 APP_WORKER_BACKEND = "loader"
+# #516: max apps that may hold app_workers.enabled at once. Raising it is Serge's
+# call, not a config edit to make casually; the code falls back to this same 5 if unset.
+APP_WORKER_CAP = "5"
 
 # Session-key drift check (#70): every 15 minutes, mint a probe session with the
 # CURRENT SESSION_SIGNING_KEY and present it to a sample of data workers; a 401
