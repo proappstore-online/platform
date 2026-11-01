@@ -89,6 +89,7 @@ describe('failing-app fixture', () => {
       'Bundle size',
       'CLAUDE.md is slim (no platform boilerplate)',
       'CSS discipline',
+      'Caller-unscoped actions reported',
       'Dark mode support',
       'Deploy workflow',
       'No unsafe 100vh',

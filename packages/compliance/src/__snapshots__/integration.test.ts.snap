@@ -157,6 +157,27 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "caller-unscoped",
+    "citations": [
+      {
+        "clauseId": "PAS-DATA-012",
+        "url": "https://docs.proappstore.online/standard/data/#pas-data-012",
+      },
+    ],
+    "detail": "1 caller_unscoped action(s): "get_user": "profile page"",
+    "evidence": {
+      "class": "configuration",
+      "detail": "1 caller_unscoped action(s): "get_user": "profile page"",
+    },
+    "name": "Caller-unscoped actions reported",
+    "status": "warn",
+    "suggestions": [
+      "Each is an explicit exemption from the :__user_id scoping lint — confirm it still needs to be, and that the reason says what the action returns and why no caller can be identified.",
+      "Scope it to the caller with :__user_id, or restrict it with auth.app_roles / callers, if it no longer needs the exemption.",
+    ],
+  },
+  {
+    "automation": "partial",
     "checkId": "dark-mode",
     "citations": [
       {

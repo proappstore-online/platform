@@ -5,6 +5,7 @@ import { checkAppTitle } from './checks/app-title.js';
 import { checkCssDiscipline } from './checks/css-discipline.js';
 import { checkMarketingContent } from './checks/marketing-content.js';
 import { checkBundleSize } from './checks/bundle-size.js';
+import { checkCallerUnscoped } from './checks/caller-unscoped.js';
 import { checkClaudeMdSlim } from './checks/claude-md-slim.js';
 import { checkDarkMode } from './checks/dark-mode.js';
 import { checkDeployWorkflow } from './checks/deploy-workflow.js';
@@ -79,6 +80,7 @@ export {
   checkCssDiscipline,
   checkMarketingContent,
   checkBundleSize,
+  checkCallerUnscoped,
   checkClaudeMdSlim,
   checkDarkMode,
   checkDeployWorkflow,
@@ -149,6 +151,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'bundle-size', run: checkBundleSize },
   { id: 'claude-md-slim', run: checkClaudeMdSlim },
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
+  { id: 'caller-unscoped', run: checkCallerUnscoped },
   { id: 'deploy-workflow', run: checkDeployWorkflow },
   { id: 'permissions', run: checkPermissions },
   { id: 'template-default-icon', run: checkTemplateDefaultIcon },
