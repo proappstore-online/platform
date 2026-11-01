@@ -198,3 +198,46 @@ describe('everything that can refuse does so before Stripe is called', () => {
     await refused(await checkout(good), 500, /could not be run/);
   });
 });
+
+describe('test-mode checkout is isolated from live (#519)', () => {
+  beforeEach(async () => {
+    await db.prepare("UPDATE app_billing SET stripe_env = 'test' WHERE app_id = 'club'").run();
+    await db.prepare(
+      `INSERT INTO app_billing_prices (stripe_price_id, app_id, product_key, mode, stripe_env, amount, currency, tax_behavior, status, created_at)
+       VALUES ('price_test_ot', 'club', 'term', 'one_time', 'test', 1000, 'aud', 'inclusive', 'active', 1), ('price_test_rec', 'club', 'term', 'recurring', 'test', 1000, 'aud', 'inclusive', 'active', 1)`,
+    ).run();
+    await db.prepare("INSERT INTO test_principals (id, slug, user_id, status, created_by, created_at) VALUES ('tp_1', 'qa-chess', 'test:qa', 'active', 'gh:admin', 1)").run();
+    (env as unknown as Record<string, unknown>).STRIPE_TEST_SECRET_KEY = 'sk_test_test_1';
+  });
+
+  it("refuses a general user with 403 before touching Stripe, even though they'd be allowed to buy in live mode", async () => {
+    const res = await checkout(good, { uid: 'gh:2' });
+    expect(res.status).toBe(403);
+    expect(await err(res)).toMatch(/test principals/);
+    expect(stripeCalls()).toEqual([]);
+    expect(await purchases()).toEqual([]);
+  });
+
+  it('is unreachable without a configured test key, 503, with no purchase row left behind, even for a test principal', async () => {
+    delete (env as unknown as Record<string, unknown>).STRIPE_TEST_SECRET_KEY;
+    const res = await checkout(good, { uid: 'test:qa' });
+    expect(res.status).toBe(503);
+    expect(stripeCalls()).toEqual([]);
+    expect(await purchases()).toEqual([]);
+  });
+
+  it('allows an active test principal, prices and stamps the purchase as test, and never reuses a live customer', async () => {
+    // A live customer this same id already has, from before it was ever a test principal (or a coincidence) — must
+    // not be reused by the test-mode checkout, and must not collide with it in billing_customers.
+    await db.prepare("INSERT INTO billing_customers (user_id, stripe_env, stripe_customer_id, created_at) VALUES ('test:qa', 'live', 'cus_live_qa', 1)").run();
+    const res = await checkout(good, { uid: 'test:qa' });
+    expect(res.status).toBe(200);
+    expect(calls.some((c) => c.url.endsWith('/v1/customers'))).toBe(true); // a NEW customer, not the live one reused
+    const [p] = await purchases();
+    expect(p).toMatchObject({ app_id: 'club', buyer_user_id: 'test:qa', price_id: 'price_test_ot', stripe_env: 'test' });
+    const customers = (await db.prepare("SELECT stripe_env, stripe_customer_id FROM billing_customers WHERE user_id = 'test:qa' ORDER BY stripe_env").all<{ stripe_env: string; stripe_customer_id: string }>()).results;
+    expect(customers).toHaveLength(2);
+    expect(customers!.find((c) => c.stripe_env === 'live')!.stripe_customer_id).toBe('cus_live_qa');
+    expect(customers!.find((c) => c.stripe_env === 'test')!.stripe_customer_id).not.toBe('cus_live_qa');
+  });
+});

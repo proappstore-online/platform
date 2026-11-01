@@ -7,6 +7,8 @@ import { prepareActionQuery, referencesChildFlag, type ToolManifest } from '../l
 import { isChildAccount } from '../lib/user-flags.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import { forwardToDataWorker } from './actions.js';
+import { isTestPrincipal, stripeFor } from '../lib/billing-env.js';
+import type { StripeEnv } from '../lib/stripe-env.js';
 
 /**
  * App billing 1/3 (#507, epic #506): checkout for a product an app declared in its manifest, through the platform's
@@ -85,8 +87,18 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
   if (!body || typeof body !== 'object') throw new HttpError('JSON body required', 400);
 
   // Live money is an admin's decision, per app, and off until then. Checked before anything else about the product.
-  const config = await db.prepare('SELECT enabled, authorize_action FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null }>();
+  const config = await db.prepare('SELECT enabled, authorize_action, stripe_env FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null; stripe_env: StripeEnv }>();
   if (config?.enabled !== 1) throw new HttpError('billing is not enabled for this app', 403);
+  const stripeEnv = config.stripe_env;
+
+  // Test-mode checkout is restricted to controlled, non-human test principals (#432, #519): the only identity the
+  // Chess QA journey may use, and structurally not something a general user can become.
+  if (stripeEnv === 'test' && !(await isTestPrincipal(db, user.id))) {
+    throw new HttpError('test-mode checkout is restricted to controlled test principals', 403);
+  }
+  // Fail closed before anything else is written (#519): a missing test key is a 503 here, never a fallback to the
+  // live key and never a purchase row left behind with nothing to resolve it.
+  const stripe = stripeFor(c.env, stripeEnv);
 
   // Looked up under THIS app: another app's product key resolves to nothing here.
   if (typeof body.product !== 'string') throw new HttpError('product is required', 400);
@@ -105,8 +117,8 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
     throw new HttpError("successUrl and cancelUrl must be on this app's own origins (its proappstore.online subdomain, a verified custom domain, or localhost)", 400);
   }
 
-  const price = await db.prepare("SELECT stripe_price_id FROM app_billing_prices WHERE app_id = ? AND product_key = ? AND mode = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1")
-    .bind(appId, product.product_key, mode).first<{ stripe_price_id: string }>();
+  const price = await db.prepare("SELECT stripe_price_id FROM app_billing_prices WHERE app_id = ? AND product_key = ? AND mode = ? AND stripe_env = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .bind(appId, product.product_key, mode, stripeEnv).first<{ stripe_price_id: string }>();
   if (!price) throw new HttpError('this product is not available yet', 503);
 
   // The app decides who may buy, in its own SQL, before any Stripe call: exactly one row with allowed = 1 or the buyer is refused.
@@ -132,14 +144,14 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
   const purchaseId = crypto.randomUUID();
   const now = Date.now();
   await db.prepare(
-    `INSERT INTO app_purchases (id, app_id, product_key, buyer_user_id, subjects, quantity, mode, status, price_id, interval_unit, interval_count, grace_days, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10, ?11, ?12, ?12)`,
+    `INSERT INTO app_purchases (id, app_id, product_key, buyer_user_id, subjects, quantity, mode, status, price_id, interval_unit, interval_count, grace_days, stripe_env, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10, ?11, ?12, ?13, ?13)`,
   // The term is snapshotted here (#508): a renewal is computed from the interval and grace the buyer paid for, whatever the manifest says later.
-  ).bind(purchaseId, appId, product.product_key, user.id, JSON.stringify(subjects), Math.max(1, subjects.length), mode, price.stripe_price_id, product.interval_unit, product.interval_count, product.grace_days, now).run();
+  // stripe_env (#519) is likewise stamped from THIS moment's app_billing config, never re-derived: a later mode switch cannot reclassify history.
+  ).bind(purchaseId, appId, product.product_key, user.id, JSON.stringify(subjects), Math.max(1, subjects.length), mode, price.stripe_price_id, product.interval_unit, product.interval_count, product.grace_days, stripeEnv, now).run();
 
-  const stripe = new Stripe(c.env.STRIPE_SECRET_KEY);
   try {
-    const customer = await customerFor(c.env, stripe, user.id, user.login);
+    const customer = await customerFor(c.env, stripe, user.id, user.login, stripeEnv);
     const session = await stripe.createAppCheckoutSession({
       customer,
       priceId: price.stripe_price_id,
@@ -158,16 +170,22 @@ appBillingRoutes.post('/apps/:appId/billing/checkout', async (c) => {
   }
 });
 
-/** One Stripe Customer per platform user across every app: ours, else the one a Pro subscription made, else a new one. */
-async function customerFor(env: Env, stripe: Stripe, userId: string, login: string): Promise<string> {
-  const known = await env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ?1 UNION ALL SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?1 AND stripe_customer_id IS NOT NULL LIMIT 1')
-    .bind(userId).first<{ id: string }>();
+/**
+ * One Stripe Customer per (platform user, Stripe env): ours, else — for live only — the one an earlier Pro
+ * subscription made (Pro has no test mode, #519), else a new one. A live and a test customer id are never the same
+ * object in Stripe, so a test-mode checkout never reuses, and never is reused as, a live customer.
+ */
+async function customerFor(env: Env, stripe: Stripe, userId: string, login: string, stripeEnv: StripeEnv): Promise<string> {
+  const known = stripeEnv === 'live'
+    ? await env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ?1 AND stripe_env = ?2 UNION ALL SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?1 AND stripe_customer_id IS NOT NULL LIMIT 1')
+        .bind(userId, stripeEnv).first<{ id: string }>()
+    : await env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ? AND stripe_env = ?').bind(userId, stripeEnv).first<{ id: string }>();
   if (known?.id) {
-    await env.DB.prepare('INSERT OR IGNORE INTO billing_customers (user_id, stripe_customer_id, created_at) VALUES (?, ?, ?)').bind(userId, known.id, Date.now()).run();
+    await env.DB.prepare('INSERT OR IGNORE INTO billing_customers (user_id, stripe_env, stripe_customer_id, created_at) VALUES (?, ?, ?, ?)').bind(userId, stripeEnv, known.id, Date.now()).run();
     return known.id;
   }
   const created = await stripe.createCustomer({ metadata: { user_id: userId, login } });
-  await env.DB.prepare('INSERT OR IGNORE INTO billing_customers (user_id, stripe_customer_id, created_at) VALUES (?, ?, ?)').bind(userId, created.id, Date.now()).run();
-  // A concurrent first checkout may have stored a different customer: use whichever won, so there is one per user.
-  return (await env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ?').bind(userId).first<{ id: string }>())?.id ?? created.id;
+  await env.DB.prepare('INSERT OR IGNORE INTO billing_customers (user_id, stripe_env, stripe_customer_id, created_at) VALUES (?, ?, ?, ?)').bind(userId, stripeEnv, created.id, Date.now()).run();
+  // A concurrent first checkout may have stored a different customer: use whichever won, so there is one per (user, env).
+  return (await env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ? AND stripe_env = ?').bind(userId, stripeEnv).first<{ id: string }>())?.id ?? created.id;
 }

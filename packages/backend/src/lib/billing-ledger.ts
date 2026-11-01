@@ -95,7 +95,10 @@ interface LedgerRow {
   currency: string | null; gross: number; refunded: number; fee: number | null; fee_currency: string | null;
 }
 
-/** The ledger of one app: its purchases that have been paid, newest first, with refunds and fees. */
+/**
+ * The ledger of one app: its purchases that have been paid, newest first, with refunds and fees. Live only (#519):
+ * a synthetic test-mode purchase (Chess's controlled QA journey, for instance) must never inflate what an app earned.
+ */
 export async function appLedger(db: D1Database, appId: string, limit = 200): Promise<Ledger> {
   const { results } = await db.prepare(
     `SELECT p.id, p.product_key, p.buyer_user_id, p.subjects, p.mode, p.status, p.created_at,
@@ -108,7 +111,7 @@ export async function appLedger(db: D1Database, appId: string, limit = 200): Pro
             (SELECT MAX(c.fee_currency) FROM app_billing_charges c
                WHERE EXISTS (SELECT 1 FROM app_billing_payment_refs r WHERE r.purchase_id = p.id AND r.ref IN (c.payment_intent, c.invoice, c.charge_id))) AS fee_currency
        FROM app_purchases p
-      WHERE p.app_id = ? AND EXISTS (SELECT 1 FROM app_billing_payments WHERE purchase_id = p.id)
+      WHERE p.app_id = ? AND p.stripe_env = 'live' AND EXISTS (SELECT 1 FROM app_billing_payments WHERE purchase_id = p.id)
       ORDER BY p.created_at DESC, p.id LIMIT ?`,
   ).bind(appId, limit).all<LedgerRow>();
 

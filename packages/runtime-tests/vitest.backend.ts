@@ -69,6 +69,11 @@ export default defineWorkersConfig(async () => ({
             INTERNAL_TOKEN,
             STRIPE_SECRET_KEY: 'sk_test_runtime',
             STRIPE_WEBHOOK_SECRET: 'whsec_runtime',
+            // App billing's test-mode identity (#519) is deliberately left unconfigured here: every existing
+            // runtime test's Stripe mock expects exactly the LIVE sync/checkout calls it always has. Test-mode
+            // isolation (checkout's test-principal gate, dual-secret webhook verification, cross-env reuse) is
+            // covered at the unit level instead (sqliteD1 + makeEnv overrides), where each test controls its own
+            // STRIPE_TEST_SECRET_KEY / STRIPE_TEST_WEBHOOK_SECRET without reshaping every other test's mock traffic.
             CF_API_TOKEN: 'cf-runtime',
             CF_ACCOUNT_ID: 'acct-runtime',
             VAPID_PUBLIC_KEY: 'vapid-public',

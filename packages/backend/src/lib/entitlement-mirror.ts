@@ -118,11 +118,21 @@ export async function ensureMirrorTable(env: Pick<Env, 'DATA_WORKER_HOST' | 'INT
   if (!res.ok) throw new Error(`ensureMirrorTable refused (${res.status})`);
 }
 
-/** Push one app's dirty rows. Returns how many rows were mirrored; a failed push mirrors none and leaves them dirty. */
+/**
+ * Push one app's dirty rows. Returns how many rows were mirrored; a failed push mirrors none and leaves them dirty.
+ *
+ * #519: only rows of the app's CURRENTLY ACTIVE Stripe env are ever eligible. An app with no app_billing row (every
+ * app before this existed) is treated as 'live' via COALESCE, so this is a no-op change for an app that has never
+ * touched test mode. A dirty row of the other env is simply never selected here — it stays dirty until the admin
+ * switches back, at which point the next sweep picks it up — so a test-mode entitlement can never reach `_pas_entitlements`
+ * while the app is live, and a live one can never be overwritten by a leftover test push.
+ */
 export async function mirrorApp(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, appId: string): Promise<number> {
   const { results } = await env.DB.prepare(
-    `SELECT product_key, subject, status, period_end, grace_until, renews, buyer_user_id, version, updated_at
-       FROM app_entitlements WHERE app_id = ? AND mirrored_version < version ORDER BY version, product_key, subject LIMIT ${MIRROR_BATCH}`,
+    `SELECT e.product_key, e.subject, e.status, e.period_end, e.grace_until, e.renews, e.buyer_user_id, e.version, e.updated_at
+       FROM app_entitlements e LEFT JOIN app_billing b ON b.app_id = e.app_id
+      WHERE e.app_id = ?1 AND e.mirrored_version < e.version AND e.stripe_env = COALESCE(b.stripe_env, 'live')
+      ORDER BY e.version, e.product_key, e.subject LIMIT ${MIRROR_BATCH}`,
   ).bind(appId).all<MirrorRow>();
   const rows = results ?? [];
   if (rows.length === 0) return 0;
@@ -138,16 +148,21 @@ export async function mirrorApp(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTE
   }
   if (!ok) return 0;
 
-  // Mark exactly the version that was pushed: a row that changed while the push was in flight stays dirty.
+  // Mark exactly the version that was pushed, within the env that was active when it was selected above: a row that
+  // changed while the push was in flight stays dirty, and a row of the OTHER env is never touched.
   await env.DB.batch(rows.map((r) => env.DB.prepare(
-    'UPDATE app_entitlements SET mirrored_version = ? WHERE app_id = ? AND product_key = ? AND subject = ? AND mirrored_version < ?',
-  ).bind(r.version, appId, r.product_key, r.subject, r.version)));
+    `UPDATE app_entitlements SET mirrored_version = ?1 WHERE app_id = ?2 AND product_key = ?3 AND subject = ?4 AND mirrored_version < ?1
+       AND stripe_env = COALESCE((SELECT stripe_env FROM app_billing WHERE app_id = ?2), 'live')`,
+  ).bind(r.version, appId, r.product_key, r.subject)));
   return rows.length;
 }
 
-/** Push every app that has dirty rows, a bounded number per call. */
+/** Push every app that has dirty rows (in its currently-active env, #519), a bounded number per call. */
 export async function mirrorDirtyApps(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>): Promise<{ apps: number; rows: number }> {
-  const { results } = await env.DB.prepare(`SELECT DISTINCT app_id FROM app_entitlements WHERE mirrored_version < version LIMIT ${MIRROR_APPS_PER_SWEEP}`).all<{ app_id: string }>();
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT e.app_id FROM app_entitlements e LEFT JOIN app_billing b ON b.app_id = e.app_id
+      WHERE e.mirrored_version < e.version AND e.stripe_env = COALESCE(b.stripe_env, 'live') LIMIT ${MIRROR_APPS_PER_SWEEP}`,
+  ).all<{ app_id: string }>();
   let rows = 0;
   let apps = 0;
   for (const { app_id } of results ?? []) {

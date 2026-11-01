@@ -138,15 +138,29 @@ function billingStatements(db: D1Database, appId: string, billing: BillingManife
   ];
 }
 
-/** Mirror the products to Stripe after the manifest is stored. A Stripe failure never fails the deploy: it is a warning, and the next deploy retries. */
+/**
+ * Mirror the products to Stripe after the manifest is stored. A Stripe failure never fails the deploy: it is a warning, and
+ * the next deploy retries. A second, independent pass syncs Stripe's test mode (#519) when a test key is configured —
+ * additive: without one, this is exactly the sync that existed before test mode did.
+ */
 async function syncBilling(env: Env | undefined, db: D1Database, appId: string, billing: BillingManifest | null): Promise<string[]> {
   if (!billing || !env?.STRIPE_SECRET_KEY) return billing && !env?.STRIPE_SECRET_KEY ? ['billing: Stripe is not configured on this platform, so the products were recorded but not created in Stripe'] : [];
+  const warnings: string[] = [];
   try {
-    const r = await syncBillingProducts(db, new Stripe(env.STRIPE_SECRET_KEY), appId);
-    return r.failed.map((f) => `billing: product "${f.key}" was not synced to Stripe (${f.error}); the next deploy retries`);
+    const r = await syncBillingProducts(db, new Stripe(env.STRIPE_SECRET_KEY), appId, 'live');
+    warnings.push(...r.failed.map((f) => `billing: product "${f.key}" was not synced to Stripe (${f.error}); the next deploy retries`));
   } catch (e) {
-    return [`billing: Stripe sync failed (${(e instanceof Error ? e.message : String(e)).slice(0, 200)}); the next deploy retries`];
+    warnings.push(`billing: Stripe sync failed (${(e instanceof Error ? e.message : String(e)).slice(0, 200)}); the next deploy retries`);
   }
+  if (env.STRIPE_TEST_SECRET_KEY) {
+    try {
+      const r = await syncBillingProducts(db, new Stripe(env.STRIPE_TEST_SECRET_KEY), appId, 'test');
+      warnings.push(...r.failed.map((f) => `billing: product "${f.key}" was not synced to Stripe test mode (${f.error}); the next deploy retries`));
+    } catch (e) {
+      warnings.push(`billing: Stripe test-mode sync failed (${(e instanceof Error ? e.message : String(e)).slice(0, 200)}); the next deploy retries`);
+    }
+  }
+  return warnings;
 }
 
 export async function replaceAppTools(

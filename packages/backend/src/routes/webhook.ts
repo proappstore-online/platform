@@ -5,6 +5,7 @@ import { eventCarriesAppId } from '../lib/app-billing-events.js';
 import { handleAppBillingEvent } from '../lib/app-billing-handler.js';
 import { recordChargeEvent } from '../lib/billing-ledger.js';
 import { mirrorApp } from '../lib/entitlement-mirror.js';
+import type { StripeEnv } from '../lib/stripe-env.js';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
 
@@ -22,6 +23,8 @@ interface StripeEvent {
   type: string;
   /** Unix seconds, inside the signed body: the event order this handler trusts (#321). */
   created?: number;
+  /** Stripe's own flag for which mode produced this event; cross-checked against the secret that verified it (#519). */
+  livemode?: boolean;
   data: {
     object: Record<string, unknown>;
   };
@@ -64,10 +67,19 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
 
   const payload = await c.req.text();
 
-  const valid = await verifyWebhookSignature(payload, signature, c.env.STRIPE_WEBHOOK_SECRET);
-  if (!valid) return c.text('invalid signature', 401);
+  // #519: two independent Stripe identities post to this one route (Stripe lets a test-mode and a live-mode webhook
+  // endpoint share a URL, each with its own secret). Whichever secret verifies decides the event's env; Stripe's own
+  // `livemode` must then agree, or the event is rejected outright — never a fallback from one secret to the other.
+  let stripeEnv: StripeEnv | null = null;
+  if (await verifyWebhookSignature(payload, signature, c.env.STRIPE_WEBHOOK_SECRET)) stripeEnv = 'live';
+  else if (c.env.STRIPE_TEST_WEBHOOK_SECRET && (await verifyWebhookSignature(payload, signature, c.env.STRIPE_TEST_WEBHOOK_SECRET))) stripeEnv = 'test';
+  if (!stripeEnv) return c.text('invalid signature', 401);
 
   const event = JSON.parse(payload) as StripeEvent;
+  if (typeof event.livemode === 'boolean' && event.livemode !== (stripeEnv === 'live')) {
+    console.error('[billing] webhook livemode mismatch', { type: event.type, stripeEnv, livemode: event.livemode });
+    return c.text('livemode does not match the verifying secret', 401);
+  }
   const obj = event.data.object;
 
   // #509: what a charge says (refund total, fee id) is kept for the revenue ledger, whichever path the event takes next.
@@ -86,12 +98,19 @@ webhookRoutes.post('/webhooks/stripe', async (c) => {
       // Push the changed rows to the app's D1 after the response; a failed push leaves them dirty for the sweep.
       await handleAppBillingEvent(c.env.DB, event, Date.now(), async (appId) => {
         c.executionCtx.waitUntil(mirrorApp(c.env, appId).then(() => undefined, (e) => console.warn('[billing] mirror failed', { appId, error: e instanceof Error ? e.message : String(e) })));
-      });
+      }, stripeEnv);
     } catch (e) {
       // Not acknowledged: Stripe redelivers, and the handler is safe to repeat.
       console.error('[billing] app event failed', { type: event.type, error: e instanceof Error ? e.message : String(e) });
       return c.text('app billing event failed', 500);
     }
+    return c.json({ received: true });
+  }
+
+  // #519: the Pro subscription flow has no test mode. A test-mode event that carries none of our app metadata (so it
+  // would otherwise fall into the switch below) is acknowledged and dropped here, never processed as a Pro change.
+  if (stripeEnv === 'test') {
+    console.warn('[billing] ignoring a non-app event received on the test-mode secret', { type: event.type });
     return c.json({ received: true });
   }
 

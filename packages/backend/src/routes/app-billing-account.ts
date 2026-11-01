@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireAdmin, requireAppOwner, requireUser } from '../lib/auth.js';
-import { Stripe } from '../lib/stripe.js';
 import { getAppVisibility, requireVisible } from '../lib/visibility.js';
 import { appLedger } from '../lib/billing-ledger.js';
 import { isAppRedirectUrl } from './app-billing.js';
+import { stripeFor } from '../lib/billing-env.js';
+import type { StripeEnv } from '../lib/stripe-env.js';
 
 /**
  * App billing 3/3 (#509, epic #506): what a buyer sees of their own purchases, the customer portal, what the owner sees, and the
@@ -62,7 +63,11 @@ const entitlementDto = (e: EntitlementRow) => ({
 
 const ENTITLEMENT_COLUMNS = 'product_key, subject, status, period_start, period_end, grace_until, renews, buyer_user_id, updated_at';
 
-/** The caller's own entitlements: rows they bought. Another buyer's rows for the same subject are not theirs and are not returned. */
+/**
+ * The caller's own entitlements: rows they bought. Another buyer's rows for the same subject are not theirs and are
+ * not returned. Scoped to the app's currently-active Stripe env (#519): a leftover test-mode row never shows up as
+ * the buyer's state while the app is live, and vice versa.
+ */
 appBillingAccountRoutes.get('/apps/:appId/billing/entitlements', async (c) => {
   const appId = c.req.param('appId')!;
   const user = await requireUser(c);
@@ -71,7 +76,7 @@ appBillingAccountRoutes.get('/apps/:appId/billing/entitlements', async (c) => {
   const subjects = raw === undefined ? null : raw.split(',').filter((s) => s !== '');
   if (subjects && subjects.length > MAX_SUBJECT_FILTER) throw new HttpError(`subjects: at most ${MAX_SUBJECT_FILTER}`, 400);
   const filter = subjects ? ` AND subject IN (SELECT value FROM json_each(?3))` : '';
-  const stmt = c.env.DB.prepare(`SELECT ${ENTITLEMENT_COLUMNS} FROM app_entitlements WHERE app_id = ?1 AND buyer_user_id = ?2${filter} ORDER BY product_key, subject LIMIT 500`);
+  const stmt = c.env.DB.prepare(`SELECT ${ENTITLEMENT_COLUMNS} FROM app_entitlements WHERE app_id = ?1 AND buyer_user_id = ?2 AND stripe_env = COALESCE((SELECT stripe_env FROM app_billing WHERE app_id = ?1), 'live')${filter} ORDER BY product_key, subject LIMIT 500`);
   const { results } = await (subjects ? stmt.bind(appId, user.id, JSON.stringify(subjects)) : stmt.bind(appId, user.id)).all<EntitlementRow>();
   return c.json({ entitlements: (results ?? []).map(entitlementDto) });
 });
@@ -115,11 +120,15 @@ appBillingAccountRoutes.post('/apps/:appId/billing/portal', async (c) => {
   if (!(await isAppRedirectUrl(c.env.DB, appId, returnUrl))) {
     throw new HttpError("returnUrl must be on this app's own origins (its proappstore.online subdomain, a verified custom domain, or localhost)", 400);
   }
-  const bought = await c.env.DB.prepare("SELECT 1 AS x FROM app_purchases WHERE app_id = ? AND buyer_user_id = ? AND status IN ('paid', 'refunded', 'canceled') LIMIT 1").bind(appId, user.id).first();
-  const customer = await c.env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ?').bind(user.id).first<{ id: string }>();
+  // The app's currently-active env (#519) decides which Stripe identity, and which of the caller's purchases/customer
+  // rows, the portal opens against.
+  const envRow = await c.env.DB.prepare('SELECT stripe_env FROM app_billing WHERE app_id = ?').bind(appId).first<{ stripe_env: StripeEnv }>();
+  const stripeEnv: StripeEnv = envRow?.stripe_env ?? 'live';
+  const bought = await c.env.DB.prepare("SELECT 1 AS x FROM app_purchases WHERE app_id = ? AND buyer_user_id = ? AND stripe_env = ? AND status IN ('paid', 'refunded', 'canceled') LIMIT 1").bind(appId, user.id, stripeEnv).first();
+  const customer = await c.env.DB.prepare('SELECT stripe_customer_id AS id FROM billing_customers WHERE user_id = ? AND stripe_env = ?').bind(user.id, stripeEnv).first<{ id: string }>();
   if (!bought || !customer) throw new HttpError('you have no purchases in this app', 404);
   try {
-    const session = await new Stripe(c.env.STRIPE_SECRET_KEY).createBillingPortalSession({ customer: customer.id, returnUrl });
+    const session = await stripeFor(c.env, stripeEnv).createBillingPortalSession({ customer: customer.id, returnUrl });
     return c.json({ url: session.url });
   } catch (e) {
     console.error('[billing] portal failed', { appId, error: e instanceof Error ? e.message : String(e) });
@@ -127,15 +136,25 @@ appBillingAccountRoutes.post('/apps/:appId/billing/portal', async (c) => {
   }
 });
 
-/** The owner's view of the app's products, with whether billing is on and any Stripe sync problem. */
+/** Whether the platform has test-mode Stripe credentials configured at all (#519) — never the values. */
+const testModeConfigured = (env: Env): boolean => !!(env.STRIPE_TEST_SECRET_KEY && env.STRIPE_TEST_WEBHOOK_SECRET);
+
+/** The owner's view of the app's products, with whether billing is on, the effective Stripe mode, and any sync problem. */
 appBillingAccountRoutes.get('/apps/:appId/billing/owner/products', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
-  const config = await c.env.DB.prepare('SELECT enabled, authorize_action FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null }>();
+  const config = await c.env.DB.prepare('SELECT enabled, authorize_action, stripe_env FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null; stripe_env: StripeEnv }>();
+  const stripeEnv: StripeEnv = config?.stripe_env ?? 'live';
   const { results } = await c.env.DB.prepare(`SELECT ${PRODUCT_COLUMNS}, active, sync_error FROM app_billing_products WHERE app_id = ? ORDER BY product_key`).bind(appId).all<ProductRow & { active: number; sync_error: string | null }>();
+  // The sync error shown tracks the effective env (#519): test mode's own linkage lives in a sibling table, never
+  // app_billing_products' live columns.
+  const testErrors = stripeEnv === 'test'
+    ? new Map((await c.env.DB.prepare('SELECT product_key, sync_error FROM app_billing_products_test WHERE app_id = ?').bind(appId).all<{ product_key: string; sync_error: string | null }>()).results?.map((r) => [r.product_key, r.sync_error]) ?? [])
+    : null;
   return c.json({
     enabled: config?.enabled === 1, authorizeAction: config?.authorize_action ?? null,
-    products: (results ?? []).map((p) => ({ ...productDto(p), active: p.active === 1, syncError: p.sync_error })),
+    stripeEnv, testModeConfigured: testModeConfigured(c.env),
+    products: (results ?? []).map((p) => ({ ...productDto(p), active: p.active === 1, syncError: testErrors ? (testErrors.get(p.product_key) ?? null) : p.sync_error })),
   });
 });
 
@@ -146,33 +165,55 @@ appBillingAccountRoutes.get('/apps/:appId/billing/owner/purchases', async (c) =>
   return c.json(await appLedger(c.env.DB, appId));
 });
 
-/** Every entitlement of the app, for the owner; `?product=` narrows it. */
+/** Every entitlement of the app, for the owner, scoped to its currently-active env (#519); `?product=` narrows it. */
 appBillingAccountRoutes.get('/apps/:appId/billing/owner/entitlements', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   const product = c.req.query('product');
-  const stmt = c.env.DB.prepare(`SELECT ${ENTITLEMENT_COLUMNS} FROM app_entitlements WHERE app_id = ?1${product ? ' AND product_key = ?2' : ''} ORDER BY product_key, subject LIMIT 500`);
+  const stmt = c.env.DB.prepare(`SELECT ${ENTITLEMENT_COLUMNS} FROM app_entitlements WHERE app_id = ?1 AND stripe_env = COALESCE((SELECT stripe_env FROM app_billing WHERE app_id = ?1), 'live')${product ? ' AND product_key = ?2' : ''} ORDER BY product_key, subject LIMIT 500`);
   const { results } = await (product ? stmt.bind(appId, product) : stmt.bind(appId)).all<EntitlementRow>();
   return c.json({ entitlements: (results ?? []).map((e) => ({ ...entitlementDto(e), buyerUserId: e.buyer_user_id })) });
 });
 
-/** The switch for live money (#507): per app, off until a platform admin turns it on. Re-registering a manifest never moves it. */
+/**
+ * The switch for live money (#507): per app, off until a platform admin turns it on. Re-registering a manifest never
+ * moves it. Also the admin's Stripe-mode switch (#519): switching `stripeEnv` is refused while billing stays or
+ * becomes enabled — an unsafe transition under live checkout traffic — so the admin must disable first, switch,
+ * then re-enable once the new mode's isolation is verified.
+ */
 appBillingAccountRoutes.put('/admin/apps/:appId/billing', async (c) => {
   const admin = await requireAdmin(c);
   const appId = c.req.param('appId')!;
-  const body = await c.req.json<{ enabled?: unknown }>().catch(() => null);
-  if (typeof body?.enabled !== 'boolean') throw new HttpError('body must be { "enabled": true | false }', 400);
+  const body = await c.req.json<{ enabled?: unknown; stripeEnv?: unknown }>().catch(() => null);
+  if (!body || typeof body !== 'object') throw new HttpError('body must be an object', 400);
+  if (body.enabled === undefined && body.stripeEnv === undefined) throw new HttpError('body must set "enabled" and/or "stripeEnv"', 400);
+  if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new HttpError('enabled must be true or false', 400);
+  if (body.stripeEnv !== undefined && body.stripeEnv !== 'live' && body.stripeEnv !== 'test') throw new HttpError('stripeEnv must be "live" or "test"', 400);
   await requireApp(c, appId);
-  const res = await c.env.DB.prepare('UPDATE app_billing SET enabled = ?, updated_at = ? WHERE app_id = ?').bind(body.enabled ? 1 : 0, Date.now(), appId).run();
-  if (!res.meta.changes) throw new HttpError('this app declares no billing', 404);
-  console.warn('[billing] enabled flag set', { appId, enabled: body.enabled, by: admin.id });
-  return c.json({ ok: true, enabled: body.enabled });
+  const current = await c.env.DB.prepare('SELECT enabled, stripe_env FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; stripe_env: StripeEnv }>();
+  if (!current) throw new HttpError('this app declares no billing', 404);
+
+  const stripeEnv = (body.stripeEnv as StripeEnv | undefined) ?? current.stripe_env;
+  if (stripeEnv !== current.stripe_env) {
+    const stayingEnabled = body.enabled === true || (body.enabled === undefined && current.enabled === 1);
+    if (stayingEnabled) throw new HttpError('disable billing before switching stripeEnv (switch while disabled, then re-enable)', 409);
+  }
+  const enabled = body.enabled === undefined ? current.enabled === 1 : body.enabled;
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `UPDATE app_billing SET enabled = ?1, stripe_env = ?2,
+       stripe_env_updated_at = CASE WHEN stripe_env != ?2 THEN ?3 ELSE stripe_env_updated_at END,
+       stripe_env_updated_by = CASE WHEN stripe_env != ?2 THEN ?4 ELSE stripe_env_updated_by END,
+       updated_at = ?3 WHERE app_id = ?5`,
+  ).bind(enabled ? 1 : 0, stripeEnv, now, admin.id, appId).run();
+  console.warn('[billing] admin switch', { appId, enabled, stripeEnv, by: admin.id });
+  return c.json({ ok: true, enabled, stripeEnv });
 });
 
 appBillingAccountRoutes.get('/admin/apps/:appId/billing', async (c) => {
   await requireAdmin(c);
   const appId = c.req.param('appId')!;
-  const config = await c.env.DB.prepare('SELECT enabled, authorize_action FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null }>();
+  const config = await c.env.DB.prepare('SELECT enabled, authorize_action, stripe_env FROM app_billing WHERE app_id = ?').bind(appId).first<{ enabled: number; authorize_action: string | null; stripe_env: StripeEnv }>();
   if (!config) throw new HttpError('this app declares no billing', 404);
-  return c.json({ enabled: config.enabled === 1, authorizeAction: config.authorize_action });
+  return c.json({ enabled: config.enabled === 1, authorizeAction: config.authorize_action, stripeEnv: config.stripe_env, testModeConfigured: testModeConfigured(c.env) });
 });

@@ -15,11 +15,17 @@ describe('pas billing', () => {
   });
 
   it('says plainly when billing is off, and shows a sync error', () => {
-    const out = formatProducts(false, [{ key: 'term', name: 'Term', amount: 1000, currency: 'aud', modes: ['one_time', 'recurring'], interval: { unit: 'month', count: 3 }, active: true, syncError: 'stripe down' }]);
+    const out = formatProducts(false, 'live', true, [{ key: 'term', name: 'Term', amount: 1000, currency: 'aud', modes: ['one_time', 'recurring'], interval: { unit: 'month', count: 3 }, active: true, syncError: 'stripe down' }]);
     expect(out).toContain('not enabled');
+    expect(out).toContain('Stripe mode: LIVE');
     expect(out).toContain('10.00 AUD');
     expect(out).toContain('every 3 month');
     expect(out).toContain('sync error: stripe down');
+  });
+
+  it('flags test mode with no credentials configured', () => {
+    const out = formatProducts(true, 'test', false, []);
+    expect(out).toContain('Stripe mode: TEST (test credentials are not configured on the platform)');
   });
 
   it('shows refunds, a pending fee, net and totals per purchase', () => {

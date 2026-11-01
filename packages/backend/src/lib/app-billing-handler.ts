@@ -1,5 +1,6 @@
 import { parseAppBillingEvent, type AppBillingFact } from './app-billing-events.js';
 import { recomputePurchase } from './entitlement-store.js';
+import type { StripeEnv } from './stripe-env.js';
 
 /**
  * Apply one verified Stripe event for an app purchase (#508, epic #506).
@@ -25,8 +26,8 @@ const IGNORED: BillingHandled = { handled: false, purchaseId: null };
 /** The event's own clock, in ms: the only time this layer trusts. */
 const eventTime = (event: RawEvent, now: number): number => (typeof event.created === 'number' ? event.created * 1000 : now);
 
-async function claimEvent(db: D1Database, eventId: string, type: string, appId: string, now: number): Promise<boolean> {
-  await db.prepare('INSERT OR IGNORE INTO app_billing_events (event_id, type, app_id, received_at) VALUES (?, ?, ?, ?)').bind(eventId, type, appId, now).run();
+async function claimEvent(db: D1Database, eventId: string, type: string, appId: string, stripeEnv: StripeEnv, now: number): Promise<boolean> {
+  await db.prepare('INSERT OR IGNORE INTO app_billing_events (event_id, type, app_id, stripe_env, received_at) VALUES (?, ?, ?, ?, ?)').bind(eventId, type, appId, stripeEnv, now).run();
   const row = await db.prepare('SELECT processed_at FROM app_billing_events WHERE event_id = ?').bind(eventId).first<{ processed_at: number | null }>();
   return row?.processed_at == null;
 }
@@ -81,20 +82,23 @@ async function applyFact(db: D1Database, fact: Exclude<AppBillingFact, { kind: '
  * `afterApplied` runs once the event is fully applied, with the app id: the route uses it to push the changed rows to the app's D1. It
  * can never fail the event (the rows stay dirty and the sweep pushes them), so a failure in it is swallowed.
  */
-export async function handleAppBillingEvent(db: D1Database, event: unknown, now: number = Date.now(), afterApplied?: (appId: string) => Promise<void>): Promise<BillingHandled> {
+export async function handleAppBillingEvent(db: D1Database, event: unknown, now: number = Date.now(), afterApplied?: (appId: string) => Promise<void>, stripeEnv: StripeEnv = 'live'): Promise<BillingHandled> {
   const fact = parseAppBillingEvent(event);
   if (fact.kind === 'unrelated') return IGNORED;
   const raw = event as RawEvent;
   const eventId = String(raw.id);
 
-  const purchase = await db.prepare('SELECT id, app_id FROM app_purchases WHERE id = ?').bind(fact.purchaseId).first<{ id: string; app_id: string }>();
-  // An event for a purchase we never made, or one that names a different app's purchase, is acknowledged and ignored.
-  if (!purchase || purchase.app_id !== fact.appId) {
-    console.warn('[billing] event for an unknown purchase', { eventId, type: raw.type, appId: fact.appId });
+  const purchase = await db.prepare('SELECT id, app_id, stripe_env FROM app_purchases WHERE id = ?').bind(fact.purchaseId).first<{ id: string; app_id: string; stripe_env: StripeEnv }>();
+  // An event for a purchase we never made, one that names a different app's purchase, or one verified by the
+  // OTHER env's secret than the purchase was made under (#519), is acknowledged and ignored. The last case is
+  // defense in depth beyond the webhook route's own livemode check: even a genuinely-signed event can never
+  // mutate a purchase of the other env.
+  if (!purchase || purchase.app_id !== fact.appId || purchase.stripe_env !== stripeEnv) {
+    console.warn('[billing] event for an unknown purchase or a stripe_env mismatch', { eventId, type: raw.type, appId: fact.appId, stripeEnv });
     return IGNORED;
   }
 
-  if (!(await claimEvent(db, eventId, String(raw.type), fact.appId, now))) return { handled: true, purchaseId: purchase.id, duplicate: true };
+  if (!(await claimEvent(db, eventId, String(raw.type), fact.appId, stripeEnv, now))) return { handled: true, purchaseId: purchase.id, duplicate: true };
   await applyFact(db, fact, eventTime(raw, now), now);
   await recomputePurchase(db, purchase.id, now);
   await db.prepare('UPDATE app_billing_events SET processed_at = ? WHERE event_id = ?').bind(Date.now(), eventId).run();

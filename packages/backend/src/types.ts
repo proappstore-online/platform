@@ -43,6 +43,16 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   /** Stripe price ID for the $5/mo platform subscription. Read by GET /v1/pricing. */
   STRIPE_PRO_MONTHLY_PRICE_ID?: string;
+  /**
+   * App billing's test-mode identity (#519), both optional and independent of the live keys above: an app's
+   * checkout only runs in test mode when its own `app_billing.stripe_env = 'test'` (an admin's explicit
+   * switch), and even then every test-mode operation fails closed (503) if either of these is unset. Never a
+   * fallback for the live keys, and never read for the Pro subscription flow, which has no test mode.
+   *   wrangler secret put STRIPE_TEST_SECRET_KEY
+   *   wrangler secret put STRIPE_TEST_WEBHOOK_SECRET
+   */
+  STRIPE_TEST_SECRET_KEY?: string;
+  STRIPE_TEST_WEBHOOK_SECRET?: string;
   /** Signs + verifies PAS session JWTs (build-core/session-jwt). */
   SESSION_SIGNING_KEY: string;
   /** Step-up window for `step_up` actions, seconds (#231). Default 300. */

@@ -2,6 +2,7 @@ import type { Env } from '../types.js';
 import { SUBSCRIPTION_SLACK_MS } from './entitlements.js';
 import { recomputeSubject } from './entitlement-store.js';
 import { mirrorDirtyApps } from './entitlement-mirror.js';
+import type { StripeEnv } from './stripe-env.js';
 
 /**
  * The clock-driven half of the entitlements (#508). Stripe sends no event when a one-off term ends or a grace period runs out, so a
@@ -24,16 +25,16 @@ export interface SweepReport {
 
 export async function sweepEntitlements(env: Pick<Env, 'DB' | 'DATA_WORKER_HOST' | 'INTERNAL_TOKEN'>, now: number = Date.now()): Promise<SweepReport> {
   const { results } = await env.DB.prepare(
-    `SELECT app_id, product_key, subject FROM app_entitlements
+    `SELECT app_id, product_key, subject, stripe_env FROM app_entitlements
       WHERE (status = 'active' AND period_end IS NOT NULL AND ((renews = 0 AND period_end <= ?1) OR (renews = 1 AND period_end + ?2 <= ?1)))
          OR (status = 'grace' AND grace_until IS NOT NULL AND grace_until <= ?1)
       ORDER BY period_end LIMIT ${SWEEP_LIMIT}`,
-  ).bind(now, SUBSCRIPTION_SLACK_MS).all<{ app_id: string; product_key: string; subject: string }>();
+  ).bind(now, SUBSCRIPTION_SLACK_MS).all<{ app_id: string; product_key: string; subject: string; stripe_env: StripeEnv }>();
 
   const due = results ?? [];
   let changed = 0;
   for (const row of due) {
-    if (await recomputeSubject(env.DB, row.app_id, row.product_key, row.subject, now)) changed++;
+    if (await recomputeSubject(env.DB, row.app_id, row.product_key, row.subject, now, row.stripe_env)) changed++;
   }
   const mirrored = await mirrorDirtyApps(env);
   return { due: due.length, changed, mirroredApps: mirrored.apps, mirroredRows: mirrored.rows };

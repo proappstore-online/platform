@@ -258,3 +258,81 @@ PUT /v1/admin/apps/<id>/billing   { "enabled": true }      GET /v1/admin/apps/<i
 
 404 when the app declares no billing. With it off, `products()` and checkout answer 403 "billing is not enabled for this app"; a buyer's
 existing purchases, entitlements and portal keep working so nobody loses access to cancel a renewal.
+
+## Test mode (#519)
+
+The platform's one Stripe account has a live identity (`STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`) and an
+optional, separately-configured test identity (`STRIPE_TEST_SECRET_KEY` / `STRIPE_TEST_WEBHOOK_SECRET`). An app
+runs in exactly one at a time, picked by `app_billing.stripe_env` (`'live'` by default) — never a client choice,
+never a fallback from test to live. This exists to let an app's own checkout → webhook → entitlement journey be
+exercised against real Stripe test-mode objects before its billing goes live for real users (the original driver
+was Chess Clubs, ChessClubs-online/chess-clubs#201).
+
+Everything money, customer, product and entitlement touches is scoped by env:
+
+- **Products and prices.** A deploy syncs live Stripe objects as it always has; when a test key is configured it
+  also runs an independent sync into Stripe's test mode. Test mode's Product linkage lives in its own table
+  (`app_billing_products_test`), never on `app_billing_products`' live columns. `app_billing_prices.stripe_env`
+  means the same (app, product, mode) can have one active live price and one active test price at once.
+- **Customers.** `billing_customers` is keyed by `(user_id, stripe_env)`: a live and a test Stripe Customer id are
+  different Stripe objects and are never reused across the boundary. A live Pro-subscription customer is only
+  ever reused for a LIVE app purchase — Pro has no test mode.
+- **Purchases.** `app_purchases.stripe_env` is stamped once, at checkout, from the app's `stripe_env` at that
+  moment. A later mode switch never reclassifies history.
+- **Entitlements.** `app_entitlements`' key includes `stripe_env`: a test purchase computes its own entitlement
+  row, never the live one for the same (product, subject). The mirror into the app's `_pas_entitlements` only ever
+  pushes the app's currently-active env's rows — a dirty test-mode row simply waits, unmirrored, until the admin
+  switches back to test; it can never land while the app reads as live, or vice versa.
+- **The revenue ledger** (`pas billing purchases`) counts live purchases only: a synthetic test-mode QA purchase
+  never inflates what an app earned.
+
+### Who may buy in test mode
+
+Test-mode checkout is restricted to **test principals** (#432: `test_principals`, `user_id = 'test:<slug>'`,
+non-human, no provider login). A general user's checkout against a `stripe_env: 'test'` app refuses with 403
+*before* touching Stripe, whatever their authorize action would otherwise say — there is no code path by which a
+real user transacts in test mode. This is how the Chess QA journey runs without ever becoming a public test-mode
+checkout: the app stays `enabled: false` for everyone else throughout.
+
+### The webhook
+
+Stripe lets a live-mode and a test-mode webhook endpoint share one URL, each with its own signing secret. The
+route tries the live secret first, then the test secret if one is configured; whichever verifies decides the
+event's env, and the event's own `livemode` field must then agree, or the event is rejected (401) outright — never
+a fallback from one secret to the other. A verified test-mode event that carries none of the platform's `app_id`
+metadata (so it would otherwise fall into the Pro subscription switch) is dropped unprocessed: Pro has no test
+mode. As a second, independent guard, the handler also refuses to apply any event — however it was signed — to a
+purchase whose own `stripe_env` does not match: a test event can never mutate a live purchase or its entitlements,
+even if a secret were ever misconfigured.
+
+### Switching mode
+
+```
+PUT /v1/admin/apps/<id>/billing   { "stripeEnv": "test" }
+```
+
+Refused (409) while billing is or would stay enabled — the admin disables billing first, switches, verifies, then
+re-enables. This is the only moving part: `enabled` and `stripeEnv` are independent flags, and switching to the
+app's current env is always a no-op. `GET /v1/admin/apps/<id>/billing` and the owner's `GET …/billing/owner/products`
+(so `pas billing products`) both expose `stripeEnv` and `testModeConfigured` (whether the platform has test
+credentials at all) — never the secret values themselves.
+
+### Ops provisioning
+
+Tracked in `serge-ivo/ops#34`. The two secrets, set exactly like the live ones:
+
+```
+wrangler secret put STRIPE_TEST_SECRET_KEY
+wrangler secret put STRIPE_TEST_WEBHOOK_SECRET
+```
+
+The webhook route (`POST /webhooks/stripe`, i.e. `https://api.proappstore.online/webhooks/stripe`, no `/v1`) needs
+a second Stripe Dashboard webhook endpoint registered **in test mode** pointing at that same URL, subscribed to the
+same events the live one is (`checkout.session.completed`, `invoice.paid`, `invoice.payment_succeeded`,
+`invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`, `charge.succeeded`,
+`charge.updated`, `charge.refunded`) — Stripe hands back a fresh `whsec_…` for that endpoint, which is
+`STRIPE_TEST_WEBHOOK_SECRET`. Until both secrets exist, `testModeConfigured` reads `false` and every test-mode
+operation refuses with 503 before any Stripe call; code and tests do not wait on this.
+
+Closing this code ticket does **not** close Chess #201, which still needs a verified Stripe test checkout → webhook
+→ per-child access run against real test-mode credentials once ops#34 lands.

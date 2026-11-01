@@ -1,4 +1,5 @@
 import { computeEntitlement, type Entitlement, type PurchaseFacts } from './entitlements.js';
+import type { StripeEnv } from './stripe-env.js';
 
 /**
  * The database side of the entitlement rules (#508): load every fact about one (app, product, subject), compute, and write the
@@ -20,6 +21,7 @@ interface PurchaseRow {
   refunded_at: number | null;
   sub_cancel_at_period_end: number;
   sub_ended_at: number | null;
+  stripe_env: StripeEnv;
 }
 
 interface EntitlementRow {
@@ -43,12 +45,13 @@ function subjectsOf(row: PurchaseRow): string[] {
   }
 }
 
-async function factsFor(db: D1Database, appId: string, productKey: string, subject: string): Promise<PurchaseFacts[]> {
+async function factsFor(db: D1Database, appId: string, productKey: string, subject: string, stripeEnv: StripeEnv): Promise<PurchaseFacts[]> {
   const where = subject === ''
     ? 'json_array_length(subjects) = 0'
-    : 'EXISTS (SELECT 1 FROM json_each(app_purchases.subjects) WHERE value = ?3)';
-  const binds = subject === '' ? [appId, productKey] : [appId, productKey, subject];
-  const { results } = await db.prepare(`SELECT * FROM app_purchases WHERE app_id = ?1 AND product_key = ?2 AND ${where}`).bind(...binds).all<PurchaseRow>();
+    : 'EXISTS (SELECT 1 FROM json_each(app_purchases.subjects) WHERE value = ?4)';
+  const binds = subject === '' ? [appId, productKey, stripeEnv] : [appId, productKey, stripeEnv, subject];
+  // #519: a live and a test purchase of the same (app, product, subject) must never be facts of the same entitlement.
+  const { results } = await db.prepare(`SELECT * FROM app_purchases WHERE app_id = ?1 AND product_key = ?2 AND stripe_env = ?3 AND ${where}`).bind(...binds).all<PurchaseRow>();
   const purchases = results ?? [];
   if (purchases.length === 0) return [];
 
@@ -76,28 +79,33 @@ const same = (a: EntitlementRow, e: Entitlement): boolean =>
   a.status === e.status && a.period_start === e.periodStart && a.period_end === e.periodEnd && a.grace_until === e.graceUntil
   && a.renews === (e.renews ? 1 : 0) && a.buyer_user_id === e.buyerUserId && a.purchase_id === e.purchaseId;
 
-/** Recompute one subject. Returns true when the stored entitlement changed (its version rose). */
-export async function recomputeSubject(db: D1Database, appId: string, productKey: string, subject: string, now: number): Promise<boolean> {
-  const entitlement = computeEntitlement(await factsFor(db, appId, productKey, subject), now);
+/**
+ * Recompute one subject. Returns true when the stored entitlement changed (its version rose). `stripeEnv`
+ * defaults to 'live' so existing one-env callers are unaffected (#519); the sweep and the handler pass the
+ * purchase's own env explicitly.
+ */
+export async function recomputeSubject(db: D1Database, appId: string, productKey: string, subject: string, now: number, stripeEnv: StripeEnv = 'live'): Promise<boolean> {
+  const entitlement = computeEntitlement(await factsFor(db, appId, productKey, subject, stripeEnv), now);
   if (!entitlement) return false;
-  const stored = await db.prepare('SELECT status, period_start, period_end, grace_until, renews, buyer_user_id, purchase_id FROM app_entitlements WHERE app_id = ? AND product_key = ? AND subject = ?')
-    .bind(appId, productKey, subject).first<EntitlementRow>();
+  const stored = await db.prepare('SELECT status, period_start, period_end, grace_until, renews, buyer_user_id, purchase_id FROM app_entitlements WHERE app_id = ? AND product_key = ? AND subject = ? AND stripe_env = ?')
+    .bind(appId, productKey, subject, stripeEnv).first<EntitlementRow>();
   if (stored && same(stored, entitlement)) return false;
   await db.prepare(
-    `INSERT INTO app_entitlements (app_id, product_key, subject, status, period_start, period_end, grace_until, renews, buyer_user_id, purchase_id, version, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)
-     ON CONFLICT(app_id, product_key, subject) DO UPDATE SET status = excluded.status, period_start = excluded.period_start, period_end = excluded.period_end,
+    `INSERT INTO app_entitlements (app_id, product_key, subject, stripe_env, status, period_start, period_end, grace_until, renews, buyer_user_id, purchase_id, version, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)
+     ON CONFLICT(app_id, product_key, subject, stripe_env) DO UPDATE SET status = excluded.status, period_start = excluded.period_start, period_end = excluded.period_end,
        grace_until = excluded.grace_until, renews = excluded.renews, buyer_user_id = excluded.buyer_user_id, purchase_id = excluded.purchase_id,
        version = app_entitlements.version + 1, updated_at = excluded.updated_at`,
-  ).bind(appId, productKey, subject, entitlement.status, entitlement.periodStart, entitlement.periodEnd, entitlement.graceUntil, entitlement.renews ? 1 : 0, entitlement.buyerUserId, entitlement.purchaseId, now).run();
+  ).bind(appId, productKey, subject, stripeEnv, entitlement.status, entitlement.periodStart, entitlement.periodEnd, entitlement.graceUntil, entitlement.renews ? 1 : 0, entitlement.buyerUserId, entitlement.purchaseId, now).run();
   return true;
 }
 
-/** Recompute every subject one purchase covers; returns how many entitlements changed. */
+/** Recompute every subject one purchase covers; returns how many entitlements changed. The purchase's own stripe_env
+ *  (stamped at checkout, #519) decides which entitlement env is touched — never re-derived from app_billing's current one. */
 export async function recomputePurchase(db: D1Database, purchaseId: string, now: number): Promise<number> {
   const row = await db.prepare('SELECT * FROM app_purchases WHERE id = ?').bind(purchaseId).first<PurchaseRow>();
   if (!row) return 0;
   let changed = 0;
-  for (const subject of subjectsOf(row)) if (await recomputeSubject(db, row.app_id, row.product_key, subject, now)) changed++;
+  for (const subject of subjectsOf(row)) if (await recomputeSubject(db, row.app_id, row.product_key, subject, now, row.stripe_env)) changed++;
   return changed;
 }

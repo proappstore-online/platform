@@ -45,9 +45,12 @@ export function money(minor: number, currency: string | null): string {
 
 const day = (ms: number | null): string => (ms ? new Date(ms).toISOString().slice(0, 10) : '-');
 
-export function formatProducts(enabled: boolean, products: BillingProductRow[]): string {
-  const lines = [`Billing is ${enabled ? 'ENABLED' : 'not enabled'} for this app${enabled ? '' : ' (a platform admin turns it on)'}.`];
-  if (products.length === 0) return `${lines[0]}\nNo products declared.\n`;
+export function formatProducts(enabled: boolean, stripeEnv: string, testModeConfigured: boolean, products: BillingProductRow[]): string {
+  const lines = [
+    `Billing is ${enabled ? 'ENABLED' : 'not enabled'} for this app${enabled ? '' : ' (a platform admin turns it on)'}.`,
+    `Stripe mode: ${stripeEnv.toUpperCase()}${stripeEnv === 'test' && !testModeConfigured ? ' (test credentials are not configured on the platform)' : ''}.`,
+  ];
+  if (products.length === 0) return `${lines.join('\n')}\nNo products declared.\n`;
   for (const p of products) {
     const term = p.interval ? `every ${p.interval.count ?? 1} ${p.interval.unit}` : 'one-off';
     lines.push(`${p.key.padEnd(24)} ${money(p.amount, p.currency).padEnd(14)} ${p.modes.join('/').padEnd(18)} ${term}${p.active ? '' : '  (inactive)'}${p.syncError ? `  sync error: ${p.syncError}` : ''}`);
@@ -81,8 +84,8 @@ export const billingCommand = new Command('billing')
       .action(async (opts: { app?: string; json?: boolean }) => {
         const cfg = await requireSession();
         const appId = await resolveAppIdOrExit(opts.app);
-        const data = await ownerApi<{ enabled: boolean; products: BillingProductRow[] }>(cfg, 'GET', `/v1/apps/${appId}/billing/owner/products`, 'list billing products');
-        process.stdout.write(opts.json ? `${JSON.stringify(data, null, 2)}\n` : formatProducts(data.enabled, data.products));
+        const data = await ownerApi<{ enabled: boolean; stripeEnv: string; testModeConfigured: boolean; products: BillingProductRow[] }>(cfg, 'GET', `/v1/apps/${appId}/billing/owner/products`, 'list billing products');
+        process.stdout.write(opts.json ? `${JSON.stringify(data, null, 2)}\n` : formatProducts(data.enabled, data.stripeEnv, data.testModeConfigured, data.products));
       }),
   )
   .addCommand(

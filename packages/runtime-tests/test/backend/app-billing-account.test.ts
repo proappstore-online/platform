@@ -243,7 +243,7 @@ describe('the revenue ledger', () => {
   it('owner products and entitlements are owner-only too', async () => {
     await entitlement('term', 'kid-a', 'gh:2');
     const products = await get('/apps/club/billing/owner/products', 'gh:owner');
-    expect(await products.json()).toEqual({ enabled: false, authorizeAction: 'may_buy', products: [] });
+    expect(await products.json()).toEqual({ enabled: false, authorizeAction: 'may_buy', stripeEnv: 'live', testModeConfigured: false, products: [] });
     const ents = (await (await get('/apps/club/billing/owner/entitlements?product=term', 'gh:owner')).json()) as { entitlements: { buyerUserId: string }[] };
     expect(ents.entitlements).toMatchObject([{ buyerUserId: 'gh:2' }]);
     expect((await get('/apps/club/billing/owner/products', 'gh:2')).status).toBe(403);
@@ -260,9 +260,9 @@ describe('the enable flag', () => {
     expect(await flag()).toBe(0);
     const on = await send('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: true }, ADMIN);
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ ok: true, enabled: true });
+    expect(await on.json()).toEqual({ ok: true, enabled: true, stripeEnv: 'live' });
     expect(await flag()).toBe(1);
-    expect(await (await get('/admin/apps/club/billing', 'gh:99', ADMIN)).json()).toEqual({ enabled: true, authorizeAction: 'may_buy' });
+    expect(await (await get('/admin/apps/club/billing', 'gh:99', ADMIN)).json()).toEqual({ enabled: true, authorizeAction: 'may_buy', stripeEnv: 'live', testModeConfigured: false });
     expect((await get('/admin/apps/club/billing', 'gh:owner')).status).toBe(403);
     await send('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: false }, ADMIN);
     expect(await flag()).toBe(0);

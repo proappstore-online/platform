@@ -197,7 +197,7 @@ describe('the revenue ledger and the owner views', () => {
   it('owner products and entitlements are owner-only too', async () => {
     await entitlement('term', 'kid-a', 'gh:2');
     await entitlement('other', 'kid-a', 'gh:2');
-    expect(await (await req('GET', '/apps/club/billing/owner/products', 'gh:owner')).json()).toEqual({ enabled: false, authorizeAction: 'may_buy', products: [] });
+    expect(await (await req('GET', '/apps/club/billing/owner/products', 'gh:owner')).json()).toEqual({ enabled: false, authorizeAction: 'may_buy', stripeEnv: 'live', testModeConfigured: false, products: [] });
     const ents = await json<{ entitlements: { buyerUserId: string }[] }>(await req('GET', '/apps/club/billing/owner/entitlements?product=term', 'gh:owner'));
     expect(ents.entitlements).toMatchObject([{ buyerUserId: 'gh:2' }]);
     expect((await json<{ entitlements: unknown[] }>(await req('GET', '/apps/club/billing/owner/entitlements', 'gh:owner'))).entitlements).toHaveLength(2);
@@ -221,9 +221,9 @@ describe('the enable flag', () => {
     expect(await flag()).toBe(0);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const on = await req('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: true }, ADMIN);
-    expect(await on.json()).toEqual({ ok: true, enabled: true });
+    expect(await on.json()).toEqual({ ok: true, enabled: true, stripeEnv: 'live' });
     expect(await flag()).toBe(1);
-    expect(await (await req('GET', '/admin/apps/club/billing', 'gh:99', undefined, ADMIN)).json()).toEqual({ enabled: true, authorizeAction: 'may_buy' });
+    expect(await (await req('GET', '/admin/apps/club/billing', 'gh:99', undefined, ADMIN)).json()).toEqual({ enabled: true, authorizeAction: 'may_buy', stripeEnv: 'live', testModeConfigured: false });
     expect((await req('GET', '/admin/apps/club/billing', 'gh:owner')).status).toBe(403);
     await req('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: false }, ADMIN);
     expect(await flag()).toBe(0);
@@ -235,5 +235,34 @@ describe('the enable flag', () => {
     expect((await req('PUT', '/admin/apps/nope/billing', 'gh:99', { enabled: true }, ADMIN)).status).toBe(404);
     expect((await req('PUT', '/admin/apps/other/billing', 'gh:99', { enabled: true }, ADMIN)).status).toBe(404);
     expect((await req('GET', '/admin/apps/other/billing', 'gh:99', undefined, ADMIN)).status).toBe(404);
+    expect((await req('PUT', '/admin/apps/club/billing', 'gh:99', {}, ADMIN)).status).toBe(400);
+    expect((await req('PUT', '/admin/apps/club/billing', 'gh:99', { stripeEnv: 'sandbox' }, ADMIN)).status).toBe(400);
+  });
+});
+
+describe('the Stripe-mode switch (#519)', () => {
+  const env = async () => (await db.prepare("SELECT stripe_env FROM app_billing WHERE app_id = 'club'").first<{ stripe_env: string }>())!.stripe_env;
+
+  it('refuses switching while billing stays or becomes enabled, but allows it while disabled', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await req('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: true }, ADMIN);
+    expect((await req('PUT', '/admin/apps/club/billing', 'gh:99', { stripeEnv: 'test' }, ADMIN)).status).toBe(409);
+    expect(await env()).toBe('live');
+    // Flipping enabled on in the SAME request as the switch is just as unsafe.
+    await db.prepare("UPDATE app_billing SET enabled = 0 WHERE app_id = 'club'").run();
+    expect((await req('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: true, stripeEnv: 'test' }, ADMIN)).status).toBe(409);
+    expect(await env()).toBe('live');
+
+    const res = await req('PUT', '/admin/apps/club/billing', 'gh:99', { stripeEnv: 'test' }, ADMIN);
+    expect(await res.json()).toEqual({ ok: true, enabled: false, stripeEnv: 'test' });
+    expect(await env()).toBe('test');
+    const row = await db.prepare("SELECT stripe_env_updated_at, stripe_env_updated_by FROM app_billing WHERE app_id = 'club'").first<{ stripe_env_updated_at: number | null; stripe_env_updated_by: string | null }>();
+    expect(row!.stripe_env_updated_at).not.toBeNull();
+    expect(row!.stripe_env_updated_by).toBe('gh:99');
+
+    // Switching to the SAME env while enabled is a no-op, not an unsafe transition.
+    await req('PUT', '/admin/apps/club/billing', 'gh:99', { enabled: true }, ADMIN);
+    expect((await req('PUT', '/admin/apps/club/billing', 'gh:99', { stripeEnv: 'test' }, ADMIN)).status).toBe(200);
+    warn.mockRestore();
   });
 });

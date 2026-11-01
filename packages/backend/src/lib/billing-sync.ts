@@ -1,4 +1,5 @@
 import type { BillingMode } from './manifest/billing.js';
+import type { StripeEnv } from './stripe-env.js';
 
 /**
  * Mirror an app's declared products to Stripe (#507): a Product per product, a Price per (product, mode).
@@ -7,6 +8,10 @@ import type { BillingMode } from './manifest/billing.js';
  * behaviour or interval creates a NEW Price and then archives the old one: Stripe Prices are immutable, and an old
  * receipt or subscription must keep resolving. Nothing is ever deleted. Stripe POSTs carry an idempotency key made from the
  * thing being created, so a deploy retried after a half-finished sync converges instead of duplicating.
+ *
+ * `stripeEnv` (#519) runs the same sync against either Stripe identity. Live keeps writing the columns on
+ * app_billing_products it always has; test's Stripe Product linkage lives in the sibling app_billing_products_test
+ * so a test-mode sync can never touch a live column.
  */
 
 /** The slice of the Stripe client this needs, so a test can hand in a fake. */
@@ -52,31 +57,40 @@ async function sha(text: string): Promise<string> {
   return [...new Uint8Array(digest)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function syncBillingProducts(db: D1Database, stripe: BillingStripe, appId: string): Promise<SyncResult> {
+export async function syncBillingProducts(db: D1Database, stripe: BillingStripe, appId: string, stripeEnv: StripeEnv = 'live'): Promise<SyncResult> {
   const result: SyncResult = { productsCreated: 0, pricesCreated: 0, pricesArchived: 0, failed: [] };
   const { results } = await db.prepare(
     `SELECT product_key, name, amount, currency, tax_behavior, modes, interval_unit, interval_count, stripe_product_id, stripe_name
        FROM app_billing_products WHERE app_id = ? AND active = 1 ORDER BY product_key`,
   ).bind(appId).all<ProductRow>();
 
+  // Test mode's linkage lives in its own sibling table (#519): a test-mode sync reads/writes it instead of
+  // the live columns `results` just carried.
+  const testLinks = stripeEnv === 'test'
+    ? new Map((await db.prepare('SELECT product_key, stripe_product_id, stripe_name FROM app_billing_products_test WHERE app_id = ?').bind(appId).all<{ product_key: string; stripe_product_id: string | null; stripe_name: string | null }>())
+        .results?.map((r) => [r.product_key, r] as const) ?? [])
+    : null;
+
   for (const p of results ?? []) {
     try {
-      const metadata = { app_id: appId, product_key: p.product_key };
-      let productId = p.stripe_product_id;
+      const linked = testLinks ? (testLinks.get(p.product_key) ?? null) : p;
+      const metadata = { app_id: appId, product_key: p.product_key, ...(stripeEnv === 'test' ? { stripe_env: 'test' } : {}) };
+      let productId = linked?.stripe_product_id ?? null;
       if (!productId) {
+        // Stripe's idempotency cache is scoped per secret key, so live and test never share one even with the
+        // identical key string (#519) — this stays byte-for-byte what it was before test mode existed.
         productId = (await stripe.createProduct({ name: p.name, metadata }, `pas-product:${appId}:${p.product_key}`)).id;
         result.productsCreated++;
-        await db.prepare('UPDATE app_billing_products SET stripe_product_id = ?, stripe_name = ?, updated_at = ? WHERE app_id = ? AND product_key = ?')
-          .bind(productId, p.name, Date.now(), appId, p.product_key).run();
-      } else if (p.stripe_name !== p.name) {
+        await writeProductLink(db, appId, p.product_key, stripeEnv, productId, p.name);
+      } else if (linked?.stripe_name !== p.name) {
         await stripe.updateProduct(productId, { name: p.name });
-        await db.prepare('UPDATE app_billing_products SET stripe_name = ?, updated_at = ? WHERE app_id = ? AND product_key = ?').bind(p.name, Date.now(), appId, p.product_key).run();
+        await writeProductLink(db, appId, p.product_key, stripeEnv, productId, p.name);
       }
 
       const modes = JSON.parse(p.modes) as BillingMode[];
       const active = await db.prepare(
-        "SELECT stripe_price_id, mode, amount, currency, tax_behavior, interval_unit, interval_count FROM app_billing_prices WHERE app_id = ? AND product_key = ? AND status = 'active' ORDER BY created_at ASC, rowid ASC",
-      ).bind(appId, p.product_key).all<PriceRow>();
+        "SELECT stripe_price_id, mode, amount, currency, tax_behavior, interval_unit, interval_count FROM app_billing_prices WHERE app_id = ? AND product_key = ? AND stripe_env = ? AND status = 'active' ORDER BY created_at ASC, rowid ASC",
+      ).bind(appId, p.product_key, stripeEnv).all<PriceRow>();
       // Two active prices for one mode mean an earlier sync stopped between creating the new price and archiving the old:
       // keep the newest, archive the rest.
       const byMode = new Map<BillingMode, PriceRow>();
@@ -116,23 +130,55 @@ export async function syncBillingProducts(db: D1Database, stripe: BillingStripe,
         // The new price is recorded before the old one is archived: a failure in between leaves two active rows for one
         // mode, which the next sync resolves by archiving the older, and never leaves a product with no price to sell.
         await db.prepare(
-          `INSERT OR IGNORE INTO app_billing_prices (stripe_price_id, app_id, product_key, mode, amount, currency, tax_behavior, interval_unit, interval_count, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
-        ).bind(created.id, appId, p.product_key, mode, p.amount, p.currency, p.tax_behavior, interval?.unit ?? null, interval?.count ?? null, Date.now()).run();
+          `INSERT OR IGNORE INTO app_billing_prices (stripe_price_id, app_id, product_key, mode, stripe_env, amount, currency, tax_behavior, interval_unit, interval_count, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+        ).bind(created.id, appId, p.product_key, mode, stripeEnv, p.amount, p.currency, p.tax_behavior, interval?.unit ?? null, interval?.count ?? null, Date.now()).run();
         if (current) {
           await stripe.archivePrice(current.stripe_price_id);
           await archived(db, current.stripe_price_id);
           result.pricesArchived++;
         }
       }
-      await db.prepare('UPDATE app_billing_products SET sync_error = NULL WHERE app_id = ? AND product_key = ?').bind(appId, p.product_key).run();
+      await clearSyncError(db, appId, p.product_key, stripeEnv);
     } catch (e) {
       const error = (e instanceof Error ? e.message : String(e)).slice(0, 300);
       result.failed.push({ key: p.product_key, error });
-      await db.prepare('UPDATE app_billing_products SET sync_error = ? WHERE app_id = ? AND product_key = ?').bind(error, appId, p.product_key).run().catch(() => undefined);
+      await writeSyncError(db, appId, p.product_key, stripeEnv, error).catch(() => undefined);
     }
   }
   return result;
+}
+
+async function writeProductLink(db: D1Database, appId: string, productKey: string, stripeEnv: StripeEnv, productId: string, name: string): Promise<void> {
+  const now = Date.now();
+  if (stripeEnv === 'live') {
+    await db.prepare('UPDATE app_billing_products SET stripe_product_id = ?, stripe_name = ?, updated_at = ? WHERE app_id = ? AND product_key = ?').bind(productId, name, now, appId, productKey).run();
+    return;
+  }
+  await db.prepare(
+    `INSERT INTO app_billing_products_test (app_id, product_key, stripe_product_id, stripe_name, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(app_id, product_key) DO UPDATE SET stripe_product_id = excluded.stripe_product_id, stripe_name = excluded.stripe_name, updated_at = excluded.updated_at`,
+  ).bind(appId, productKey, productId, name, now).run();
+}
+
+async function clearSyncError(db: D1Database, appId: string, productKey: string, stripeEnv: StripeEnv): Promise<void> {
+  if (stripeEnv === 'live') {
+    await db.prepare('UPDATE app_billing_products SET sync_error = NULL WHERE app_id = ? AND product_key = ?').bind(appId, productKey).run();
+    return;
+  }
+  await db.prepare('UPDATE app_billing_products_test SET sync_error = NULL WHERE app_id = ? AND product_key = ?').bind(appId, productKey).run();
+}
+
+async function writeSyncError(db: D1Database, appId: string, productKey: string, stripeEnv: StripeEnv, error: string): Promise<void> {
+  if (stripeEnv === 'live') {
+    await db.prepare('UPDATE app_billing_products SET sync_error = ? WHERE app_id = ? AND product_key = ?').bind(error, appId, productKey).run();
+    return;
+  }
+  // A failure before the test-mode product row exists (the very first test-mode sync) still needs somewhere to land.
+  await db.prepare(
+    `INSERT INTO app_billing_products_test (app_id, product_key, sync_error, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(app_id, product_key) DO UPDATE SET sync_error = excluded.sync_error, updated_at = excluded.updated_at`,
+  ).bind(appId, productKey, error, Date.now()).run();
 }
 
 async function archived(db: D1Database, priceId: string): Promise<void> {

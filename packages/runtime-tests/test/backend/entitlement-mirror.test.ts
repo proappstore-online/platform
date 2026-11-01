@@ -47,7 +47,7 @@ afterEach(() => fetchMock.assertNoPendingInterceptors());
 beforeEach(async () => {
   pushes = [];
   mockNetwork();
-  for (const t of ['app_billing_events', 'app_billing_payments', 'app_billing_payment_refs', 'app_entitlements', 'app_purchases']) await env.DB.prepare(`DELETE FROM ${t}`).run();
+  for (const t of ['app_billing', 'app_billing_events', 'app_billing_payments', 'app_billing_payment_refs', 'app_entitlements', 'app_purchases']) await env.DB.prepare(`DELETE FROM ${t}`).run();
   await env.DB.prepare('DROP TABLE IF EXISTS _pas_entitlements').run();
 });
 
@@ -194,6 +194,44 @@ describe('pushing to the app (#508)', () => {
     const r = await handleAppBillingEvent(env.DB, oneOff(), at('2026-01-11T00:00:00Z'), async () => { throw new Error('boom'); });
     expect(r).toEqual({ handled: true, purchaseId: 'pur_1' });
     expect(await rows()).toHaveLength(3);
+  });
+});
+
+describe('mirror isolation across a Stripe-mode switch (#519)', () => {
+  const OURS_LIVE = { app_id: 'club', user_id: 'gh:2', purchase_id: 'pur_live' };
+  const OURS_TEST = { app_id: 'club', user_id: 'gh:2', purchase_id: 'pur_test' };
+  const session = (ours: typeof OURS_LIVE) =>
+    evt('checkout.session.completed', T0, { id: `cs_${ours.purchase_id}`, mode: 'payment', payment_status: 'paid', amount_total: 1000, currency: 'aud', payment_intent: `pi_${ours.purchase_id}`, metadata: ours });
+
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM app_billing WHERE app_id = 'club'").run();
+    await env.DB.prepare("INSERT INTO app_billing (app_id, authorize_action, enabled, stripe_env, created_at, updated_at) VALUES ('club', 'may_buy', 1, 'live', 1, 1)").run();
+    await env.DB.prepare(
+      `INSERT INTO app_purchases (id, app_id, product_key, buyer_user_id, subjects, quantity, mode, status, stripe_env, interval_unit, interval_count, grace_days, created_at, updated_at)
+       VALUES ('pur_live', 'club', 'child_term', 'gh:2', '["kid-a"]', 1, 'one_time', 'pending', 'live', 'month', 3, 5, 1, 1),
+              ('pur_test', 'club', 'child_term', 'gh:2', '["kid-a"]', 1, 'one_time', 'pending', 'test', 'month', 3, 5, 1, 1)`,
+    ).run();
+  });
+
+  it('only the active env mirrors; a dirty row of the other env waits until the admin switches to it', async () => {
+    await handleAppBillingEvent(env.DB, session(OURS_LIVE), at('2026-01-11T00:00:00Z'));
+    await handleAppBillingEvent(env.DB, session(OURS_TEST), at('2026-01-11T00:00:00Z'), undefined, 'test');
+    // Both envs now hold their OWN entitlement for the SAME (app, product, subject): proof the live and test
+    // purchases never computed into one row.
+    const byEnv = async (stripeEnv: string) => env.DB.prepare("SELECT status, version, mirrored_version FROM app_entitlements WHERE app_id = 'club' AND subject = 'kid-a' AND stripe_env = ?").bind(stripeEnv).first<{ status: string; version: number; mirrored_version: number }>();
+    expect(await byEnv('live')).toMatchObject({ status: 'active', version: 1, mirrored_version: 0 });
+    expect(await byEnv('test')).toMatchObject({ status: 'active', version: 1, mirrored_version: 0 });
+
+    accepts();
+    expect(await mirrorApp(env, 'club')).toBe(1); // live is active: only its row is eligible
+    expect((await byEnv('live'))!.mirrored_version).toBe(1);
+    expect((await byEnv('test'))!.mirrored_version).toBe(0); // the test row stays dirty, untouched
+
+    await env.DB.prepare("UPDATE app_billing SET stripe_env = 'test' WHERE app_id = 'club'").run();
+    accepts();
+    expect(await mirrorApp(env, 'club')).toBe(1); // now test is active: its row becomes eligible
+    expect((await byEnv('test'))!.mirrored_version).toBe(1);
+    expect((await byEnv('live'))!.mirrored_version).toBe(1); // unchanged — never re-pushed, never overwritten
   });
 });
 
