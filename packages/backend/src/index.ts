@@ -20,6 +20,7 @@ import { fillChargeFees } from './lib/billing-ledger.js';
 import { sweepEntitlements } from './lib/entitlement-sweep.js';
 import { licenseRoutes } from './routes/license.js';
 import { storageRoutes } from './routes/storage.js';
+import { dataImportRoutes } from './routes/data-import.js';
 import { mapsRoutes } from './routes/maps.js';
 import { provisionRoutes } from './routes/provision.js';
 import { provisioningPlanRoutes, pruneProvisioningPlans } from './routes/provisioning-plans.js';
@@ -324,6 +325,7 @@ v1.route('/', appBillingRoutes); // #507: checkout for an app's own products
 v1.route('/', appBillingAccountRoutes); // #509: a buyer's own purchases, the portal, the owner's ledger, the enable flag
 v1.route('/', licenseRoutes);
 v1.route('/', storageRoutes);
+v1.route('/', dataImportRoutes); // #515: owner bulk import of existing data into D1
 v1.route('/', mapsRoutes);
 v1.route('/', provisionRoutes);
 v1.route('/', provisioningPlanRoutes);

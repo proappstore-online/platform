@@ -137,6 +137,8 @@ tables.
 - Identity, roles and the permissions UI → `proappstore-auth-sessions-roles`.
 - Failed or pending migrations → the [migration repair runbook](https://docs.proappstore.online/migration-repair-runbook/), run by the team.
 - Deploy and registration mechanics → [app actions security](https://docs.proappstore.online/app-actions-security/).
+- Existing data from a port (Firebase above all) → `pas data import` / `pas storage import`, documented in
+  [references/bulk-import-format.md](references/bulk-import-format.md); a one-time owner load, never a registered action.
 
 ## Blockers — hand back, do not work around
 

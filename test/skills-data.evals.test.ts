@@ -24,7 +24,8 @@ const unsupported = read('references', 'unsupported-requirements.md');
 const examples = read('references', 'worked-examples.md');
 const negatives = read('references', 'negative-cases.md');
 const output = read('references', 'output-template.md');
-const allText = [skillMd, tables, antiPatterns, unsupported, examples, negatives, output].join('\n');
+const bulkImport = read('references', 'bulk-import-format.md');
+const allText = [skillMd, tables, antiPatterns, unsupported, examples, negatives, output, bulkImport].join('\n');
 
 interface Case {
   id: string; class: string; blocker?: string; anti_pattern?: string; title: string; requirements: string;
@@ -247,5 +248,29 @@ describe.each(cases.filter((c) => c.class === 'blocker'))('blocker $id', (c) => 
       expect(existsSync(join(ROOT, 'docs', `${d}.md`)), d).toBe(true);
       expect(negatives).toContain(`https://docs.proappstore.online/${d}/`);
     }
+  });
+});
+
+describe('bulk-import-format reference (#515)', () => {
+  it('is linked from SKILL.md', () => {
+    expect(skillMd).toContain('references/bulk-import-format.md');
+  });
+
+  it('documents both CLI commands and the per-table file format', () => {
+    for (const marker of ['pas data import', 'pas storage import', '--dry-run', '.json', '.jsonl']) {
+      expect(bulkImport, marker).toContain(marker);
+    }
+  });
+
+  it('requires a primary key and documents the idempotent upsert', () => {
+    expect(bulkImport).toMatch(/primary key/);
+    expect(bulkImport).toMatch(/ON CONFLICT/);
+    expect(bulkImport).toMatch(/DO NOTHING/);
+  });
+
+  it('is owner-only with a recent sign-in, never a registered action', () => {
+    expect(bulkImport).toMatch(/owner/i);
+    expect(bulkImport).toMatch(/recent sign-in/);
+    expect(bulkImport).toMatch(/not a registered-action surface/);
   });
 });
