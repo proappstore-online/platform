@@ -4,6 +4,13 @@ description: "Migration plan for moving GrassKarma from Firebase to ProAppStore,
 
 # GrassKarma → PAS port plan
 
+> **Superseded** (platform#517). This plan's "correction" to the DoorDrop plan
+> — that apps have no Worker code at all — is also wrong: app workers
+> (`defineAppWorker`, ADR-009) exist today, gated. Both plans predate
+> registered actions and app workers. For current Firebase-port guidance, see
+> [`skills/choose-proappstore-architecture/references/port-from-firebase.md`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/references/port-from-firebase.md).
+> Kept here as the historical record of what shipped and why it didn't work.
+
 Source: `https://github.com/grasskarma/site` (Firebase, two pnpm workspace packages — `web/` + `admin/` + `functions/`).
 Target: `~/dev/stores/pas/grasskarma/` (created by `pas create grasskarma`).
 Category: **Ready** (one shared multi-tenant deployment).

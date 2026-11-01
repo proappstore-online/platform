@@ -135,7 +135,7 @@
     {
       "name": "choose-proappstore-architecture",
       "version": "1.0",
-      "description": "Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.",
+      "description": "Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, how to port from Firebase to ProAppStore, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.",
       "license": "MIT",
       "standard-version": "1.11",
       "issue": "proappstore-online/platform#171",
@@ -150,8 +150,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 42375,
-      "digest": "28050efb8a14b340a66516438111f5d6002cc9cd62b6442d59bbf616b2d29d8e",
+      "bytes": 46154,
+      "digest": "1d898d0e436bb3e2365ac7def0b82ce7078349eb699ca85c9cdc342adad4b6c9",
       "files": [
         {
           "path": "evals/cases.json",
@@ -170,8 +170,8 @@
         },
         {
           "path": "evals/triggers.json",
-          "bytes": 1592,
-          "sha256": "7b1a9a6b038637c14901d3c56058db751b3679859d6d75b47d105ed72c51e223"
+          "bytes": 1691,
+          "sha256": "22be03c33986e201e7cb884891897d8a4c14f4ed7bb9f899ae0adbde7835a72e"
         },
         {
           "path": "references/decision-tables.md",
@@ -189,6 +189,11 @@
           "sha256": "033f217112403c7448632707ae190e73e14216e44853bd6b82eb2b512954807f"
         },
         {
+          "path": "references/port-from-firebase.md",
+          "bytes": 3274,
+          "sha256": "fb60f148d70eef5032827307e5d5b4724b378dae314f7b19a7918fbf6d5d4f8c"
+        },
+        {
           "path": "references/unsupported-requirements.md",
           "bytes": 4063,
           "sha256": "25d86507011c72cf9d09e57d8909160ab3c2141d727a558925fc7868a737fa5c"
@@ -200,8 +205,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 9596,
-          "sha256": "6b3c430ef3dd9d5f3eb2184c24c94bd419ccf5aa4ae3318fa75b45f56490c6c6"
+          "bytes": 10002,
+          "sha256": "d2a927960914011fa91eeeb4f458e1071c152d5698e070cf197527c1637b100a"
         }
       ],
       "evaluations": {
@@ -211,7 +216,7 @@
           "blocker": 3
         },
         "trigger_prompts": {
-          "positive": 6,
+          "positive": 7,
           "negative": 5,
           "sibling": 3
         },
@@ -221,9 +226,9 @@
           "bundle_bytes": 49152
         },
         "actual": {
-          "skill_md_bytes": 9596,
-          "references_bytes": 23637,
-          "bundle_bytes": 42375
+          "skill_md_bytes": 10002,
+          "references_bytes": 26911,
+          "bundle_bytes": 46154
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

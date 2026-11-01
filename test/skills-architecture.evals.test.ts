@@ -19,7 +19,8 @@ const tables = read('references', 'decision-tables.md');
 const unsupported = read('references', 'unsupported-requirements.md');
 const examples = read('references', 'worked-examples.md');
 const negatives = read('references', 'negative-cases.md');
-const allText = [skillMd, tables, unsupported, examples, negatives, read('references', 'output-template.md')].join('\n');
+const portFromFirebase = read('references', 'port-from-firebase.md');
+const allText = [skillMd, tables, unsupported, examples, negatives, read('references', 'output-template.md'), portFromFirebase].join('\n');
 
 interface Case {
   id: string; class: string; blocker?: string; title: string; requirements: string;
@@ -164,5 +165,35 @@ describe.each(cases.filter((c) => c.class === 'blocker'))('blocker $id', (c) => 
       }
     }
     for (const d of e.docs ?? []) expect(existsSync(join(ROOT, 'docs', `${d}.md`)), d).toBe(true);
+  });
+});
+
+describe('port-from-firebase reference (#517)', () => {
+  it('is linked from SKILL.md', () => {
+    expect(skillMd).toContain('references/port-from-firebase.md');
+  });
+
+  it('maps every Firebase piece the issue named to a real platform primitive', () => {
+    for (const piece of ['firestore.rules', 'onSnapshot', 'Cloud Functions', 'Firebase Auth', 'Cloud Storage', 'Firebase Hosting']) {
+      expect(portFromFirebase, piece).toContain(piece);
+    }
+    for (const primitive of ['app.rooms', 'app.storage', 'app.auth']) {
+      expect(SDK_MODULES.has(primitive.replace(/^app\./, '')), primitive).toBe(true);
+      expect(portFromFirebase, primitive).toContain(primitive);
+    }
+  });
+
+  it('carries the DoorDrop lessons: slices, faithful port, planned cutover', () => {
+    expect(portFromFirebase).toMatch(/[Ss]lices/);
+    expect(portFromFirebase).toMatch(/faithful/);
+    expect(portFromFirebase).toMatch(/cutover/);
+  });
+
+  it('both superseded plans point to it', () => {
+    for (const doc of ['doordrop-port-plan.md', 'grasskarma-port-plan.md']) {
+      const text = readFileSync(join(ROOT, 'docs', doc), 'utf8');
+      expect(text, doc).toMatch(/Superseded/);
+      expect(text, doc).toContain('skills/choose-proappstore-architecture/references/port-from-firebase.md');
+    }
   });
 });

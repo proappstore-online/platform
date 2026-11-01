@@ -6,7 +6,8 @@
     "Should this ProAppStore app use D1 or KV for per-user preferences?",
     "How should I structure a ProAppStore app that needs realtime cursors and chat?",
     "What platform services does ProAppStore offer for background jobs, and what should I pick?",
-    "Can a PAS app use rooms for a 200-player game, or do I need something else?"
+    "Can a PAS app use rooms for a 200-player game, or do I need something else?",
+    "I need to port from Firebase to ProAppStore — how do I map Firestore and Cloud Functions?"
   ],
   "negative": [
     "Which AWS service should I use for storing user uploads?",

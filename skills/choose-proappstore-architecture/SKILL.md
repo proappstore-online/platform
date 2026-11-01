@@ -1,6 +1,6 @@
 ---
 name: choose-proappstore-architecture
-description: Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.
+description: Choose the architecture and platform services for a ProAppStore app from its requirements — map each need (data, tenancy, realtime, files, identity and roles, external APIs, AI, maps, notifications, email/SMS/webhooks, monetisation, monitoring, UI shell, MCP, background work) to the existing platform primitive, name what the platform does not support, explain the trade-offs, and produce a bounded architecture decision that cites the Recommended Application Standard. Use when a user asks which ProAppStore service to use, how to design or structure a ProAppStore (PAS) app, whether to use D1, KV, storage, counters or rooms, how to port from Firebase to ProAppStore, or how to choose platform services and architecture for an app on proappstore.online. Not for creating, provisioning, deploying or auditing an app.
 license: MIT
 compatibility: Works with any Agent Skills client. Best with the ProAppStore MCP server (https://mcp.proappstore.online/mcp) for verifying SDK surfaces and reading an existing app; otherwise uses the public docs only. Read-only — no provisioning, no credentials.
 metadata:
@@ -9,7 +9,7 @@ metadata:
   mcp-endpoint: https://mcp.proappstore.online/mcp
   standard-version: "1.11"
   issue: proappstore-online/platform#171
-  triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters, rooms
+  triggers: choose, architecture, platform services, which ProAppStore service, structure a ProAppStore, D1, KV, storage, counters, rooms, port from Firebase
 allowed-tools: whoami sdk_reference recipe platform_guide list_templates app_info list_app_tools schema_status
 ---
 
@@ -94,6 +94,12 @@ row. For every requirement record: primitive, clause id + URL, the
 alternative you rejected and why. Check limits (KV 100 keys / 64 KB /
 1 MB per user; rooms 32 peers, no per-app room cap, 4 KB messages, nothing persisted;
 uploads 50 MB; proxy 10 000 requests/day) against the stated volume.
+
+**Porting an existing app off another stack:** for a Firebase app specifically,
+use [references/port-from-firebase.md](references/port-from-firebase.md) —
+the same decision tables, pre-mapped per Firebase feature (`firestore.rules`,
+`onSnapshot`, Cloud Functions, Firebase Auth, Storage, existing data), plus
+what DoorDrop's port got wrong.
 
 ### 3. Identify unsupported requirements
 

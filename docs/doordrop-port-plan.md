@@ -4,6 +4,13 @@ description: "Migration plan for moving DoorDrop from Firebase to a shared Ready
 
 # DoorDrop → PAS port plan
 
+> **Superseded** (platform#517). This plan's data-Worker mechanism broke
+> DoorDrop's API in production (fleet redeploys kept overwriting it) and
+> predates registered actions and app workers. For current Firebase-port
+> guidance, see
+> [`skills/choose-proappstore-architecture/references/port-from-firebase.md`](https://github.com/proappstore-online/platform/blob/main/skills/choose-proappstore-architecture/references/port-from-firebase.md).
+> Kept here as the historical record of what shipped and why it didn't work.
+
 Source: `~/dev/doordrop/` (Firebase, ~22k LOC).
 Target: `~/dev/stores/pas/doordrop/` (created by `pas create doordrop`).
 Category: **Ready** (one shared multi-tenant deployment).
