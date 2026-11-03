@@ -192,10 +192,19 @@ export function AppShell({
   renderError,
   renderLoading,
 }: AppShellProps) {
-  const [user, setUser] = useState(app.auth.user);
-  const authOwner = useRef(app.auth.user?.id);
-  const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [gate, setGate] = useState<Gate>('loading');
+  // #531: render auth and subscription state only for their SDK/owner identity.
+  // Passive-effect cancellation alone loses a same-tick account-change race.
+  const [auth, setAuth] = useState(() => ({ app, user: app.auth.user, status: app.auth.status, epoch: 0 }));
+  const activeAuth = auth.app === app ? auth : { app, user: app.auth.user, status: app.auth.status, epoch: -1 };
+  const { user, status: authStatus, epoch: authEpoch } = activeAuth;
+  const authOwner = useRef({ app, id: user?.id, status: authStatus, epoch: authEpoch });
+  const [subscriptionResult, setSubscriptionResult] = useState<{ app: ProAppStore; ownerId: string; epoch: number; value: Subscription | null } | null>(null);
+  const hasSubscriptionResult = subscriptionResult?.app === app && subscriptionResult.ownerId === user?.id && subscriptionResult.epoch === authEpoch;
+  const subscription = hasSubscriptionResult ? subscriptionResult.value : null;
+  const gate: Gate = authStatus === 'pending' ? 'loading'
+    : authStatus !== 'signed-in' || !user ? 'signed-out'
+    : !hasSubscriptionResult ? 'loading'
+    : allowFree || subscription?.status === 'active' ? 'ready' : 'no-subscription';
   const [currentPath, setCurrentPath] = useCurrentPath();
   const mainRef = useRef<HTMLElement>(null);
   const beforeNavigate = useRouteChangeEffects(currentPath, mainRef, onNavigate !== undefined);
@@ -224,34 +233,30 @@ export function AppShell({
   // shows it.
   useEffect(() => {
     const unsubscribe = app.auth.onStatus((status, u) => {
-      setUser(u);
-      if (authOwner.current !== u?.id) { setSubscription(null); setGate('loading'); }
-      authOwner.current = u?.id;
-      if (status !== 'signed-in') setGate(status === 'signed-out' ? 'signed-out' : 'loading');
+      const previous = authOwner.current;
+      const changed = previous.app !== app || previous.id !== u?.id || previous.status !== status;
+      const epoch = previous.epoch + Number(changed);
+      if (changed) setSubscriptionResult(null);
+      authOwner.current = { app, id: u?.id, status, epoch };
+      setAuth({ app, user: u, status, epoch });
     });
     void app.auth.init();
     return unsubscribe;
   }, [app]);
 
-  // Check subscription after auth.
+  // Check subscription after auth. Identity guards run before React's cleanup,
+  // so a previous owner's response cannot reopen the current owner's gate.
   useEffect(() => {
-    if (!user) return;
+    if (!user || authStatus !== 'signed-in' || authOwner.current.epoch !== authEpoch) return;
     let current = true;
-    app.subscription.status().then((sub) => {
-      if (!current) return;
-      setSubscription(sub);
-      if (allowFree || sub?.status === 'active') {
-        setGate('ready');
-      } else {
-        setGate('no-subscription');
-      }
-    }).catch(() => {
-      if (!current) return;
-      setSubscription(null);
-      setGate(allowFree ? 'ready' : 'no-subscription');
-    });
+    const accept = (value: Subscription | null) => {
+      const owner = authOwner.current;
+      if (!current || owner.app !== app || owner.id !== user.id || owner.status !== 'signed-in' || owner.epoch !== authEpoch) return;
+      setSubscriptionResult({ app, ownerId: user.id, epoch: authEpoch, value });
+    };
+    app.subscription.status().then(accept).catch(() => accept(null));
     return () => { current = false; };
-  }, [user, app, allowFree]);
+  }, [user, authStatus, authEpoch, app]);
 
   // --- Gates ---
   if (access !== 'local' && gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
@@ -341,7 +346,7 @@ export function AppShell({
   // --- Ready: render app with topbar ---
   return (
     <ProProvider app={app}>
-    <ToastProvider>
+    <ToastProvider key={access === 'local' ? JSON.stringify([app.appId, user?.id ?? null]) : undefined}>
     <div className="pas-shell flex min-h-dvh flex-col">
       <SkipLink mainRef={mainRef} />
       {topbar}
@@ -349,7 +354,7 @@ export function AppShell({
 
       <main id="main" ref={mainRef} tabIndex={-1} className="pas-main flex flex-1 flex-col">
         <ShellErrorBoundary app={app} renderError={renderError} resetKey={currentPath}>
-          <Suspense key={access === 'local' ? user?.id ?? 'device-local' : undefined} fallback={loading}>{children}</Suspense>
+          <Suspense fallback={loading}>{children}</Suspense>
         </ShellErrorBoundary>
       </main>
 

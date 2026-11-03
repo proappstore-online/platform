@@ -10,6 +10,7 @@ import { NAVBAR_CSS } from '../navbar-css.js';
 import { AppShell, ProShell } from '../shell.js';
 import type { AppShellProps, ProShellProps } from '../index.js';
 import { SHELL_CSS } from '../shell-css.js';
+import { useToast } from '../shell-resilience.js';
 import type { ProAppStore } from '../index.js';
 
 /**
@@ -373,4 +374,92 @@ describe('opt-in local AppShell (#522)', () => {
     await act(async () => { window.dispatchEvent(new Event('online')); });
     expect(container.textContent).not.toContain('Local content is available');
   });
+});
+
+describe('subscription identity and policy races (#531)', () => {
+  it.each(['authenticated', 'local'] as const)('ignores owner A resolution after same-tick switch to B in %s mode', async (access) => {
+    const app = fakeApp();
+    let listener: (status: string, user: unknown) => void = () => {};
+    Object.assign(app.auth, { onStatus: (fn: typeof listener) => { listener = fn; fn('signed-in', app.auth.user); return () => {}; } });
+    let resolveA!: (value: unknown) => void;
+    app.subscription.status = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { resolveA = resolve; })).mockImplementation(() => new Promise(() => {}));
+    const chrome = vi.fn(({ subscription }) => <header>{subscription?.status === 'active' ? 'paid entitlement' : 'no entitlement'}</header>);
+    await mount(<AppShell app={app} access={access} allowFree={false} renderLocalTopbar={chrome}><p>private screen</p></AppShell>);
+    const next = { id: 'owner-b', name: 'B', login: 'b', avatarUrl: null };
+    await act(async () => {
+      Object.assign(app.auth, { user: next }); listener('signed-in', next);
+      resolveA({ status: 'active' }); await Promise.resolve();
+    });
+    expect(container.textContent).not.toContain('paid entitlement');
+    if (access === 'authenticated') expect(container.textContent).not.toContain('private screen');
+  });
+
+  it('re-evaluates a stricter allowFree policy before another subscription request resolves', async () => {
+    const app = fakeApp();
+    app.subscription.status = vi.fn().mockResolvedValueOnce(null).mockImplementation(() => new Promise(() => {}));
+    await mount(<AppShell app={app}><p>private screen</p></AppShell>);
+    expect(container.textContent).toContain('private screen');
+    await mount(<AppShell app={app} allowFree={false}><p>private screen</p></AppShell>);
+    expect(container.textContent).not.toContain('private screen');
+  });
+
+  it('does not reuse a paid result when replacing SDK instances for the same user', async () => {
+    await mount(<AppShell app={fakeApp()} allowFree={false}><p>private screen</p></AppShell>);
+    expect(container.textContent).toContain('private screen');
+    const replacement = fakeApp();
+    replacement.subscription.status = vi.fn(() => new Promise(() => {}));
+    await mount(<AppShell app={replacement} allowFree={false}><p>private screen</p></AppShell>);
+    expect(container.textContent).not.toContain('private screen');
+  });
+});
+
+
+it('starts a fresh subscription request after same-tick A to B to A transitions (#531)', async () => {
+  const app = fakeApp();
+  const original = app.auth.user;
+  let listener: (status: string, user: unknown) => void = () => {};
+  Object.assign(app.auth, { onStatus: (fn: typeof listener) => { listener = fn; fn('signed-in', original); return () => {}; } });
+  const resolutions: Array<(value: unknown) => void> = [];
+  app.subscription.status = vi.fn(() => new Promise((resolve) => { resolutions.push(resolve); })) as typeof app.subscription.status;
+  await mount(<AppShell app={app} allowFree={false}><p>private screen</p></AppShell>);
+  await act(async () => {
+    listener('signed-in', { ...original, id: 'owner-b' });
+    listener('signed-in', original);
+    resolutions[0]!({ status: 'active' }); await Promise.resolve();
+  });
+  expect(container.textContent).not.toContain('private screen');
+  expect(app.subscription.status).toHaveBeenCalledTimes(2);
+  await act(async () => { resolutions[1]!({ status: 'active' }); });
+  expect(container.textContent).toContain('private screen');
+});
+
+it('clears a prior local owner error boundary after account transition (#531)', async () => {
+  const app = fakeApp();
+  Object.assign(app, { logs: { capture: vi.fn() } });
+  let listener: (status: string, user: unknown) => void = () => {};
+  Object.assign(app.auth, { onStatus: (fn: typeof listener) => { listener = fn; fn('signed-in', app.auth.user); return () => {}; } });
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  function Screen() { if (app.auth.user?.id === 'gh:1') throw new Error('owner A private detail'); return <p>owner B screen</p>; }
+  try {
+    await mount(<AppShell app={app} access="local" renderError={({ error }) => <p>{error.message}</p>}><Screen /></AppShell>);
+    expect(container.textContent).toContain('owner A private detail');
+    const next = { id: 'owner-b', name: 'B', login: 'b', avatarUrl: null };
+    await act(async () => { Object.assign(app.auth, { user: next }); listener('signed-in', next); });
+    expect(container.textContent).not.toContain('owner A private detail');
+    expect(container.textContent).toContain('owner B screen');
+  } finally { consoleError.mockRestore(); }
+});
+
+
+it('removes account-local toast content when the owner changes (#531)', async () => {
+  const app = fakeApp();
+  let listener: (status: string, user: unknown) => void = () => {};
+  Object.assign(app.auth, { onStatus: (fn: typeof listener) => { listener = fn; fn('signed-in', app.auth.user); return () => {}; } });
+  function Screen() { const toast = useToast(); return <button onClick={() => toast.show('owner A private notification', { duration: 0 })}>Notify</button>; }
+  await mount(<AppShell app={app} access="local"><Screen /></AppShell>);
+  await act(async () => { container.querySelector<HTMLButtonElement>('main button')!.click(); });
+  expect(container.textContent).toContain('owner A private notification');
+  const next = { id: 'owner-b', name: 'B', login: 'b', avatarUrl: null };
+  await act(async () => { Object.assign(app.auth, { user: next }); listener('signed-in', next); });
+  expect(container.textContent).not.toContain('owner A private notification');
 });
