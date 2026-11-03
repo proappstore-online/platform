@@ -68,8 +68,12 @@ export class DownloadManager {
     try {
       if (!blob) throw new OfflineError('integrity', 'The downloaded asset is missing.');
       await this.verify(blob, manifest);
+      this.store.assertAccess();
       return blob;
-    } catch (error) { await this.removeByKey(id); throw error; }
+    } catch (error) {
+      if (error instanceof OfflineError && error.code === 'integrity') await this.removeByKey(id);
+      throw error;
+    }
   }
   async remove(manifest: DownloadManifest): Promise<void> {
     manifest = Object.freeze({ ...manifest });
@@ -87,6 +91,8 @@ export class DownloadManager {
     });
   }
   async download(manifest: DownloadManifest, options: DownloadOptions = {}): Promise<Blob> {
+    const signal = options.signal, onProgress = options.onProgress;
+    options = { ...(signal ? { signal } : {}), ...(onProgress ? { onProgress } : {}) };
     manifest = Object.freeze({ ...manifest });
     const id = assetKey(manifest, this.maxBytes);
     return this.store.runWork(() => offlineLock(`${this.store.databaseName}:${id}`, () => this.transfer(id, manifest, options), true, options.signal ? { signal: options.signal } : {}), options.signal);
@@ -94,7 +100,7 @@ export class DownloadManager {
   private async transfer(id: string, manifest: DownloadManifest, options: DownloadOptions): Promise<Blob> {
     abort(options.signal);
     const cached = await this.readReady(id, manifest);
-    if (cached) { abort(options.signal); options.onProgress?.({ loaded: cached.size, total: cached.size, resumed: false }); return cached; }
+    if (cached) { abort(options.signal); this.store.assertAccess(); options.onProgress?.({ loaded: cached.size, total: cached.size, resumed: false }); return cached; }
     let row = await this.store.read<DownloadRecord>('downloads', id);
     if (row && row.loaded < manifest.bytes && !row.etag) { await this.removeByKey(id); row = null; }
     let current: DownloadRecord = row ?? { state: 'partial', loaded: 0, total: manifest.bytes, chunks: 0, etag: null };
@@ -131,15 +137,19 @@ export class DownloadManager {
         current.etag = strongEtag(response.headers.get('ETag'));
         if (!response.body) throw new OfflineError('network', 'Download has no response body.');
         const reader = response.body.getReader();
+        const cancelRead = () => { void reader.cancel().catch(() => {}); };
+        options.signal?.addEventListener('abort', cancelRead, { once: true });
         try {
           for (;;) {
             abort(options.signal); this.store.assertAccess();
             const result = await reader.read();
+            abort(options.signal); this.store.assertAccess();
             if (result.done) break;
             if (current.loaded + pendingBytes + result.value.byteLength > manifest.bytes) throw new OfflineError('integrity', 'Download exceeds its declared byte size.');
             // Store independent chunks, never rewrite the already downloaded prefix.
             pending.push(result.value.slice().buffer); pendingBytes += result.value.byteLength;
             if (pendingBytes >= this.checkpointBytes) await checkpoint();
+            abort(options.signal); this.store.assertAccess();
             options.onProgress?.({ loaded: current.loaded + pendingBytes, total: manifest.bytes, resumed });
           }
           await checkpoint();
@@ -147,7 +157,7 @@ export class DownloadManager {
           await reader.cancel().catch(() => {});
           if (!(error instanceof OfflineError && error.code === 'integrity')) await checkpoint();
           throw error;
-        } finally { reader.releaseLock(); }
+        } finally { options.signal?.removeEventListener('abort', cancelRead); reader.releaseLock(); }
       }
       abort(options.signal);
       if (current.loaded !== manifest.bytes) throw new OfflineError('network', 'Download ended before the declared byte size. Retry to resume.');
@@ -164,6 +174,7 @@ export class DownloadManager {
         for (let n = 0; n < current.chunks; n++) tx.objectStore('blobs').delete(partKey(id, n));
         tx.objectStore('downloads').put({ ...current, state: 'ready', chunks: 0 }, id); done(undefined);
       });
+      abort(options.signal); this.store.assertAccess();
       options.onProgress?.({ loaded: manifest.bytes, total: manifest.bytes, resumed });
       return complete;
     } catch (error) {

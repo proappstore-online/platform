@@ -139,3 +139,144 @@ it('orders new shared work after an already-held purge lease', async () => {
   release(); await Promise.all([clear, run]);
   expect(order).toEqual(['clear-start', 'clear-end', 'work']);
 });
+
+describe('async work boundary regressions (#529)', () => {
+  it('snapshots operation identity and nested payload before asynchronous enqueue', async () => {
+    const queue = createSyncQueue(store);
+    const input = { id: 'original', kind: 'save', payload: { text: 'original' }, idempotent: true as const };
+    const pending = queue.enqueue(input);
+    input.id = 'changed'; input.payload.text = 'changed';
+    await pending;
+    expect(await queue.get('original')).toMatchObject({ id: 'original', payload: { text: 'original' } });
+    expect(await queue.get('changed')).toBeNull();
+  });
+
+  it('snapshots job input and checkpoint values before opening a transaction', async () => {
+    const jobs = createLocalJobs(store);
+    const input = { id: 'original', kind: 'speech', input: { text: 'original' } };
+    const pending = jobs.create(input);
+    input.id = 'changed'; input.input.text = 'changed';
+    await pending;
+    expect(await jobs.get('original')).toMatchObject({ input: { text: 'original' } });
+    const checkpoint = { segment: 2 };
+    const saved = jobs.checkpoint('original', checkpoint);
+    checkpoint.segment = 99;
+    await saved;
+    expect(await jobs.get('original')).toMatchObject({ checkpoint: { segment: 2 } });
+  });
+
+  it('retains the signal selected when a job run is requested', async () => {
+    const jobs = createLocalJobs(store);
+    await jobs.create({ id: 'j', kind: 'speech', input: null });
+    const original = new AbortController(), replacement = new AbortController();
+    const options = { signal: original.signal };
+    const pending = jobs.run('j', async (_, context) => { expect(context.signal).toBe(original.signal); return 1; }, options);
+    options.signal = replacement.signal;
+    await pending;
+  });
+
+  it('does not execute a job handler if cancelled while its running status commits', async () => {
+    const jobs = createLocalJobs(store);
+    await jobs.create({ id: 'j', kind: 'speech', input: null });
+    const controller = new AbortController();
+    const transact = store.transaction.bind(store);
+    vi.spyOn(store, 'transaction').mockImplementation(async (tables, mode, work) => {
+      const result = await transact(tables, mode, work);
+      if (tables.includes('jobs') && mode === 'readwrite') controller.abort();
+      return result;
+    });
+    const handler = vi.fn(async () => 1);
+    await expect(jobs.run('j', handler, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not deliver sync work if cancelled while its running status commits', async () => {
+    const queue = createSyncQueue(store);
+    await queue.enqueue({ id: 'a', kind: 'save', payload: 1, idempotent: true });
+    const controller = new AbortController();
+    const transact = store.transaction.bind(store);
+    vi.spyOn(store, 'transaction').mockImplementation(async (tables, mode, work) => {
+      const result = await transact(tables, mode, work);
+      if (tables.includes('outbox') && mode === 'readwrite') controller.abort();
+      return result;
+    });
+    const save = vi.fn(async () => {});
+    await expect(queue.flush({ save }, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(save).not.toHaveBeenCalled();
+  });
+});
+
+it('snapshots the explicitly requested sync handler map before asynchronous replay (#529)', async () => {
+  const queue = createSyncQueue(store);
+  await queue.enqueue({ id: 'a', kind: 'save', payload: 1, idempotent: true });
+  const original = vi.fn(async () => {}), replacement = vi.fn(async () => {});
+  const handlers = { save: original };
+  const pending = queue.flush(handlers);
+  handlers.save = replacement;
+  expect(await pending).toEqual({ completed: 1, failed: 0 });
+  expect(original).toHaveBeenCalledOnce();
+  expect(replacement).not.toHaveBeenCalled();
+});
+
+it.each(['cancel', 'close'])('does not return a completed job when %s occurs during its lookup (#529)', async (action) => {
+  const jobs = createLocalJobs(store);
+  await jobs.create({ id: 'done', kind: 'speech', input: null });
+  await jobs.run('done', async () => 'private result');
+  const controller = new AbortController();
+  const get = jobs.get.bind(jobs);
+  vi.spyOn(jobs, 'get').mockImplementation(async (id) => {
+    const row = await get(id);
+    if (action === 'cancel') controller.abort(); else store.close();
+    return row;
+  });
+  const handler = vi.fn(async () => 'must not run');
+  await expect(jobs.run('done', handler, { signal: controller.signal })).rejects.toMatchObject(action === 'cancel' ? { name: 'AbortError' } : { code: 'closed' });
+  expect(handler).not.toHaveBeenCalled();
+});
+
+it('rejects cancellation at job completion without making already-completed work retryable (#529)', async () => {
+  const jobs = createLocalJobs(store);
+  await jobs.create({ id: 'j', kind: 'speech', input: null });
+  const controller = new AbortController();
+  const transact = store.transaction.bind(store);
+  let writes = 0;
+  const spy = vi.spyOn(store, 'transaction').mockImplementation(async (tables, mode, work) => {
+    const result = await transact(tables, mode, work);
+    if (tables.includes('jobs') && mode === 'readwrite' && ++writes === 2) controller.abort();
+    return result;
+  });
+  await expect(jobs.run('j', async () => 'saved', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+  spy.mockRestore();
+  expect(await jobs.get('j')).toMatchObject({ status: 'completed', result: 'saved' });
+  const rerun = vi.fn(async () => 'unexpected');
+  expect(await jobs.run('j', rerun)).toMatchObject({ status: 'completed', result: 'saved' });
+  expect(rerun).not.toHaveBeenCalled();
+});
+
+it('accepts enqueue input with extra UI callbacks while persisting only declared operation fields (#529)', async () => {
+  const queue = createSyncQueue(store);
+  const input = { id: 'ui', kind: 'save', payload: { text: 'saved' }, idempotent: true as const, onComplete: () => {} };
+  await queue.enqueue(input);
+  expect(await queue.get('ui')).toMatchObject({ id: 'ui', payload: { text: 'saved' } });
+  expect(await queue.get('ui')).not.toHaveProperty('onComplete');
+});
+
+it('honors job cancellation supplied through a prototype signal getter (#529)', async () => {
+  const jobs = createLocalJobs(store);
+  await jobs.create({ id: 'getter', kind: 'speech', input: null });
+  const controller = new AbortController();
+  class Options { get signal() { return controller.signal; } }
+  await expect(jobs.run('getter', async (_, context) => {
+    expect(context.signal).toBe(controller.signal);
+    controller.abort(); return 1;
+  }, new Options())).rejects.toMatchObject({ name: 'AbortError' });
+});
+
+it('honors sync limits supplied through a prototype getter (#529)', async () => {
+  const queue = createSyncQueue(store);
+  await queue.enqueue({ id: 'a', kind: 'save', payload: 1, idempotent: true });
+  await queue.enqueue({ id: 'b', kind: 'save', payload: 2, idempotent: true });
+  class Options { get limit() { return 1; } }
+  expect(await queue.flush({ save: async () => {} }, new Options())).toEqual({ completed: 1, failed: 0 });
+  expect(await queue.get('b')).toMatchObject({ status: 'pending' });
+});

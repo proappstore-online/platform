@@ -1,4 +1,4 @@
-import { OfflineError, type LocalPage, type OfflineStore } from './store.js';
+import { OfflineError, offlineFailure, type LocalPage, type OfflineStore } from './store.js';
 import { offlineLock } from './locks.js';
 
 export type LocalJobStatus = 'pending' | 'running' | 'paused' | 'interrupted' | 'completed' | 'failed';
@@ -11,12 +11,16 @@ export type LocalJobHandler<I = unknown, C = unknown, R = unknown> = (input: I, 
 const validId = (id: string) => {
   if (!id || id.length > 256) throw new OfflineError('invalid', 'Work ids must contain 1–256 characters.');
 };
+const snapshot = <T>(value: T): T => {
+  try { return structuredClone(value); } catch (error) { throw offlineFailure(error); }
+};
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 1000);
 const checkAbort = (signal?: AbortSignal) => { if (signal?.aborted) throw new DOMException('Work cancelled.', 'AbortError'); };
 
 export class LocalJobs {
   constructor(private readonly store: OfflineStore) {}
   create<I>(input: { id: string; kind: string; input: I }): Promise<LocalJob<I>> {
+    input = snapshot({ id: input.id, kind: input.kind, input: input.input });
     validId(input.id); validId(input.kind);
     return this.store.transaction(['jobs'], 'readwrite', (tx, done) => {
       const request = tx.objectStore('jobs').get(input.id);
@@ -39,26 +43,31 @@ export class LocalJobs {
       };
     });
   }
-  async checkpoint<C>(id: string, value: C): Promise<void> { await this.update(id, (row) => ({ ...row, checkpoint: value })); }
+  async checkpoint<C>(id: string, value: C): Promise<void> { value = snapshot(value); await this.update(id, (row) => ({ ...row, checkpoint: value })); }
   async setStatus(id: string, status: LocalJobStatus): Promise<void> {
     if (!['pending', 'running', 'paused', 'interrupted', 'completed', 'failed'].includes(status)) throw new OfflineError('invalid', 'Unknown local job status.');
     await this.update(id, (row) => ({ ...row, status }));
   }
   /** No automatic execution. Re-entering run() passes the last committed checkpoint. */
   async run<I = unknown, C = unknown, R = unknown>(id: string, handler: LocalJobHandler<I, C, R>, options: { signal?: AbortSignal } = {}): Promise<LocalJob<I, C, R>> {
+    const signal = options.signal;
+    options = signal ? { signal } : {};
     return this.store.runWork(() => offlineLock(`${this.store.databaseName}:jobs`, async () => {
       checkAbort(options.signal);
       const found = await this.get<I, C, R>(id);
+      checkAbort(options.signal); this.store.assertAccess();
       if (!found) throw new OfflineError('invalid', 'Local job does not exist.');
       if (found.status === 'completed') return found;
       await this.update(id, (row) => ({ ...row, status: 'running', attempts: row.attempts + 1, error: null }));
+      let completed: LocalJob<I, C, R>;
       try {
-        const result = await handler(found.input, {
+        checkAbort(options.signal); this.store.assertAccess();
+        const result = snapshot(await handler(found.input, {
           savedCheckpoint: found.checkpoint, signal: options.signal,
           checkpoint: async (value) => { checkAbort(options.signal); await this.checkpoint(id, value); },
-        });
-        checkAbort(options.signal);
-        return await this.update(id, (row) => ({ ...row, result, status: 'completed' })) as LocalJob<I, C, R>;
+        }));
+        checkAbort(options.signal); this.store.assertAccess();
+        completed = await this.update(id, (row) => ({ ...row, result, status: 'completed' })) as LocalJob<I, C, R>;
       } catch (error) {
         // A locked account deliberately prevents further writes; its running job
         // can be recovered after the owner explicitly opens it again.
@@ -66,6 +75,9 @@ export class LocalJobs {
         catch { /* Preserve the original failure; no unlocked-account fallback. */ }
         throw error;
       }
+      // A committed completion must not become retryable when access changes afterward.
+      checkAbort(options.signal); this.store.assertAccess();
+      return completed;
     }, true, options.signal ? { signal: options.signal } : {}), options.signal);
   }
   /** The same Web Lock excludes active SDK runners before recovery. */
@@ -91,6 +103,7 @@ export type SyncHandler = (payload: unknown, context: { operationId: string; sig
 export class SyncQueue {
   constructor(private readonly store: OfflineStore) {}
   async enqueue(input: { id: string; kind: string; payload: unknown; idempotent: true }): Promise<SyncOperation> {
+    input = snapshot({ id: input.id, kind: input.kind, payload: input.payload, idempotent: input.idempotent });
     validId(input.id); validId(input.kind);
     if (input.idempotent !== true) throw new OfflineError('invalid', 'Only explicitly idempotent operations may be queued.');
     return this.store.transaction(['outbox'], 'readwrite', (tx, done) => {
@@ -124,7 +137,10 @@ export class SyncQueue {
   }
   /** Explicit caller action; never triggered automatically by an online event. */
   flush(handlers: Record<string, SyncHandler>, options: { signal?: AbortSignal; limit?: number } = {}): Promise<{ completed: number; failed: number }> {
+    const signal = options.signal;
     const limit = options.limit ?? 50;
+    options = signal ? { signal } : {};
+    handlers = { ...handlers };
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OfflineError('invalid', 'Flush limit must be between 1 and 200.');
     return this.store.runWork(() => offlineLock(`${this.store.databaseName}:sync`, async () => {
       checkAbort(options.signal);
@@ -147,6 +163,7 @@ export class SyncQueue {
         if (!handler) { await this.change(row.id, 'failed', 'No handler registered for this operation.'); failed++; continue; }
         await this.change(row.id, 'running', null, true);
         try {
+          checkAbort(options.signal); this.store.assertAccess();
           await handler(row.payload, { operationId: row.id, signal: options.signal });
           await this.change(row.id, 'completed', null); completed++;
         } catch (error) {

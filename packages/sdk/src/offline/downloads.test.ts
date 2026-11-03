@@ -152,3 +152,84 @@ it('purge rejects active downloads and cannot leave recreated content behind aft
   expect(await manager.status(manifest)).toBeNull();
   expect(await store.page('blobs')).toEqual([]);
 });
+
+describe('download lifecycle regressions (#529)', () => {
+  it('retains verified cached bytes when SHA-256 becomes unavailable', async () => {
+    const manager = createDownloadManager(store, { fetch: vi.fn(async () => response()) });
+    await manager.download(manifest);
+    const original = globalThis.crypto;
+    vi.stubGlobal('crypto', {});
+    try { await expect(manager.get(manifest)).rejects.toMatchObject({ code: 'unavailable' }); }
+    finally { vi.stubGlobal('crypto', original); }
+    expect(await manager.status(manifest)).toMatchObject({ state: 'ready' });
+    expect((await manager.get(manifest))?.size).toBe(bytes.length);
+  });
+
+  it('does not publish progress after its account closes during a pending stream read', async () => {
+    let emit: (chunk: Uint8Array) => void = () => {};
+    let reading: () => void = () => {};
+    const ready = new Promise<void>((resolve) => { reading = resolve; });
+    const body = new ReadableStream<Uint8Array>({ start(controller) { emit = (chunk) => controller.enqueue(chunk); }, pull() { reading(); } });
+    const progress = vi.fn();
+    const manager = createDownloadManager(store, { fetch: vi.fn(async () => new Response(body)), checkpointBytes: 1024 });
+    const pending = manager.download(manifest, { onProgress: progress });
+    await ready;
+    // Wait until the manager, rather than the stream's initial prefetch, reads.
+    await vi.waitFor(() => expect(body.locked).toBe(true));
+    store.close(); emit(bytes.slice(0, 3));
+    await expect(pending).rejects.toMatchObject({ code: 'closed' });
+    expect(progress).not.toHaveBeenCalled();
+  });
+});
+
+it('cancels a stalled response reader and keeps the originally requested download signal (#529)', async () => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ cancel });
+  const original = new AbortController(), replacement = new AbortController();
+  const options = { signal: original.signal };
+  const manager = createDownloadManager(store, { fetch: vi.fn(async () => new Response(body)) });
+  const pending = manager.download(manifest, options);
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  options.signal = replacement.signal;
+  await vi.waitFor(() => expect(body.locked).toBe(true));
+  original.abort();
+  await rejected;
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(await manager.status(manifest)).toBeNull();
+});
+
+it.each(['cancel', 'close'])('does not publish completion after %s during ready-state commit (#529)', async (action) => {
+  const controller = new AbortController();
+  const transact = store.transaction.bind(store);
+  let writes = 0;
+  vi.spyOn(store, 'transaction').mockImplementation(async (tables, mode, work) => {
+    const result = await transact(tables, mode, work);
+    if (tables.includes('downloads') && mode === 'readwrite' && ++writes === 2) {
+      if (action === 'cancel') controller.abort(); else store.close();
+    }
+    return result;
+  });
+  const progress = vi.fn();
+  const manager = createDownloadManager(store, { fetch: vi.fn(async () => response()) });
+  await expect(manager.download(manifest, { signal: controller.signal, onProgress: progress })).rejects.toMatchObject(action === 'cancel' ? { name: 'AbortError' } : { code: 'closed' });
+  // The streamed-byte progress is allowed; final ready-state progress is not.
+  expect(progress).toHaveBeenCalledOnce();
+});
+
+it('does not expose a verified cached blob after its handle closes in verification (#529)', async () => {
+  const manager = createDownloadManager(store, { fetch: vi.fn(async () => response()) });
+  await manager.download(manifest);
+  const internal = manager as unknown as { verify(blob: Blob, manifest: DownloadManifest): Promise<void> };
+  const verify = internal.verify.bind(manager);
+  vi.spyOn(internal, 'verify').mockImplementation(async (blob, input) => { await verify(blob, input); store.close(); });
+  await expect(manager.get(manifest)).rejects.toMatchObject({ code: 'closed' });
+});
+
+it('honors cancellation supplied by an inherited download signal getter (#529)', async () => {
+  const controller = new AbortController(); controller.abort();
+  class Options { get signal() { return controller.signal; } }
+  const fetcher = vi.fn(async () => response());
+  const manager = createDownloadManager(store, { fetch: fetcher });
+  await expect(manager.download(manifest, new Options())).rejects.toMatchObject({ name: 'AbortError' });
+  expect(fetcher).not.toHaveBeenCalled();
+});
