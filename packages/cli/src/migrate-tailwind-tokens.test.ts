@@ -112,16 +112,23 @@ describe('pas migrate tailwind-tokens (#494)', () => {
     await expect(migrateTailwindTokens({ dir: mkdtempSync(join(tmpdir(), 'pas-migrate-')), write: false })).rejects.toThrow(/web\/src/);
   });
 
-  // bookkeeper origin/main: 1,690 long-hand uses. Skipped where the sibling clone is absent.
+  // #527: pin the optional real-app regression to the Bookkeeper revision immediately
+  // before this test was introduced (platform bc1992d672e803ee62fd6b5c841897b39bba0786).
+  // https://github.com/proappstore-online/bookkeeper/commit/a72c0842fd7e9e52a0d65c114196228f3811e649
+  // It contains 1,698 long-hand uses. A moving origin/main becomes migrated over time,
+  // invalidating the input assumptions; never read or modify the sibling working tree.
+  const bookkeeperFixtureRevision = 'a72c0842fd7e9e52a0d65c114196228f3811e649';
   const clone = join(dirname(fileURLToPath(import.meta.url)), '../../../../apps/bookkeeper');
   const archive = (): string | null => {
+    if (!existsSync(join(clone, '.git'))) return null;
     try {
-      if (!existsSync(join(clone, '.git'))) return null;
-      const dir = mkdtempSync(join(tmpdir(), 'pas-bk-'));
-      const tar = execFileSync('git', ['-C', clone, 'archive', 'origin/main', 'web/src'], { maxBuffer: 1 << 28 });
-      execFileSync('tar', ['-x', '-C', dir], { input: tar });
-      return dir;
+      // Shallow/absent sibling history is optional; archive/extraction errors are not.
+      execFileSync('git', ['-C', clone, 'cat-file', '-e', `${bookkeeperFixtureRevision}:web/src`], { stdio: 'ignore' });
     } catch { return null; }
+    const dir = mkdtempSync(join(tmpdir(), 'pas-bk-'));
+    const tar = execFileSync('git', ['-C', clone, 'archive', bookkeeperFixtureRevision, 'web/src'], { maxBuffer: 1 << 28 });
+    execFileSync('tar', ['-x', '-C', dir], { input: tar });
+    return dir;
   };
   const bk = archive();
   it.skipIf(!bk)('migrates a copy of bookkeeper web/src: long-hand gone, mapped tokens only, idempotent', async () => {
