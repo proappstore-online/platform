@@ -3,7 +3,8 @@
   "workspaces": {
     ".": {
       "entry": ["docs/.vitepress/config.mts", "scripts/*.mjs", "test/**/*.test.ts"],
-      "project": ["docs/.vitepress/*.mts", "scripts/*.mjs", "test/**/*.ts"]
+      "project": ["docs/.vitepress/*.mts", "scripts/*.mjs", "test/**/*.ts"],
+      "ignoreDependencies": ["vue"]
     },
     "packages/*": {
       "entry": ["src/index.{ts,tsx}", "src/**/*.test.{ts,tsx}"],

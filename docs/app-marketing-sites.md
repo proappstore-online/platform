@@ -64,7 +64,7 @@ app itself is live in R2:
 2. hashes every file in `marketing/dist/` into an `artifact-manifest.json`
    (content types are the platform's `MARKETING_CONTENT_TYPES`; source maps are
    never published; any other file type fails the step);
-3. uploads it as revision `${{ github.sha }}` and activates it, with the run's
+3. uploads it as revision <code v-pre>${{ github.sha }}</code> and activates it, with the run's
    keyless GitHub OIDC token;
 4. checks that `about-<app>` answers GET and HEAD `/` from the new revision
    (`X-PAS-Marketing-Revision`), and if it does not, rolls back to the revision

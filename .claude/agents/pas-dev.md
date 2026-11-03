@@ -125,6 +125,7 @@ bash scripts/check-design-system.sh .      # banned CSS aliases, html.dark, them
 pnpm -r typecheck
 pnpm test                                  # vitest run, from the workspace root
 pnpm test:offline-browser                   # Chromium + WebKit offline SDK reference
+pnpm docs:build                             # local VitePress documentation
 node scripts/sync-template-workflow.mjs --check   # template-app deploy workflow drift
 ```
 

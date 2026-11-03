@@ -58,11 +58,16 @@ pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root
 pnpm test:coverage                                 # same suite + V8 coverage floors (what CI's check job runs) + gaps report
 pnpm test:offline-browser                          # Chromium + WebKit offline SDK reference
+pnpm docs:build                                    # local VitePress documentation, from a clean install in CI
 pnpm test:runtime                                  # workerd + real D1: backend + data worker (packages/runtime-tests)
 node scripts/sync-template-workflow.mjs --check    # template-app deploy workflow drift
 ```
 
 `quality.yml` additionally runs `npx @vibecodeqa/cli --ci` with a score gate on push and PR.
+
+VitePress-generated SSR pages import `vue` from the workspace root. Keep its direct dependency;
+the root-only Knip exception accounts for those generated imports (#525). The clean-install
+`docs-build` CI job verifies that dependency and literal rendering.
 
 ## Constraints that are easy to violate by accident
 
