@@ -22,7 +22,10 @@ afterEach(async () => {
 async function writeAsset(name: string, content: string | Buffer): Promise<void> {
   const p = join(dir, 'web', 'dist', 'assets');
   await mkdir(dirname(join(p, name)), { recursive: true });
-  await writeFile(join(p, name), content);
+  // Build output is JavaScript, not arbitrary binary bytes; keep entropy fixtures valid ESM.
+  const emitted = /\.(?:m|c)?js$/i.test(name) && Buffer.isBuffer(content)
+    ? `export default ${JSON.stringify(content.toString('base64'))};` : content;
+  await writeFile(join(p, name), emitted);
 }
 
 async function writeIndex(entry: string, preloads: string[] = []): Promise<void> {
@@ -339,5 +342,44 @@ describe('aggregate graph and invalid builds (#523)', () => {
     const result = await checkBundleSize(fsFileSource(dir), { lazyMaxBytes: 1024 });
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('per lazy asset');
+  });
+});
+
+describe('static import syntax budget regressions (#532)', () => {
+  it.each([
+    'import "/assets/vendor.js";',
+    'import {\n n\n} from "./vendor.js";',
+    'export {\n n\n} from "./vendor.js";',
+    'function f(){}export * from "./vendor.js";',
+    String.raw`import "./\u0076endor.js";`,
+  ])('counts eager imports for %s', async (entry) => {
+    await writeAsset('main.js', entry);
+    await writeAsset('vendor.js', 'export const n=' + JSON.stringify(incompressible(2000).toString('base64')) + ';');
+    await writeIndex('main.js');
+    const result = await checkBundleSize(fsFileSource(dir), { initialMaxGzipBytes: 1000 });
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('initial JS total (2 files:');
+  });
+});
+
+
+describe('unmeasurable initial dependencies (#532)', () => {
+  it.each(['https://cdn.example/vendor.js', '//cdn.example/vendor.js', 'react', './extensionless'])('does not pass an unmeasurable static import %s', async (specifier) => {
+    await writeAsset('main.js', `import ${JSON.stringify(specifier)};`);
+    await writeIndex('main.js');
+    expect((await checkBundleSize(fsFileSource(dir))).status).toBe('fail');
+  });
+  it.each(['https://cdn.example/large.js', 'https://cdn.example/large', '/assets/extensionless'])('does not pass unmeasurable script %s alongside a local entry', async (ref) => {
+    await writeAsset('main.js', 'export default 1;');
+    await writeIndex('main.js');
+    await writeFile(join(dir, 'web/dist/index.html'), `<script src="/assets/main.js"></script><script src="${ref}"></script>`);
+    expect((await checkBundleSize(fsFileSource(dir))).status).toBe('fail');
+  });
+  it('does not confuse regular expressions, templates, dynamic imports, or worker URLs with static imports', async () => {
+    await writeAsset('main.js', `const pattern=/import["']missing.js/;const text=\`import "./missing.js";\`;import.meta.url;import("./dynamic.js");new Worker(new URL("./worker.js",import.meta.url));`);
+    await writeIndex('main.js');
+    const result = await checkBundleSize(fsFileSource(dir));
+    expect(result.status).toBe('pass');
+    expect(result.detail).toContain('1 files:');
   });
 });

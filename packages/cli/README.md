@@ -13,6 +13,9 @@ check totals gzip bytes across unique initial JavaScript files, including static
 imports and module preloads, against a 300 KiB startup budget. Bundled lazy
 JavaScript, workers, WASM and model assets have a separate 25 MiB raw limit per
 file. Unbuilt output warns; malformed manifests or missing referenced assets fail.
+Static imports and re-exports are parsed as JavaScript, including multiline and
+escaped specifiers. Initial scripts or imports outside the local build fail when
+their bytes cannot be measured; dynamic imports remain outside the startup total.
 
 Optional public model packages should download on demand using
 `@proappstore/sdk/offline`, with pinned sizes and SHA-256 hashes, rather than enter

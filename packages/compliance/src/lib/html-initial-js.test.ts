@@ -23,13 +23,13 @@ describe('collectInitialJsRefs', () => {
     ]);
   });
 
-  it('ignores stylesheets, wasm, and non-js preloads', () => {
+  it('ignores stylesheets but preserves every modulepreload for validation', () => {
     const html = `
       <link rel="stylesheet" href="/assets/index.css">
       <link rel="modulepreload" href="/assets/ocr.wasm">
       <script src="/assets/index.js"></script>
     `;
-    expect(collectInitialJsRefs(html)).toEqual(['/assets/index.js']);
+    expect(collectInitialJsRefs(html)).toEqual(['/assets/index.js', '/assets/ocr.wasm']);
   });
 
   it('dedupes identical refs', () => {
@@ -67,4 +67,9 @@ describe('safe HTML references (#523)', () => {
   it.each(['/assets/../private.js', '/assets/%2e%2e/private.js', '/assets/a\\b.js', '//cdn.test/assets/main.js'])('rejects unsafe or remote path %s', (path) => {
     expect(jsAssetFileName(path)).toBeNull();
   });
+});
+
+
+it('preserves extensionless executable refs instead of silently dropping them (#532)', () => {
+  expect(collectInitialJsRefs('<script src="https://cdn.example/runtime"></script><link rel="modulepreload" href="/assets/vendor">')).toEqual(['https://cdn.example/runtime', '/assets/vendor']);
 });

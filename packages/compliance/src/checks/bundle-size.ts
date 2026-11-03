@@ -28,7 +28,8 @@ import { INITIAL_LOAD_MAX_GZIP_BYTES, LAZY_ASSET_MAX_BYTES } from '../lib/bundle
 import type { FileSource } from '../lib/file-source.js';
 import { gzipByteLength } from '../lib/gzip.js';
 import { collectInitialJsRefs, jsAssetFileName, safePath } from '../lib/html-initial-js.js';
-import { stripCommentsAndStrings, stripCommentsOnly } from '../lib/strip.js';
+// Pure JavaScript lexer: synchronous, no WASM initialization or runtime fetch (#532).
+import { parse } from 'es-module-lexer/js';
 import type { CheckResult } from '../types.js';
 
 
@@ -318,7 +319,7 @@ async function initialJsFromHtml(source: FileSource): Promise<Set<string> | null
   for (const ref of collectInitialJsRefs(html)) {
     const name = jsAssetFileName(ref);
     if (name) names.add(name);
-    else if (!/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(ref)) throw new Error('Invalid or unsupported local initial JavaScript path');
+    else throw new Error('Cannot measure initial JavaScript outside local assets/: bundle remote or unsupported script paths locally');
   }
   return names.size > 0 ? names : null;
 }
@@ -333,29 +334,32 @@ async function followStaticImports(source: FileSource, roots: Set<string>): Prom
     const text = await readText(source, `${ASSETS_DIR}/${file}`);
     if (text === null) throw new Error(`Cannot read initial asset ${file}`);
     for (const spec of staticImportSpecs(text)) {
-      if (!isJsAsset(spec.split(/[?#]/, 1)[0]!)) continue;
-      const resolved = resolveRelative(file, spec);
+      const localRelative = spec.startsWith('./') || spec.startsWith('../');
+      const localAbsolute = spec.startsWith('/') && !spec.startsWith('//');
+      if (!localRelative && !localAbsolute) throw new Error('Cannot measure remote or bare static imports; bundle dependencies locally');
+      const path = spec.split(/[?#]/, 1)[0]!;
+      if (!isJsAsset(path)) {
+        // Native non-JS modules are outside the JavaScript budget. Unknown
+        // extensions may still be JavaScript and must not silently pass.
+        if (/\.(?:json|css|wasm)$/i.test(path)) continue;
+        throw new Error('Unsupported static JavaScript asset extension');
+      }
+      const resolved = localRelative ? resolveRelative(file, spec) : jsAssetFileName(spec);
+      if (!resolved) throw new Error('Invalid absolute static JavaScript path');
       if (resolved && !out.has(resolved)) queue.push(resolved);
     }
   }
   return out;
 }
 
-/**
- * Vite's production output uses static `import "./chunk.js"` / `import{x}from"./v.js"`.
- * Dynamic `import("./x.js")` is deliberately not matched — those chunks are lazy.
- * The regex is constructed per call so a global lastIndex cannot leak.
- */
+/** Lex valid ESM syntax, including escaped names and multiline re-exports.
+ * Dynamic imports and import.meta are deliberately excluded from eager loading. */
 function staticImportSpecs(js: string): string[] {
-  const code = stripCommentsOnly(js);
-  const visible = stripCommentsAndStrings(js);
-  const re =
-    /(?:^|[\n;])\s*(?:import|export)\s*(?:type\s+)?(?:[^\n'"()]*?from\s*)?["'](\.[^"']+)["']/g;
-  const specs: string[] = [];
-  for (const m of code.matchAll(re)) {
-    if (m[1] && /\b(?:import|export)\b/.test(visible.slice(m.index, m.index + m[0].length))) specs.push(m[1]);
-  }
-  return specs;
+  const [imports] = parse(js);
+  return imports.filter((entry) => entry.d === -1).map((entry) => {
+    if (entry.n === undefined) throw new Error('Cannot resolve static JavaScript import');
+    return entry.n;
+  });
 }
 
 function resolveRelative(fromFile: string, spec: string): string {

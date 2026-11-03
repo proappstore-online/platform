@@ -47,5 +47,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "dependencies": {
+    "es-module-lexer": "1.7.0"
+  }
 }

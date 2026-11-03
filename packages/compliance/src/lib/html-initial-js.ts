@@ -31,8 +31,6 @@ SOFTWARE.
  * the static import graph.
  */
 
-const JS_REF_RE = /\.(?:m|c)?js(?:[?#]|$)/i;
-
 export function collectInitialJsRefs(html: string): string[] {
   html = html.replace(/<!--[\s\S]*?-->/g, '');
   const out: string[] = [];
@@ -40,7 +38,9 @@ export function collectInitialJsRefs(html: string): string[] {
   const add = (ref: string | undefined) => {
     if (!ref) return;
     const trimmed = ref.trim();
-    if (!trimmed || seen.has(trimmed) || !JS_REF_RE.test(trimmed)) return;
+    // The browser can load executable scripts without a .js suffix. Preserve
+    // every eager reference so unsupported paths fail measurement (#532).
+    if (!trimmed || seen.has(trimmed)) return;
     seen.add(trimmed);
     out.push(trimmed);
   };
