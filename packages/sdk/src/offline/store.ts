@@ -137,6 +137,7 @@ export class OfflineStore {
   /** @internal Bounded cursor listing; metadata stores contain no audio bytes. */
   page<T>(table: OfflineTable, options: LocalPage = {}): Promise<T[]> {
     const limit = options.limit ?? 50;
+    const after = options.after;
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OfflineError('invalid', 'Page limit must be between 1 and 200.');
     return this.transaction([table], 'readonly', (tx, done) => {
       const rows: T[] = [];
@@ -144,19 +145,25 @@ export class OfflineStore {
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor || rows.length >= limit) { done(rows); return; }
-        if (options.after === undefined || String(cursor.key) > options.after) rows.push(cursor.value as T);
+        if (after === undefined || String(cursor.key) > after) rows.push(cursor.value as T);
         if (rows.length === limit) done(rows); else cursor.continue();
       };
     });
   }
 
   async put<T>(entry: LocalWrite<T>): Promise<LocalRecord<T>> {
-    key(entry.id);
-    const record = { id: entry.id, value: entry.value, updatedAt: Date.now(), blobBytes: entry.blob?.size ?? 0, blobType: entry.blob?.type ?? null };
+    const { id, blob } = entry;
+    key(id);
+    // IndexedDB opens asynchronously. Snapshot metadata before yielding so callers
+    // can keep editing their draft without changing this submitted save (#530).
+    let value: T;
+    try { value = structuredClone(entry.value); }
+    catch (error) { throw offlineFailure(error); }
+    const record = { id, value, updatedAt: Date.now(), blobBytes: blob?.size ?? 0, blobType: blob?.type ?? null };
     return this.transaction(['records', 'blobs'], 'readwrite', (tx, done) => {
-      tx.objectStore('records').put(record, entry.id);
-      if (entry.blob) tx.objectStore('blobs').put(entry.blob, `record:${entry.id}`);
-      else tx.objectStore('blobs').delete(`record:${entry.id}`);
+      tx.objectStore('records').put(record, id);
+      if (blob) tx.objectStore('blobs').put(blob, `record:${id}`);
+      else tx.objectStore('blobs').delete(`record:${id}`);
       done(record);
     });
   }

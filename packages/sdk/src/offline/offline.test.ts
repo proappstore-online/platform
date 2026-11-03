@@ -10,6 +10,30 @@ beforeEach(() => { factory = new IDBFactory(); });
 afterEach(() => vi.unstubAllGlobals());
 
 describe('local content ownership and transaction lifecycle', () => {
+  it('saves the submitted record even when its caller edits the input before commit', async () => {
+    const store = device();
+    const entry = { id: 'first', value: { title: 'original' }, blob: new Blob(['old'], { type: 'audio/wav' }) };
+    const saving = store.put(entry);
+    entry.id = 'second';
+    entry.value.title = 'mutated';
+    entry.blob = new Blob(['replacement'], { type: 'text/plain' });
+    const saved = await saving;
+    expect(saved).toMatchObject({ id: 'first', value: { title: 'original' }, blobBytes: 3, blobType: 'audio/wav' });
+    expect(await store.get('first')).toEqual(saved);
+    expect(await store.get('second')).toBeNull();
+    expect(await (await store.getBlob('first'))!.text()).toBe('old');
+  });
+
+  it('keeps an in-flight page bound to its submitted cursor', async () => {
+    const store = device();
+    for (const id of ['a', 'b', 'c']) await store.put({ id, value: id });
+    const options = { after: 'a', limit: 1 };
+    const reading = store.list(options);
+    options.after = 'b';
+    options.limit = 2;
+    expect((await reading).map((row) => row.id)).toEqual(['b']);
+  });
+
   it('persists separately stored metadata and blobs across instances; paginates and exports', async () => {
     const a = device();
     await a.put({ id: 'a', value: { title: 'Lesson' }, blob: new Blob(['你好'], { type: 'text/plain' }) });
