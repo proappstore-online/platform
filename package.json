@@ -31,10 +31,13 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "test:runtime": "pnpm --filter @proappstore/runtime-tests test",
+    "test:offline-browser": "node scripts/test-offline-browser.mjs",
     "test:coverage": "vitest run --coverage && node scripts/coverage-gaps.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@vitest/coverage-v8": "2.1.9",
+    "esbuild": "^0.28.2",
     "happy-dom": "^15.11.7",
     "knip": "^6.43.0",
     "mermaid": "^11.4.1",

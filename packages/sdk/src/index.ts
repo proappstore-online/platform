@@ -87,7 +87,7 @@ export { AdminConsole, AdminErrorBoundary, useAdminContext, useAction } from './
 export type { AdminConsoleProps, AdminContextValue, UseActionOptions, ActionInvoker } from './admin.js';
 export type { ProProviderProps } from './provider.js';
 export { AppShell, ProShell } from './shell.js';
-export type { AppShellProps, AppShellRenderContext, AppShellNavContext, ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem, ShellErrorContext } from './shell.js';
+export type { AppShellProps, AppShellRenderContext, LocalAppShellRenderContext, AppShellNavContext, ProShellProps, ProShellRenderContext, ProShellNavContext, MenuItem, ShellErrorContext } from './shell.js';
 export { useToast, useOnline } from './shell-resilience.js';
 export type { ToastApi, ToastOptions, ShellToastVariant } from './shell-resilience.js';
 export { PageHeader, useDocumentTitle } from './page.js';

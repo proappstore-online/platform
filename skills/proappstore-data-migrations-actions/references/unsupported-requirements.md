@@ -17,7 +17,7 @@ database or a client-side workaround.
 | An external database or BaaS | forbidden | D1 via `migrations.json` and actions | [PAS-STACK-007](https://docs.proappstore.online/standard/stack/#pas-stack-007), [PAS-STACK-024](https://docs.proappstore.online/standard/stack/#pas-stack-024) |
 | Row-level security or policies as a database feature | not offered | the scoping predicate in every statement; membership tables | [PAS-DATA-007](https://docs.proappstore.online/standard/data/#pas-data-007) |
 | Point-in-time restore or self-service backups | none app-facing | export/import actions, soft deletes, a written recovery path | [PAS-OPS-014](https://docs.proappstore.online/standard/ops/#pas-ops-014) |
-| Offline writes queued for replay | no sync engine | only for idempotent actions, with the user told the write is pending | [PAS-UI-019](https://docs.proappstore.online/standard/ui/#pas-ui-019), [PAS-DATA-018](https://docs.proappstore.online/standard/data/#pas-data-018) |
+| General offline replication/conflict resolution | no general sync engine | SDK offline queue supports explicit idempotent operations and explicit flush; disclose pending state and enforce server deduplication by operation ID | [PAS-UI-019](https://docs.proappstore.online/standard/ui/#pas-ui-019), [PAS-DATA-018](https://docs.proappstore.online/standard/data/#pas-data-018) |
 | Full-text search, vector search, or triggers in D1 | not offered through actions | `LIKE` on a declared `:q` with a bounded `LIMIT`; embeddings through `app.ai` with ids stored in D1 | [PAS-DATA-012](https://docs.proappstore.online/standard/data/#pas-data-012), [PAS-STACK-016](https://docs.proappstore.online/standard/stack/#pas-stack-016) |
 
 When a gap is decisive for the product, say so and stop: it is a

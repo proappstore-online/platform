@@ -4,7 +4,7 @@ description: "Application Standard requirements for UI, accessibility, browser s
 
 # UI, browser security, and PWA
 
-**Standard version 1.11** · Chapter `UI` · Part of the [Application Standard](./index.md)
+**Standard version 1.12** · Chapter `UI` · Part of the [Application Standard](./index.md)
 
 **Scope.** UI components, browser security headers and storage, accessibility, responsive and mobile behaviour, PWA.
 
@@ -685,17 +685,17 @@ if (top !== self) top.location = self.location      // frame-busting
 
 **Supporting links.** [PAS-UI-012](#pas-ui-012), [PAS-UI-015](#pas-ui-015).
 
-### PAS-UI-018 — The service worker caches only the app shell and static assets — never `/.pas/*`, never scoped data {#pas-ui-018}
+### PAS-UI-018 — The service worker caches static assets, excludes authentication and updates safely {#pas-ui-018}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** automated — compliance check *PWA offline correctness* (service worker registered; workbox config sane); host `Clear-Site-Data: "cache"` on logout and `/.pas/auth/recover` · **Since:** 1.4 · **Kind:** Security
+**Severity:** High · **Verification:** Manual · **Enforcement:** automated — compliance check *PWA offline correctness* (service worker registered; workbox config sane); host `Clear-Site-Data: "cache"` on logout and `/.pas/auth/recover` · **Since:** 1.12 · **Kind:** Security
 
-**Rule.** The service worker MUST keep the template's `navigateFallbackDenylist: [/^\/\.pas\//]`, MUST NOT add runtime caching for `/.pas/*`, `api.proappstore.online`, `data-*` or any authenticated response, MUST precache only build output and fonts, and MUST use `registerType: 'autoUpdate'` so a deploy replaces the shell. Cached data that belongs to a user MUST NOT be served to another account ([PAS-DATA-020](./data.md#pas-data-020)).
+**Rule.** The service worker MUST keep the template's `navigateFallbackDenylist: [/^\/\.pas\//]`, MUST NOT add runtime caching for `/.pas/*`, `api.proappstore.online`, `data-*` or any authenticated response, MUST precache only required build output and fonts, and MUST implement an update path that does not silently discard active local work. Automatic updates MAY be used when safe; long-running recording, generation or unsynced editing MUST checkpoint before activation/reload, or provide a working update prompt. Optional model packages SHOULD download on demand through an integrity-checked asset manager rather than inflate installation precache. Cached data that belongs to a user MUST NOT be served to another account ([PAS-DATA-020](./data.md#pas-data-020)).
 
 **Applicability.** All apps (every app is a PWA).
 
 **Rationale.** A cached `/.pas/auth/me` answers "signed in" after sign-out; a cached action response shows one user's rows to the next; a stale shell that predates the cookie migration keeps trying the legacy flow — the Chess Academy recovery-route case. The platform clears Cache Storage on logout, but only what the SW put there can be cleared, and a SW that intercepts `/.pas/*` navigations breaks sign-in.
 
-**Recommended implementation.** Leave the template `VitePWA` block as generated; add runtime caching only for immutable third-party assets with `CacheFirst` and an expiration.
+**Recommended implementation.** Leave the template `VitePWA` block as generated; add runtime caching only for immutable public assets with `CacheFirst` and an expiration. Store deliberate account-local downloads separately from HTTP response caching, following PAS-DATA-020. A waiting worker may activate after the app checkpoints its work; a prompt strategy must have working UI and cannot leave the app permanently outdated.
 
 **Conforming example.**
 
@@ -713,23 +713,23 @@ registerType: 'prompt'  // + no prompt UI: old shell forever
 
 **Evidence.** Configuration: `web/vite.config.ts` `VitePWA` block (`navigateFallbackDenylist`, `runtimeCaching`, `registerType`); any hand-written `sw.js`; Runtime: Cache Storage contents after use.
 
-**Remediation.** Restore the denylist; delete the offending runtime rules; switch to `autoUpdate`.
+**Remediation.** Restore the denylist; delete the offending runtime rules; implement a tested, safe update path.
 
-**Tests.** Browser: after sign-in, Cache Storage holds no `/.pas/` or API entries; after sign-out `/.pas/auth/me` is 401 with the SW active; a new deploy is picked up on the next load.
+**Tests.** Browser: after sign-in, Cache Storage holds no `/.pas/` or API entries; after sign-out `/.pas/auth/me` is 401 with the SW active; a new deploy is picked up through the declared update path without losing local content or an acknowledged job checkpoint.
 
 **Supporting links.** [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-DATA-020](./data.md#pas-data-020), [Browser auth session model](../auth-session-model.md).
 
 ### PAS-UI-019 — Offline, the shell loads and data screens say so — no stale scoped data, no silent lost writes {#pas-ui-019}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance check *PWA offline correctness* (precache covers `web/public` assets and the workbox size limit fits the bundle) · **Since:** 1.4 · **Kind:** Quality
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance check *PWA offline correctness* (precache covers `web/public` assets and the workbox size limit fits the bundle) · **Since:** 1.12 · **Kind:** Quality
 
-**Rule.** Installed, the app MUST open offline to its shell (precached), MUST render an explicit offline/error state on data screens ([PAS-UI-011](#pas-ui-011)) rather than stale rows, and MUST NOT queue writes for later replay unless the action is idempotent ([PAS-DATA-018](./data.md#pas-data-018)) and the user is told the write is pending.
+**Rule.** Installed, the app MUST open offline to its shell (precached), MUST render an explicit offline/error state on online-only data screens ([PAS-UI-011](#pas-ui-011)), MAY expose intentional local content under PAS-DATA-020 with a clear offline label, and MUST NOT queue writes for later replay unless the action is idempotent ([PAS-DATA-018](./data.md#pas-data-018)) and the user is told the write is pending.
 
 **Applicability.** All apps (every app is a PWA).
 
 **Rationale.** The platform mandates installable PWAs; an installed app that white-screens offline fails the promise, and one that replays a non-idempotent write on reconnect duplicates it.
 
-**Recommended implementation.** Keep the template precache; AppShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
+**Recommended implementation.** Keep the template precache; AppShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; apps with local functionality opt into `AppShell access="local"` and use `@proappstore/sdk/offline`. Persist local drafts before acknowledging save. Synchronization is explicitly invoked, owner-bound and uses operation IDs backed by server-side idempotency; a queued request alone does not guarantee exactly-once delivery.
 
 **Conforming example.**
 
@@ -745,9 +745,9 @@ if (!navigator.onLine) return <EmptyState title="You're offline" description="Ta
 
 **Evidence.** Configuration: precache globs and `maximumFileSizeToCacheInBytes`; Source: offline handling in data screens; any replay queue.
 
-**Remediation.** Add the offline state; remove non-idempotent replay.
+**Remediation.** Add explicit online-only versus local states; persist acknowledged local saves; remove non-idempotent replay.
 
-**Tests.** Browser: with the network offline the installed app opens and each data screen shows the offline state; `pas check` passes *PWA offline correctness*.
+**Tests.** Browser: with the network offline the installed app opens and online-only data screens show the offline state while local screens retain their advertised functionality; restart during a local job recovers its last checkpoint; `pas check` passes *PWA offline correctness*.
 
 **Supporting links.** [PAS-UI-018](#pas-ui-018), [PAS-DATA-018](./data.md#pas-data-018).
 
@@ -788,15 +788,15 @@ icons: [ { src: '/favicon.ico', sizes: '64x64' } ]     // no 512, no maskable
 
 ### PAS-UI-021 — The bundle stays within budget and ships no source maps {#pas-ui-021}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance check *Bundle size* (largest JS asset ≤ 300 KB gzip; `warn` when `web/dist` is unbuilt); host refuses `*.map`; VCQA code-health report on every deploy · **Since:** 1.4 · **Kind:** Quality
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** automated — compliance check *Bundle size* (aggregate initial JavaScript ≤ 300 KiB gzip; each lazy asset ≤ 25 MiB raw; `warn` when `web/dist` is unbuilt); host refuses `*.map`; VCQA code-health report on every deploy · **Since:** 1.12 · **Kind:** Quality
 
-**Rule.** The largest JavaScript chunk MUST be at most 300 KB gzipped; heavy features SHOULD be code-split with `React.lazy`/dynamic `import()`; `build.sourcemap` MUST stay off for production. The VCQA quality score SHOULD stay above the platform gate (40) and its findings SHOULD be triaged.
+**Rule.** The aggregate initial JavaScript graph MUST be at most 300 KiB gzipped, summing unique HTML entry scripts, JavaScript module preloads and static JavaScript dependencies. Each bundled lazy JavaScript, worker, WASM, model or data asset MUST be at most 25 MiB uncompressed; heavy features SHOULD be code-split with `React.lazy`/dynamic `import()`; `build.sourcemap` MUST stay off for production. The VCQA quality score SHOULD stay above the platform gate (40) and its findings SHOULD be triaged.
 
 **Applicability.** All apps.
 
 **Rationale.** The budget is what keeps first load acceptable on mobile networks; the map/host cap on `.map` files exists because a published source map would expose an app's proprietary source.
 
-**Recommended implementation.** Lazy-load routes and heavy libraries; check `pnpm build` output sizes; keep Vite's default `sourcemap: false`.
+**Recommended implementation.** Lazy-load routes and heavy libraries; do not preload optional model/worker code; host larger optional models as explicit versioned downloads rather than build assets. Check `pnpm build` output sizes; keep Vite's default `sourcemap: false`.
 
 **Conforming example.**
 
@@ -813,7 +813,7 @@ build: { sourcemap: true }
 
 **Evidence.** Configuration: `vite.config.ts` `build.sourcemap`; Process: `pas check` after `pnpm build`; the deploy's VCQA report at `/.vcqa/report.json`.
 
-**Remediation.** Split the chunk; disable source maps.
+**Remediation.** Reduce the aggregate startup JavaScript graph, remove accidental preload edges, split oversized lazy assets or move optional models to explicit downloads; disable source maps.
 
 **Tests.** `pas check` passes *Bundle size* on a built tree; `https://<app>.proappstore.online/assets/*.map` returns 404.
 

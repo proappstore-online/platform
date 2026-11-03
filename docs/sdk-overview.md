@@ -7,6 +7,10 @@ description: "Integrate the browser-first ProAppStore SDK for platform APIs, aut
 `@proappstore/sdk` is a browser-first ESM package that any Pro app imports
 to get the full platform feature set from PAS-owned APIs.
 
+## Offline content
+
+The optional `@proappstore/sdk/offline` entry exports transactional local stores, verified public downloads, checkpointed jobs and an explicit idempotent sync queue. Use `<AppShell access="local">` for local features; authenticated behavior remains the default. Local owner namespaces are not server credentials. See [Offline apps](./offline-apps.md) for the actual API contract, retention, safe updates and acceptance limits.
+
 ## Init
 
 ```ts

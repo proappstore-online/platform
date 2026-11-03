@@ -57,6 +57,7 @@ pnpm knip                                          # dead exports, unused files 
 pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root
 pnpm test:coverage                                 # same suite + V8 coverage floors (what CI's check job runs) + gaps report
+pnpm test:offline-browser                          # Chromium + WebKit offline SDK reference
 pnpm test:runtime                                  # workerd + real D1: backend + data worker (packages/runtime-tests)
 node scripts/sync-template-workflow.mjs --check    # template-app deploy workflow drift
 ```

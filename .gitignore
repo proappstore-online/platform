@@ -14,3 +14,4 @@ coverage/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 .vibe-check/
+artifacts/offline-browser/

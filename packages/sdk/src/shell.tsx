@@ -2,7 +2,7 @@ import { Suspense, useEffect, useInsertionEffect, useLayoutEffect, useRef, useSt
 import type { ProAppStore } from './index.js';
 import type { User } from './base-types.js';
 import type { Subscription } from './types.js';
-import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle, Spinner } from './ui.js';
+import { ProfileMenu, ProBadge, GateScreen, TextSizeToggle, Spinner, SignInButtons } from './ui.js';
 import type { SignInProvider } from './ui.js';
 import { ProProvider } from './provider.js';
 import { activeHref, NavBar, useCurrentPath, type NavItem } from './navbar.js';
@@ -44,6 +44,9 @@ export interface AppShellRenderContext {
   nav: ReactNode;
 }
 
+/** Local chrome may render while auth is pending or signed out. No synthetic user. */
+export type LocalAppShellRenderContext = Omit<AppShellRenderContext, 'user'> & { user: User | null };
+
 /** @deprecated Use AppShellRenderContext. Retained for the next major version. */
 export type ProShellRenderContext = AppShellRenderContext;
 
@@ -61,8 +64,10 @@ export type ProShellNavContext = AppShellNavContext;
 export interface AppShellProps {
   /** The ProAppStore SDK instance from initPro(). */
   app: ProAppStore;
-  /** Your app's content. Only rendered when user is signed in + subscribed. */
+  /** App content. Authenticated by default; local mode renders independently of cloud auth. */
   children: ReactNode;
+  /** Opt-in device/local content. Does not authorize cloud calls or change private-app hosting. */
+  access?: 'authenticated' | 'local';
   /** App name shown in the topbar. */
   appName?: string;
   /**
@@ -118,6 +123,9 @@ export interface AppShellProps {
   renderTopbar?: (ctx: AppShellRenderContext) => ReactNode;
   /** Replace the default footer. Return null to omit it. */
   renderFooter?: (ctx: AppShellRenderContext) => ReactNode;
+  /** Local-mode custom chrome. Existing authenticated callbacks are never given a null user. */
+  renderLocalTopbar?: (ctx: LocalAppShellRenderContext) => ReactNode;
+  renderLocalFooter?: (ctx: LocalAppShellRenderContext) => ReactNode;
   /**
    * Replace the fallback shown when a screen throws while rendering (#236).
    * The error is already recorded via `app.logs`; call `reset` to retry.
@@ -165,6 +173,7 @@ type Gate = 'loading' | 'signed-out' | 'no-subscription' | 'ready';
 export function AppShell({
   app,
   children,
+  access = 'authenticated',
   appName,
   branding = 'platform',
   providers,
@@ -178,10 +187,13 @@ export function AppShell({
   hideFooter = false,
   renderTopbar,
   renderFooter,
+  renderLocalTopbar,
+  renderLocalFooter,
   renderError,
   renderLoading,
 }: AppShellProps) {
   const [user, setUser] = useState(app.auth.user);
+  const authOwner = useRef(app.auth.user?.id);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [gate, setGate] = useState<Gate>('loading');
   const [currentPath, setCurrentPath] = useCurrentPath();
@@ -213,7 +225,9 @@ export function AppShell({
   useEffect(() => {
     const unsubscribe = app.auth.onStatus((status, u) => {
       setUser(u);
-      if (status === 'signed-out') setGate('signed-out');
+      if (authOwner.current !== u?.id) { setSubscription(null); setGate('loading'); }
+      authOwner.current = u?.id;
+      if (status !== 'signed-in') setGate(status === 'signed-out' ? 'signed-out' : 'loading');
     });
     void app.auth.init();
     return unsubscribe;
@@ -222,7 +236,9 @@ export function AppShell({
   // Check subscription after auth.
   useEffect(() => {
     if (!user) return;
+    let current = true;
     app.subscription.status().then((sub) => {
+      if (!current) return;
       setSubscription(sub);
       if (allowFree || sub?.status === 'active') {
         setGate('ready');
@@ -230,28 +246,30 @@ export function AppShell({
         setGate('no-subscription');
       }
     }).catch(() => {
+      if (!current) return;
       setSubscription(null);
       setGate(allowFree ? 'ready' : 'no-subscription');
     });
+    return () => { current = false; };
   }, [user, app, allowFree]);
 
   // --- Gates ---
-  if (gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
-  if (gate !== 'ready') {
+  if (access !== 'local' && gate === 'loading' && renderLoading) return <>{renderLoading()}</>;
+  if (access !== 'local' && gate !== 'ready') {
     return <GateScreen gate={gate} app={app} appName={appName} branding={branding} {...(providers ? { providers } : {})} />;
   }
 
-  if (!user) {
+  if (access !== 'local' && !user) {
     return <GateScreen gate="signed-out" app={app} appName={appName} branding={branding} {...(providers ? { providers } : {})} />;
   }
 
-  const profileMenu = (
+  const profileMenu = user ? (
     <ProfileMenu app={app} showThemeToggle={showThemeToggle} showSubscriptionBadge={branding === 'platform'}>
       {menuItems?.map((item, i) => (
         <button key={i} type="button" onClick={item.onClick} className="pas-menu-item block w-full cursor-pointer border-0 bg-transparent px-4 py-2 text-left text-[0.85rem] text-[var(--ink)]">{item.label}</button>
       ))}
     </ProfileMenu>
-  );
+  ) : <SignInButtons app={app} {...(providers ? { providers } : {})} />;
 
   // Client-side navigation goes through the shell, so it knows the route changed
   // (scroll, focus, titles). Without onNavigate, items are plain links.
@@ -272,7 +290,7 @@ export function AppShell({
       ? <NavBar items={navItems} currentPath={currentPath} onNavigate={navigate} />
       : <NavBar items={navItems} />;
 
-  const shellContext: AppShellRenderContext = {
+  const shellContext: LocalAppShellRenderContext = {
     app,
     appName,
     user,
@@ -283,7 +301,11 @@ export function AppShell({
     nav: navNode,
   };
 
-  const topbar = renderTopbar ? renderTopbar(shellContext) : hideTopbar ? null : (
+  const authenticatedContext: AppShellRenderContext | null = user ? { ...shellContext, user } : null;
+  const customTopbar = access === 'local' && renderLocalTopbar
+    ? () => renderLocalTopbar(shellContext)
+    : renderTopbar && authenticatedContext ? () => renderTopbar(authenticatedContext) : null;
+  const topbar = customTopbar ? customTopbar() : hideTopbar ? null : (
     <header className="pas-topbar sticky top-0 z-50 flex items-center justify-between border-b border-[var(--line)] bg-[var(--panel)] px-4 py-2">
       <div className="pas-topbar__brand flex items-center gap-3">
         {branding === 'platform' && <a href="https://proappstore.online" className="pas-topbar__logo text-base font-extrabold text-[var(--accent)] no-underline">Pro</a>}
@@ -298,7 +320,10 @@ export function AppShell({
     </header>
   );
 
-  const footer = renderFooter ? renderFooter(shellContext) : hideFooter || branding === 'app' ? null : (
+  const customFooter = access === 'local' && renderLocalFooter
+    ? () => renderLocalFooter(shellContext)
+    : renderFooter && authenticatedContext ? () => renderFooter(authenticatedContext) : null;
+  const footer = customFooter ? customFooter() : hideFooter || branding === 'app' ? null : (
     <footer className="pas-footer border-t border-[var(--line)] p-4 text-center text-xs text-[var(--muted)]">
       Part of{' '}
       <a href="https://proappstore.online" className="pas-footer__link font-semibold text-[var(--accent)] no-underline">
@@ -320,11 +345,11 @@ export function AppShell({
     <div className="pas-shell flex min-h-dvh flex-col">
       <SkipLink mainRef={mainRef} />
       {topbar}
-      <OfflineBanner />
+      <OfflineBanner local={access === 'local'} />
 
       <main id="main" ref={mainRef} tabIndex={-1} className="pas-main flex flex-1 flex-col">
         <ShellErrorBoundary app={app} renderError={renderError} resetKey={currentPath}>
-          <Suspense fallback={loading}>{children}</Suspense>
+          <Suspense key={access === 'local' ? user?.id ?? 'device-local' : undefined} fallback={loading}>{children}</Suspense>
         </ShellErrorBoundary>
       </main>
 

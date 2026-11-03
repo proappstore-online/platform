@@ -56,6 +56,7 @@ resilience layer. See
   should use the platform, clause by clause, and how a human or an AI copilot
   audits a repository against it
 - [SDK overview](./sdk-overview.md)
+- [Offline apps](./offline-apps.md) — local data, verified downloads, checkpointed work and browser acceptance
 - [UI components](./ui.md)
 - [Recipes](./recipes.md)
 - [CLI overview](./cli-overview.md)

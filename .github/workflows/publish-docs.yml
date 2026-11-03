@@ -155,6 +155,7 @@ jobs:
                 - Testing, deployment & operations: standard/ops.md
                 - Changelog: standard/changelog.md
             - SDK: sdk-overview.md
+            - Offline apps: offline-apps.md
             - UI Components: ui.md
             - Recipes: recipes.md
             - CLI: cli-overview.md
@@ -184,6 +185,7 @@ jobs:
                 - Durable Provisioning Workflow: adr/007-durable-provisioning-workflow.md
                 - Error Observability: adr/008-error-observability.md
                 - App Workers: adr/009-app-workers.md
+                - Offline content: adr/012-offline-content.md
           YAML
           python -m zensical build
           python scripts/verify-docs-metadata.py site
@@ -191,6 +193,8 @@ jobs:
           test -f site/templates/index.html
           test -f site/mcp-app-tools/index.html
           test -f site/mcp-operations/index.html
+          test -f site/offline-apps/index.html
+          test -f site/adr/012-offline-content/index.html
           python -m json.tool site/templates/catalogue.json >/dev/null
       - name: Publish to kb-host
         run: |

@@ -8,6 +8,23 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.12
+
+Intentional offline content and safe local work (#520–#524, [ADR-012](../adr/012-offline-content.md)).
+
+- **Added** — none.
+- **Changed** — PAS-DATA-020 distinguishes session-bound query caches from
+  explicitly scoped local authored content and deliberate downloads; owner
+  isolation, access checks, retention, export and deletion remain required.
+  PAS-UI-018 permits safe checkpoint/prompt update strategies and on-demand
+  immutable model downloads while retaining authentication/API exclusions.
+  PAS-UI-019 permits functional offline local screens and requires visible,
+  idempotent synchronization instead of claiming an online-only banner is
+  sufficient for every app. PAS-UI-021 budgets the aggregate initial JavaScript graph at 300 KiB gzip and each lazy asset at 25 MiB raw, preventing chunk splitting from bypassing startup limits. These four clauses now carry Since 1.12.
+- **Withdrawn** — none.
+- **Editorial** — the offline SDK guide and executable reference fixture define
+  what browser automation proves and what still requires device/model testing.
+
 ## 1.11
 
 Tailwind on PAS tokens becomes the one styling model for React apps (#491,

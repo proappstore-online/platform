@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.11. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.12. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -3122,52 +3122,57 @@ Tests: Running the sweep twice changes rows only once; registration rejects sub-
 
 Supporting links: [MCP app tools — limits and roadmap](../mcp-app-tools.md#limits-roadmap), [PAS-DATA-018](#pas-data-018), [PAS-AUTH-019](./auth.md#pas-auth-019).
 
-### PAS-DATA-020 — Caches never outlive authorization
+### PAS-DATA-020 — Session caches and intentional offline content have distinct lifecycles
 URL: https://docs.proappstore.online/standard/data/#pas-data-020
-Severity: medium · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.3
+Severity: medium · Verification: manual (Manual) · Enforcement: none (recommended) · Since: 1.12
 
-Rule: The app MAY cache action results in memory for the current session and SHOULD revalidate on focus and after its own writes. It MUST NOT persist scoped rows in `localStorage`, IndexedDB, Cache Storage or a service worker beyond the session, MUST clear all cached data on sign-out and on `onChange(null)`, and MUST NOT serve one user's cached rows to another account on the same device.
-
-*
-
-Applicability: Apps that cache data.
+Rule: Ordinary cached action results MUST remain session-bound and MUST be cleared on sign-out, account change and `onChange(null)`. An app MAY persist user-authored local content and explicit offline downloads through the SDK offline facilities when it declares whether the content belongs to this device or a specific account, binds every handle to that scope, checks local access on every operation, and documents retention, removal and export. Account-local content MUST NOT become visible to another account. The app MUST distinguish offline copies from current server state and MUST NOT treat a local owner identifier, download or cached entitlement as server authentication. Authenticated API responses and `/.pas/*` MUST NOT be cached by the service worker. Deliberate offline content MUST NOT silently include arbitrary scoped query results.
 
 *
 
-Rationale: A cache is a copy of rows that were authorised at fetch time; authorisation can be revoked, and the device can change hands. Chess Academy's stale PWA shell showed how long a cached artefact can outlive the session that produced it.
+Applicability: Apps that cache data or offer intentional offline content.
 
 *
 
-Recommended implementation: Keep caches in component or store state keyed by `user.id`; use `app.counters` for hot aggregates instead of caching computed counts; let the SDK's `Clear-Site-Data` on logout do its job by not caching outside the session.
+Rationale: A temporary query cache and a lesson the user deliberately downloads have different purposes. Local creation and playback must not require a live network, but a device-local copy cannot prove continuing server authorization or receive immediate revocation while disconnected. Private or regulated data that requires live authorization must remain online-only. Device-local data is shared by users of that browser profile and must be described accordingly.
+
+*
+
+Recommended implementation: Use `@proappstore/sdk/offline` for local records, blobs and checkpointed work. Account stores use an immutable owner scope and an explicit access callback; close handles and revoke that callback when the account changes. Keep online session hydration and authorization in the SDK. Document whether signing out removes account content or locks it until the same owner deliberately reopens it. Never discard unsynced authored work without the declared retention policy and a visible export/removal path. See [Offline apps](../offline-apps.md) and [ADR-012](../adr/012-offline-content.md).
 
 *
 
 Conforming example: ```ts
-const cache = useRef(new Map<string, Task[]>())
-app.auth.onChange((u) => { if (!u) cache.current.clear() })
+// An ordinary query cache still expires with the session.
+const cache = new Map();
+app.auth.onChange(() => cache.clear());
+// Deliberately downloaded lessons use explicit scope, ownership and lifecycle.
+const lessons = createOfflineStore({ appId: 'reader', scope: { kind: 'account', ownerId },
+  canAccess: () => localOwner === ownerId });
 ```
 
 *
 
 Non-conforming example: ```ts
-localStorage.setItem(`tasks:${orgId}`, JSON.stringify(rows))     // survives sign-out and account switch
+localStorage.setItem('current-session', JSON.stringify(authResponse)); // credential/session caching
+localStorage.setItem('last-private-results', JSON.stringify(rows)); // undeclared persistent query cache
 ```
 
 *
 
-Evidence: Source: persistent storage writes of action results; service-worker runtime caching rules for `/.pas/*`; cache invalidation on `onChange(null)`.
+Evidence: Source: local record/blob stores, immutable scope and access guard, lifecycle binding, service-worker exclusions. Product: download intent, offline labels, storage/export/delete controls and sign-out policy. Runtime: offline relaunch and account-switch tests.
 
 *
 
-Remediation: Move caches to memory; exclude `/.pas/*` from service-worker caching; clear on sign-out.
+Remediation: Keep ordinary API caches in memory. Move intentional offline content to explicit SDK scopes and add retention, local-access and export/removal behavior. Keep all authentication endpoints network-only.
 
 *
 
-Tests: After sign-out and sign-in as a second account on the same browser, no first-account rows are visible; `/.pas/*` responses are never served from Cache Storage.
+Tests: Cold offline launch reads intentional local content; account B cannot read account A's namespace through retained handles; sign-out follows the declared purge/lock policy; ordinary query caches clear; no `/.pas/*` response is in Cache Storage.
 
 *
 
-Supporting links: [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-STACK-009](./stack.md#pas-stack-009), [UI chapter](./ui.md).
+Supporting links: [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-DATA-018](#pas-data-018), [PAS-UI-018](./ui.md#pas-ui-018), [Offline apps](../offline-apps.md).
 
 ### PAS-DATA-021 — Data failures are surfaced and logged, never swallowed into an empty result
 URL: https://docs.proappstore.online/standard/data/#pas-data-021
@@ -4097,11 +4102,11 @@ Tests: `curl -sI` shows `frame-ancestors` and `X-Frame-Options`; an embed test p
 
 Supporting links: [PAS-UI-012](#pas-ui-012), [PAS-UI-015](#pas-ui-015).
 
-### PAS-UI-018 — The service worker caches only the app shell and static assets — never `/.pas/*`, never scoped data
+### PAS-UI-018 — The service worker caches static assets, excludes authentication and updates safely
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-018
-Severity: high · Verification: manual (Manual) · Enforcement: automated — compliance check *PWA offline correctness* (service worker registered; workbox config sane); host `Clear-Site-Data: "cache"` on logout and `/.pas/auth/recover` · Since: 1.4 · Kind: Security
+Severity: high · Verification: manual (Manual) · Enforcement: automated — compliance check *PWA offline correctness* (service worker registered; workbox config sane); host `Clear-Site-Data: "cache"` on logout and `/.pas/auth/recover` · Since: 1.12 · Kind: Security
 
-Rule: The service worker MUST keep the template's `navigateFallbackDenylist: [/^\/\.pas\//]`, MUST NOT add runtime caching for `/.pas/*`, `api.proappstore.online`, `data-*` or any authenticated response, MUST precache only build output and fonts, and MUST use `registerType: 'autoUpdate'` so a deploy replaces the shell. Cached data that belongs to a user MUST NOT be served to another account ([PAS-DATA-020](./data.md#pas-data-020)).
+Rule: The service worker MUST keep the template's `navigateFallbackDenylist: [/^\/\.pas\//]`, MUST NOT add runtime caching for `/.pas/*`, `api.proappstore.online`, `data-*` or any authenticated response, MUST precache only required build output and fonts, and MUST implement an update path that does not silently discard active local work. Automatic updates MAY be used when safe; long-running recording, generation or unsynced editing MUST checkpoint before activation/reload, or provide a working update prompt. Optional model packages SHOULD download on demand through an integrity-checked asset manager rather than inflate installation precache. Cached data that belongs to a user MUST NOT be served to another account ([PAS-DATA-020](./data.md#pas-data-020)).
 
 *
 
@@ -4113,7 +4118,7 @@ Rationale: A cached `/.pas/auth/me` answers "signed in" after sign-out; a cached
 
 *
 
-Recommended implementation: Leave the template `VitePWA` block as generated; add runtime caching only for immutable third-party assets with `CacheFirst` and an expiration.
+Recommended implementation: Leave the template `VitePWA` block as generated; add runtime caching only for immutable public assets with `CacheFirst` and an expiration. Store deliberate account-local downloads separately from HTTP response caching, following PAS-DATA-020. A waiting worker may activate after the app checkpoints its work; a prompt strategy must have working UI and cannot leave the app permanently outdated.
 
 *
 
@@ -4135,11 +4140,11 @@ Evidence: Configuration: `web/vite.config.ts` `VitePWA` block (`navigateFallback
 
 *
 
-Remediation: Restore the denylist; delete the offending runtime rules; switch to `autoUpdate`.
+Remediation: Restore the denylist; delete the offending runtime rules; implement a tested, safe update path.
 
 *
 
-Tests: Browser: after sign-in, Cache Storage holds no `/.pas/` or API entries; after sign-out `/.pas/auth/me` is 401 with the SW active; a new deploy is picked up on the next load.
+Tests: Browser: after sign-in, Cache Storage holds no `/.pas/` or API entries; after sign-out `/.pas/auth/me` is 401 with the SW active; a new deploy is picked up through the declared update path without losing local content or an acknowledged job checkpoint.
 
 *
 
@@ -4147,9 +4152,9 @@ Supporting links: [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-DATA-020](./data.
 
 ### PAS-UI-019 — Offline, the shell loads and data screens say so — no stale scoped data, no silent lost writes
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-019
-Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance check *PWA offline correctness* (precache covers `web/public` assets and the workbox size limit fits the bundle) · Since: 1.4 · Kind: Quality
+Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance check *PWA offline correctness* (precache covers `web/public` assets and the workbox size limit fits the bundle) · Since: 1.12 · Kind: Quality
 
-Rule: Installed, the app MUST open offline to its shell (precached), MUST render an explicit offline/error state on data screens ([PAS-UI-011](#pas-ui-011)) rather than stale rows, and MUST NOT queue writes for later replay unless the action is idempotent ([PAS-DATA-018](./data.md#pas-data-018)) and the user is told the write is pending.
+Rule: Installed, the app MUST open offline to its shell (precached), MUST render an explicit offline/error state on online-only data screens ([PAS-UI-011](#pas-ui-011)), MAY expose intentional local content under PAS-DATA-020 with a clear offline label, and MUST NOT queue writes for later replay unless the action is idempotent ([PAS-DATA-018](./data.md#pas-data-018)) and the user is told the write is pending.
 
 *
 
@@ -4161,7 +4166,7 @@ Rationale: The platform mandates installable PWAs; an installed app that white-s
 
 *
 
-Recommended implementation: Keep the template precache; AppShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; for drafts, save to `app.kv` when back online rather than replaying writes.
+Recommended implementation: Keep the template precache; AppShell shows an app-wide offline banner, and data screens use `useOnline()` (or a fetch failure) to render their own offline state; apps with local functionality opt into `AppShell access="local"` and use `@proappstore/sdk/offline`. Persist local drafts before acknowledging save. Synchronization is explicitly invoked, owner-bound and uses operation IDs backed by server-side idempotency; a queued request alone does not guarantee exactly-once delivery.
 
 *
 
@@ -4181,11 +4186,11 @@ Evidence: Configuration: precache globs and `maximumFileSizeToCacheInBytes`; Sou
 
 *
 
-Remediation: Add the offline state; remove non-idempotent replay.
+Remediation: Add explicit online-only versus local states; persist acknowledged local saves; remove non-idempotent replay.
 
 *
 
-Tests: Browser: with the network offline the installed app opens and each data screen shows the offline state; `pas check` passes *PWA offline correctness*.
+Tests: Browser: with the network offline the installed app opens and online-only data screens show the offline state while local screens retain their advertised functionality; restart during a local job recovers its last checkpoint; `pas check` passes *PWA offline correctness*.
 
 *
 
@@ -4242,9 +4247,9 @@ Supporting links: [PAS-UI-008](#pas-ui-008), [PAS-UI-018](#pas-ui-018).
 
 ### PAS-UI-021 — The bundle stays within budget and ships no source maps
 URL: https://docs.proappstore.online/standard/ui/#pas-ui-021
-Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance check *Bundle size* (largest JS asset ≤ 300 KB gzip; `warn` when `web/dist` is unbuilt); host refuses `*.map`; VCQA code-health report on every deploy · Since: 1.4 · Kind: Quality
+Severity: medium · Verification: manual (Manual) · Enforcement: automated — compliance check *Bundle size* (aggregate initial JavaScript ≤ 300 KiB gzip; each lazy asset ≤ 25 MiB raw; `warn` when `web/dist` is unbuilt); host refuses `*.map`; VCQA code-health report on every deploy · Since: 1.12 · Kind: Quality
 
-Rule: The largest JavaScript chunk MUST be at most 300 KB gzipped; heavy features SHOULD be code-split with `React.lazy`/dynamic `import()`; `build.sourcemap` MUST stay off for production. The VCQA quality score SHOULD stay above the platform gate (40) and its findings SHOULD be triaged.
+Rule: The aggregate initial JavaScript graph MUST be at most 300 KiB gzipped, summing unique HTML entry scripts, JavaScript module preloads and static JavaScript dependencies. Each bundled lazy JavaScript, worker, WASM, model or data asset MUST be at most 25 MiB uncompressed; heavy features SHOULD be code-split with `React.lazy`/dynamic `import()`; `build.sourcemap` MUST stay off for production. The VCQA quality score SHOULD stay above the platform gate (40) and its findings SHOULD be triaged.
 
 *
 
@@ -4256,7 +4261,7 @@ Rationale: The budget is what keeps first load acceptable on mobile networks; th
 
 *
 
-Recommended implementation: Lazy-load routes and heavy libraries; check `pnpm build` output sizes; keep Vite's default `sourcemap: false`.
+Recommended implementation: Lazy-load routes and heavy libraries; do not preload optional model/worker code; host larger optional models as explicit versioned downloads rather than build assets. Check `pnpm build` output sizes; keep Vite's default `sourcemap: false`.
 
 *
 
@@ -4277,7 +4282,7 @@ Evidence: Configuration: `vite.config.ts` `build.sourcemap`; Process: `pas check
 
 *
 
-Remediation: Split the chunk; disable source maps.
+Remediation: Reduce the aggregate startup JavaScript graph, remove accidental preload edges, split oversized lazy assets or move optional models to explicit downloads; disable source maps.
 
 *
 

@@ -43,6 +43,7 @@ const mainSidebar = [
       { text: "Services Marketplace", link: "/services-marketplace" },
       { text: "UI Components", link: "/ui" },
       { text: "Recipes", link: "/recipes" },
+      { text: "Offline Apps", link: "/offline-apps" },
     ],
   },
   {
@@ -101,6 +102,7 @@ const mainSidebar = [
       { text: "App Permissions", link: "/app-permissions" },
       { text: "UI Components", link: "/ui" },
       { text: "Recipes", link: "/recipes" },
+      { text: "Offline Apps", link: "/offline-apps" },
       { text: "CLI Overview", link: "/cli-overview" },
     ],
   },

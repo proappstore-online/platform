@@ -4,7 +4,7 @@ description: "Application Standard requirements for app data, migrations, regist
 
 # Data, actions, and Workers
 
-**Standard version 1.11** · Chapter `DATA` · Part of the [Application Standard](./index.md)
+**Standard version 1.12** · Chapter `DATA` · Part of the [Application Standard](./index.md)
 
 **Scope.** D1 schema and migrations, registered actions, per-user/project/tenant row scoping, KV, counters, storage, rooms and Durable Objects, Workers and service bindings.
 
@@ -764,38 +764,43 @@ setInterval(() => app.actions.call('reap_stale_games_all'), 60_000) // a tab is 
 
 **Supporting links.** [MCP app tools — limits and roadmap](../mcp-app-tools.md#limits-roadmap), [PAS-DATA-018](#pas-data-018), [PAS-AUTH-019](./auth.md#pas-auth-019).
 
-### PAS-DATA-020 — Caches never outlive authorization {#pas-data-020}
+### PAS-DATA-020 — Session caches and intentional offline content have distinct lifecycles {#pas-data-020}
 
-**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.3
+**Severity:** Medium · **Verification:** Manual · **Enforcement:** none (recommended) · **Since:** 1.12
 
-**Rule.** The app MAY cache action results in memory for the current session and SHOULD revalidate on focus and after its own writes. It MUST NOT persist scoped rows in `localStorage`, IndexedDB, Cache Storage or a service worker beyond the session, MUST clear all cached data on sign-out and on `onChange(null)`, and MUST NOT serve one user's cached rows to another account on the same device.
+**Rule.** Ordinary cached action results MUST remain session-bound and MUST be cleared on sign-out, account change and `onChange(null)`. An app MAY persist user-authored local content and explicit offline downloads through the SDK offline facilities when it declares whether the content belongs to this device or a specific account, binds every handle to that scope, checks local access on every operation, and documents retention, removal and export. Account-local content MUST NOT become visible to another account. The app MUST distinguish offline copies from current server state and MUST NOT treat a local owner identifier, download or cached entitlement as server authentication. Authenticated API responses and `/.pas/*` MUST NOT be cached by the service worker. Deliberate offline content MUST NOT silently include arbitrary scoped query results.
 
-**Applicability.** Apps that cache data.
+**Applicability.** Apps that cache data or offer intentional offline content.
 
-**Rationale.** A cache is a copy of rows that were authorised at fetch time; authorisation can be revoked, and the device can change hands. Chess Academy's stale PWA shell showed how long a cached artefact can outlive the session that produced it.
+**Rationale.** A temporary query cache and a lesson the user deliberately downloads have different purposes. Local creation and playback must not require a live network, but a device-local copy cannot prove continuing server authorization or receive immediate revocation while disconnected. Private or regulated data that requires live authorization must remain online-only. Device-local data is shared by users of that browser profile and must be described accordingly.
 
-**Recommended implementation.** Keep caches in component or store state keyed by `user.id`; use `app.counters` for hot aggregates instead of caching computed counts; let the SDK's `Clear-Site-Data` on logout do its job by not caching outside the session.
+**Recommended implementation.** Use `@proappstore/sdk/offline` for local records, blobs and checkpointed work. Account stores use an immutable owner scope and an explicit access callback; close handles and revoke that callback when the account changes. Keep online session hydration and authorization in the SDK. Document whether signing out removes account content or locks it until the same owner deliberately reopens it. Never discard unsynced authored work without the declared retention policy and a visible export/removal path. See [Offline apps](../offline-apps.md) and [ADR-012](../adr/012-offline-content.md).
 
 **Conforming example.**
 
 ```ts
-const cache = useRef(new Map<string, Task[]>())
-app.auth.onChange((u) => { if (!u) cache.current.clear() })
+// An ordinary query cache still expires with the session.
+const cache = new Map();
+app.auth.onChange(() => cache.clear());
+// Deliberately downloaded lessons use explicit scope, ownership and lifecycle.
+const lessons = createOfflineStore({ appId: 'reader', scope: { kind: 'account', ownerId },
+  canAccess: () => localOwner === ownerId });
 ```
 
 **Non-conforming example.**
 
 ```ts
-localStorage.setItem(`tasks:${orgId}`, JSON.stringify(rows))     // survives sign-out and account switch
+localStorage.setItem('current-session', JSON.stringify(authResponse)); // credential/session caching
+localStorage.setItem('last-private-results', JSON.stringify(rows)); // undeclared persistent query cache
 ```
 
-**Evidence.** Source: persistent storage writes of action results; service-worker runtime caching rules for `/.pas/*`; cache invalidation on `onChange(null)`.
+**Evidence.** Source: local record/blob stores, immutable scope and access guard, lifecycle binding, service-worker exclusions. Product: download intent, offline labels, storage/export/delete controls and sign-out policy. Runtime: offline relaunch and account-switch tests.
 
-**Remediation.** Move caches to memory; exclude `/.pas/*` from service-worker caching; clear on sign-out.
+**Remediation.** Keep ordinary API caches in memory. Move intentional offline content to explicit SDK scopes and add retention, local-access and export/removal behavior. Keep all authentication endpoints network-only.
 
-**Tests.** After sign-out and sign-in as a second account on the same browser, no first-account rows are visible; `/.pas/*` responses are never served from Cache Storage.
+**Tests.** Cold offline launch reads intentional local content; account B cannot read account A's namespace through retained handles; sign-out follows the declared purge/lock policy; ordinary query caches clear; no `/.pas/*` response is in Cache Storage.
 
-**Supporting links.** [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-STACK-009](./stack.md#pas-stack-009), [UI chapter](./ui.md).
+**Supporting links.** [PAS-AUTH-007](./auth.md#pas-auth-007), [PAS-DATA-018](#pas-data-018), [PAS-UI-018](./ui.md#pas-ui-018), [Offline apps](../offline-apps.md).
 
 ### PAS-DATA-021 — Data failures are surfaced and logged, never swallowed into an empty result {#pas-data-021}
 

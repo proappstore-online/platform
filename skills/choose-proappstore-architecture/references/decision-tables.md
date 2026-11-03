@@ -19,7 +19,7 @@ platform's current, enforced ones. Clause URLs are stable.
 | Counts many users bump | **`app.counters`** (atomic) | [PAS-STACK-010](https://docs.proappstore.online/standard/stack/#pas-stack-010) | [SDK overview](https://docs.proappstore.online/sdk-overview/) | read-modify-write on KV/D1 |
 | Files, images, documents | **`app.storage`** — 50 MB/object; keep the key in D1 | [PAS-STACK-012](https://docs.proappstore.online/standard/stack/#pas-stack-012), [PAS-DATA-013](https://docs.proappstore.online/standard/data/#pas-data-013) | [recipe file-upload](https://docs.proappstore.online/recipes/) | base64 in D1/KV; S3/Cloudinary with client keys |
 | Upload validation and rendering | `accept` list + type/size checks before `upload`; never render uploads as active content | [PAS-UI-016](https://docs.proappstore.online/standard/ui/#pas-ui-016) | [UI chapter](https://docs.proappstore.online/standard/ui/) | `<iframe>`/inline HTML of user files |
-| Caches | in-memory for the session only | [PAS-DATA-020](https://docs.proappstore.online/standard/data/#pas-data-020) | — | persisting scoped rows in the browser |
+| Session caches | in-memory; clear on account change | [PAS-DATA-020](https://docs.proappstore.online/standard/data/#pas-data-020) | — | undeclared persistent authenticated-response caches |
 
 ## Realtime
 
@@ -62,3 +62,5 @@ deploy are fixed by [PAS-STACK-001](https://docs.proappstore.online/standard/sta
 [PAS-STACK-005](https://docs.proappstore.online/standard/stack/#pas-stack-005); hosted apps run in
 platform-cookie mode ([PAS-STACK-003](https://docs.proappstore.online/standard/stack/#pas-stack-003)). The
 full decision tree is in the [STACK chapter](https://docs.proappstore.online/standard/stack/).
+
+Intentional local content and explicit downloads may use `@proappstore/sdk/offline` with declared device/account scope, retention, export and deletion. This is distinct from session caches; see the [offline guide](https://docs.proappstore.online/offline-apps/).

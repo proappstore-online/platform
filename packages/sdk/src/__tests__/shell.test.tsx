@@ -326,3 +326,51 @@ describe('AppShell styling (#235): Tailwind + canonical tokens, no inline styles
     expect(src).not.toMatch(/CSSProperties/);
   });
 });
+
+describe('opt-in local AppShell (#522)', () => {
+  it('renders local content while signed out with real sign-in controls and nullable custom chrome', async () => {
+    const app = signedOutApp();
+    const topbar = vi.fn();
+    const footer = vi.fn();
+    await mount(<AppShell app={app} access="local" allowFree={false} renderTopbar={topbar} renderFooter={footer}><p>local library</p></AppShell>);
+    expect(container.querySelector('main')?.textContent).toContain('local library');
+    expect(container.textContent).toContain('GitHub');
+    expect(topbar).not.toHaveBeenCalled(); expect(footer).not.toHaveBeenCalled();
+    const localTop = vi.fn(({ user }) => <header>{user ? user.name : 'Device library'}</header>);
+    const localFooter = vi.fn(() => <footer>local footer</footer>);
+    await mount(<AppShell app={app} access="local" renderLocalTopbar={localTop} renderLocalFooter={localFooter}><p>local library</p></AppShell>);
+    expect(localTop.mock.calls[0]?.[0].user).toBeNull();
+    expect(container.textContent).toContain('Device library');
+    expect(container.textContent).toContain('local footer');
+    expect(app.auth.user).toBeNull();
+  });
+
+  it('renders during pending auth and clears mounted local screen state on account transitions', async () => {
+    const listeners = new Set<(status: string, user: unknown) => void>();
+    const emit = (status: string, user: unknown) => { for (const fn of listeners) fn(status, user); };
+    const app = signedOutApp();
+    Object.assign(app.auth, { status: 'pending', onStatus: (fn: typeof emit) => { listeners.add(fn); fn('pending', null); return () => { listeners.delete(fn); }; } });
+    function LocalScreen() { const [value, setValue] = useState(0); return <button onClick={() => setValue(value + 1)}>{value}</button>; }
+    await mount(<AppShell app={app} access="local"><LocalScreen /></AppShell>);
+    await act(async () => { container.querySelector<HTMLButtonElement>('main button')!.click(); });
+    expect(container.querySelector('main button')?.textContent).toBe('1');
+    const user = { id: 'owner-a', name: 'A', login: 'a', avatarUrl: null };
+    Object.assign(app.auth, { user });
+    await act(async () => { emit('signed-in', user); });
+    expect(container.querySelector('main button')?.textContent).toBe('0');
+    await act(async () => { container.querySelector<HTMLButtonElement>('main button')!.click(); });
+    Object.assign(app.auth, { user: null });
+    await act(async () => { emit('signed-out', null); });
+    expect(container.querySelector('main button')?.textContent).toBe('0');
+  });
+
+  it('keeps authenticated mode gated and describes offline local capabilities accurately', async () => {
+    await mount(<AppShell app={signedOutApp()}><p>private screen</p></AppShell>);
+    expect(container.textContent).not.toContain('private screen');
+    await mount(<AppShell app={signedOutApp()} access="local"><p>local screen</p></AppShell>);
+    await act(async () => { window.dispatchEvent(new Event('offline')); });
+    expect(container.textContent).toContain('Local content is available');
+    await act(async () => { window.dispatchEvent(new Event('online')); });
+    expect(container.textContent).not.toContain('Local content is available');
+  });
+});

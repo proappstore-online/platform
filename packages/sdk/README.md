@@ -29,6 +29,12 @@ Options:
 | `proApiBase` | `https://api.proappstore.online` | Platform API base URL |
 | `dataApiBase` | `https://data-{appId}.proappstore.online`, or `/.pas/data` in `platform-cookie` mode | Per-app data worker URL |
 
+## Offline content (opt-in)
+
+Import `createOfflineStore`, `createDownloadManager`, `createLocalJobs` and `createSyncQueue` from `@proappstore/sdk/offline`. Local records and blobs use transactional IndexedDB, explicit device/account scope and retention; public model downloads require version, size and SHA-256 pins. Durable jobs recover checkpoints, and the optional queue flushes only explicitly idempotent operations. Account access callbacks are local policy, not server authorization.
+
+`<AppShell access="local" app={app}>` renders local features without inventing an authenticated user; the default remains authenticated. Keep auth responses out of service-worker caches and checkpoint active work before updates. See the [offline guide](https://docs.proappstore.online/offline-apps/) for API usage, retention, quota, update and browser/device limits.
+
 ## Types
 
 ```ts

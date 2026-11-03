@@ -124,6 +124,7 @@ pnpm -r --filter './packages/*' build
 bash scripts/check-design-system.sh .      # banned CSS aliases, html.dark, theme storage key
 pnpm -r typecheck
 pnpm test                                  # vitest run, from the workspace root
+pnpm test:offline-browser                   # Chromium + WebKit offline SDK reference
 node scripts/sync-template-workflow.mjs --check   # template-app deploy workflow drift
 ```
 

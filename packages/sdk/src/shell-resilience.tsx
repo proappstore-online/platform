@@ -187,7 +187,7 @@ export function useOnline(): boolean {
  * live region is always present, so the change is announced. Dismissible;
  * clears itself on reconnect, and a later drop shows it again.
  */
-export function OfflineBanner() {
+export function OfflineBanner({ local = false }: { local?: boolean } = {}) {
   const online = useOnline();
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
@@ -197,7 +197,7 @@ export function OfflineBanner() {
     <div role="status" aria-live="polite">
       {!online && !dismissed && (
         <div className="pas-offline flex items-center justify-between gap-3 text-sm">
-          <span>You're offline. Changes can't be saved until the connection is back.</span>
+          <span>{local ? "You're offline. Local content is available; cloud services need a connection." : "You're offline. Changes can't be saved until the connection is back."}</span>
           <button type="button" className="pas-dismiss min-h-11 min-w-11" aria-label="Dismiss offline notice" onClick={() => setDismissed(true)}>
             ×
           </button>
