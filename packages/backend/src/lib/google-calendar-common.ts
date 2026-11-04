@@ -51,7 +51,9 @@ export const calendarId = (value: unknown) => {
 /** Fixed Google URLs only; no redirect, response-body logging, or unbounded response. */
 export async function googleJson(url: URL | string, init: RequestInit = {}): Promise<Record<string, any>> {
   let response: Response;
-  try { response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(10_000) }); }
+  // Workers accepts only manual/follow. Reject non-2xx below without following
+  // redirects, so credentials never move to a provider-selected destination.
+  try { response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(10_000) }); }
   catch { throw new GoogleCalendarError('google_unavailable', 502); }
   if (!response.ok) throw new GoogleCalendarError(({ 400: 'google_auth', 401: 'google_auth', 403: 'google_forbidden', 404: 'google_not_found', 429: 'google_rate_limited' } as Record<number, string>)[response.status] ?? 'google_unavailable', 502);
   const reader = response.body?.getReader();

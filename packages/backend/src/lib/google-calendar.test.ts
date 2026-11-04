@@ -228,7 +228,7 @@ describe('Meet reads are restricted to an exact granted event', () => {
     await expect(googleJson('https://www.googleapis.com/test')).rejects.toThrow('google_invalid_response');
     fetcher.mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: 'https://evil.test' } }));
     await expect(googleJson('https://www.googleapis.com/test')).rejects.toThrow('google_unavailable');
-    expect(fetcher.mock.calls.every(([, init]) => init?.redirect === 'error' && init.signal)).toBe(true);
+    expect(fetcher.mock.calls.every(([, init]) => init?.redirect === 'manual' && init.signal)).toBe(true);
   });
 });
 
