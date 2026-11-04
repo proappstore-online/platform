@@ -94,17 +94,19 @@ export async function commitOperation<R extends object>(
     `INSERT INTO account_operations (id, actor_id, account_id, action, idempotency_key, payload_hash, result_json, created_at)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE changes() > 0`,
   ).bind(spec.id, spec.actorId, spec.accountId, spec.action, spec.key, spec.payloadHash, JSON.stringify(spec.result), spec.now);
+  // A concurrent request carrying the same key may commit between the check above and this batch. The
+  // loser then fails at ITS guard (a unique handle, a claim that matches nothing) before it ever reaches
+  // the receipt, so the receipt for this key is the truth: look it up before classifying any failure.
+  const settled = async (): Promise<OperationOutcome<R> | null> => {
+    const winner = await findOperation(db, spec.actorId, spec.action, spec.key);
+    return winner ? replayOf<R>(winner, spec.payloadHash) : null;
+  };
   try {
     const results = await db.batch([guard, receipt, ...rest]);
-    return results[1]?.meta.changes === 1 ? { kind: 'committed', result: spec.result } : { kind: 'stale' };
+    if (results[1]?.meta.changes === 1) return { kind: 'committed', result: spec.result };
+    return (await settled()) ?? { kind: 'stale' };
   } catch (e) {
-    const err = classify(e);
-    if (err.code === 'operation_race') {
-      // A concurrent request with the same key committed first; the whole batch rolled back.
-      const winner = await findOperation(db, spec.actorId, spec.action, spec.key);
-      if (winner) return replayOf<R>(winner, spec.payloadHash);
-    }
-    return { kind: 'error', ...err };
+    return (await settled()) ?? { kind: 'error', ...classify(e) };
   }
 }
 

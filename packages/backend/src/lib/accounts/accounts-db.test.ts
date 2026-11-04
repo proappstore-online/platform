@@ -4,6 +4,7 @@ import { accountRoutes } from '../../routes/accounts.js';
 import { sqliteD1 } from '../../sqlite-d1.js';
 import type { Env } from '../../types.js';
 import { personalAccountId, runPersonalBackfill } from './backfill.js';
+import { commitOperation } from './operations.js';
 
 const KEY = 'unit-test-signing-key-0123456789abcdef';
 
@@ -363,5 +364,49 @@ describe('routes: team lifecycle', () => {
     await join(t, 'gh:mem', 'guest');
     expect((await t.w.call('DELETE', `/accounts/${t.id}/members/gh:mem`, 'gh:mem', undefined, t.w.idem())).status).toBe(200);
     expect((await t.w.call('POST', `/accounts/${t.id}/invitations`, 'gh:owner', { role: 'guest', user_id: 'gh:other', expected_authz_version: 0 }, t.w.idem())).json.error.code).toBe('stale_state');
+  });
+});
+
+describe('commitOperation: a receipt that commits between the first check and the batch', () => {
+  const spec = (db: D1Database, over: Partial<{ payloadHash: string }> = {}) => ({
+    id: 'op_loser', actorId: 'gh:a', accountId: 'acct_x', action: 'account.create', key: 'race-key-0001',
+    payloadHash: over.payloadHash ?? 'hash-1', result: { account: { id: 'acct_x' } }, now: 5,
+    guard: db.prepare("INSERT INTO accounts (id, kind, name, slug, created_by, created_at, updated_at) VALUES ('acct_x','team','X','taken-slug','gh:a',1,1)"),
+  });
+  const winnerReceipt = (w: ReturnType<typeof world>, hash = 'hash-1') =>
+    w.exec("INSERT INTO account_operations (id, actor_id, account_id, action, idempotency_key, payload_hash, result_json, created_at) VALUES ('op_winner','gh:a','acct_win','account.create','race-key-0001',?1,'{\"account\":{\"id\":\"acct_win\"}}',1)", hash);
+
+  /** A database whose batch first lets the winner commit its receipt, then behaves as the loser's batch does. */
+  function racing(w: ReturnType<typeof world>, outcome: 'throw' | 'noop', hash = 'hash-1'): D1Database {
+    return { prepare: (q: string) => w.db.prepare(q), batch: async () => {
+      await winnerReceipt(w, hash);
+      if (outcome === 'throw') throw new Error('D1_ERROR: UNIQUE constraint failed: accounts.slug: SQLITE_CONSTRAINT');
+      return [{ meta: { changes: 0 } }, { meta: { changes: 0 } }];
+    } } as unknown as D1Database;
+  }
+
+  it('replays the winner when the loser fails at its own guard (a taken handle)', async () => {
+    const w = world();
+    const o = await commitOperation(racing(w, 'throw'), spec(w.db), spec(w.db).guard, []);
+    expect(o).toEqual({ kind: 'replay', result: { account: { id: 'acct_win' } } });
+  });
+
+  it('replays the winner when the loser\'s guard matched no row', async () => {
+    const w = world();
+    expect(await commitOperation(racing(w, 'noop'), spec(w.db), spec(w.db).guard, [])).toEqual({ kind: 'replay', result: { account: { id: 'acct_win' } } });
+  });
+
+  it('answers a conflict when the winner used the same key for a different payload', async () => {
+    const w = world();
+    expect(await commitOperation(racing(w, 'throw', 'other-hash'), spec(w.db), spec(w.db).guard, [])).toEqual({ kind: 'conflict' });
+    expect(await commitOperation(racing(w, 'noop', 'other-hash'), spec(w.db), spec(w.db).guard, [])).toEqual({ kind: 'conflict' });
+  });
+
+  it('with no receipt, a failure is still classified and a no-op is still stale', async () => {
+    const w = world();
+    const failing = { prepare: (q: string) => w.db.prepare(q), batch: async () => { throw new Error('UNIQUE constraint failed: accounts.slug'); } } as unknown as D1Database;
+    expect(await commitOperation(failing, spec(w.db), spec(w.db).guard, [])).toMatchObject({ kind: 'error', code: 'slug_taken' });
+    const noop = { prepare: (q: string) => w.db.prepare(q), batch: async () => [{ meta: { changes: 0 } }, { meta: { changes: 0 } }] } as unknown as D1Database;
+    expect(await commitOperation(noop, spec(w.db), spec(w.db).guard, [])).toEqual({ kind: 'stale' });
   });
 });

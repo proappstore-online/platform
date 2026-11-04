@@ -141,7 +141,7 @@ describe('invitation acceptance (design §5)', () => {
     await seedUser('gh:ia-r');
     const i = await post('gh:ia-owner', `/accounts/${acct}/invitations`, { role: 'member', user_id: 'gh:ia-r' });
     const res = await Promise.all(Array.from({ length: 6 }, () => post('gh:ia-r', `/invitations/${i.json.invitation.id}/accept`, { secret: i.json.invitation_secret }, key())));
-    expect(res.every((r) => r.status === 200)).toBe(true); // one commit, the rest replay it
+    expect(res.map((r) => r.status), JSON.stringify(res.map((r) => r.json?.error))).toEqual(res.map(() => 200)); // one commit, the rest replay it
     expect(await rows("SELECT role, generation FROM account_memberships WHERE user_id = 'gh:ia-r'")).toEqual([{ role: 'member', generation: 1 }]);
     expect(await rows("SELECT id FROM account_audit_events WHERE action = 'invitation.accept'")).toHaveLength(1);
     expect(await rows('SELECT authz_version FROM accounts WHERE id = ?', acct)).toEqual([{ authz_version: 2 }]); // create + one join
@@ -209,7 +209,8 @@ describe('idempotency', () => {
     await seedUser('gh:id-1');
     const k = key();
     const res = await Promise.all(Array.from({ length: 6 }, () => post('gh:id-1', '/accounts', { name: 'Idem Team' }, k)));
-    expect(res.every((r) => r.status === 201 || r.status === 200)).toBe(true);
+    expect(res.every((r) => r.status === 201 || r.status === 200), JSON.stringify(res.map((r) => [r.status, r.json?.error]))).toBe(true);
+    expect(res.filter((r) => r.status === 201)).toHaveLength(1); // one commit, the rest replay it
     expect(new Set(res.map((r) => r.json.account.id)).size).toBe(1);
     expect(await rows('SELECT id FROM accounts')).toHaveLength(1);
     expect(await rows("SELECT id FROM account_audit_events WHERE action = 'account.create'")).toHaveLength(1);
