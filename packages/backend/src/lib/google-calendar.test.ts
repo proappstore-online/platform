@@ -208,11 +208,40 @@ describe('Meet reads are restricted to an exact granted event', () => {
     const record = records.conferenceRecords[0];
     expect(await call({ operation: 'participants', grant_id, resource: record.name })).toMatchObject({ error: 'invalid_resource_receipt' });
     const participants = await call({ operation: 'participants', grant_id, resource: record.name, receipt: record.receipt }) as any;
-    expect(JSON.stringify(participants)).not.toContain('Private');
+    expect(participants.participants[0].signedinUser).toEqual({ user: 'users/123456', displayName: 'Private name' });
+    expect(participants.participants[1].anonymousUser).toEqual({ displayName: 'Private guest' });
     const person = participants.participants[0];
     const sessions = await call({ operation: 'sessions', grant_id, resource: person.name, receipt: person.receipt }) as any;
     expect(sessions.participantSessions).toHaveLength(1);
     expect(await call({ operation: 'sessions', grant_id, resource: person.name.replace('person1', 'other'), receipt: person.receipt })).toMatchObject({ error: 'invalid_resource_receipt' });
+  });
+  it('lists exact series instances with bounded backfill and pagination', async () => {
+    const grant_id = await grant();
+    fetcher.mockImplementation(async (url, init) => new URL(url).pathname.endsWith('/instances')
+      ? Response.json({ items: [{ ...meeting(), recurringEventId: 'series1' }], nextPageToken: 'page2' }) : provider(url, init));
+    const query = { operation: 'instances', grant_id, event_id: 'series1', starts_at: now - 14 * 86_400_000, ends_at: now, page_token: 'page1' };
+    expect(await call(query)).toMatchObject({ items: [{ recurringEventId: 'series1' }], nextPageToken: 'page2' });
+    const url = new URL(fetcher.mock.calls.at(-1)![0]);
+    expect(url.pathname).toBe('/calendar/v3/calendars/team%40example.test/events/series1/instances');
+    expect(url.searchParams.get('pageToken')).toBe('page1');
+    expect(url.searchParams.get('timeMin')).toBe(new Date(query.starts_at).toISOString());
+    for (const range of [{ starts_at: now - 29 * 86_400_000 }, { ends_at: now + 31 * 86_400_000 }, { ends_at: query.starts_at }, { starts_at: NaN }]) {
+      fetcher.mockClear();
+      expect(await call({ ...query, ...range })).toMatchObject({ error: 'invalid_meeting_window' });
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+    expect(await call(query, 'other')).toMatchObject({ error: 'reconnect_required' });
+  });
+  it('allows last-week Meet evidence but refuses expired or future meetings', async () => {
+    const grant_id = await grant();
+    for (const days of [14, 29, -1]) {
+      const starts_at = now - days * 86_400_000, ends_at = starts_at + 3_600_000;
+      fetcher.mockImplementation(async (url, init) => new URL(url).pathname.endsWith('/events/event1')
+        ? Response.json({ ...meeting(), start: { dateTime: new Date(starts_at).toISOString() }, end: { dateTime: new Date(ends_at).toISOString() } }) : provider(url, init));
+      const result = await call({ operation: 'conferences', grant_id, event_id: 'event1', starts_at, ends_at, meeting_code: 'abc-defg-hij' });
+      if (days === 14) expect(result).toHaveProperty('conferenceRecords');
+      else expect(result).toMatchObject({ error: 'invalid_meeting_window' });
+    }
   });
   it('receipts cannot be moved between grants, forged, or retained after expiry', async () => {
     const receipt = await resourceReceipt(env, 'grant-one', 'conferenceRecords/one');

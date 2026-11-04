@@ -271,7 +271,8 @@ can read existing app grants but cannot connect accounts or create grants.
 | `grant` | Authorized user required; exact `calendar_id` (not `primary`). Returns `grant_id`, `user_id`, calendar metadata and account email. |
 | `grant_status`, `revoke_grant` | `grant_id`, restricted to the current app. |
 | `events`, `event` | `grant_id`; `events` takes optional `page_token`, returns `items` and `nextPageToken`; `event` requires `event_id`. |
-| `conferences` | `grant_id`, `event_id`, `meeting_code`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Requires the exact live event and a completed meeting in the last eight days. |
+| `instances` | `grant_id`, recurring `event_id`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Lists one exact series, including cancelled exceptions. Range is at most 31 days, within the past 28 / next 30 days. Returns `items` and `nextPageToken`. |
+| `conferences` | `grant_id`, `event_id`, `meeting_code`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Requires the exact live event and a completed meeting in the last 28 days. |
 | `participants`, `sessions` | `grant_id`, `resource`, `receipt` from the preceding list, optional `page_token`. |
 | `disconnect_account` | Authorized user required; `expected_version`. Erases the platform account credential and invalidates all its app grants. Use only after explicitly explaining this global effect to the user. |
 
@@ -293,7 +294,10 @@ application-user credential and must not be exposed as a public endpoint.
 Events are bounded to the past seven / next thirty days, 100 per page, without
 descriptions or attachments. Meet conference/participant results include a signed
 five-minute `receipt` for their `name`; child queries require this receipt and
-cannot switch grants or parent resources. Participant names are stripped. Use
+cannot switch grants or parent resources. Participants include provider display names,
+stable signed-in identities, anonymous/phone identity types, and first/last sighting
+times. Names are labels, not verified identities; apps must apply tenant permissions
+and their retention policy before displaying or storing them. Use
 stable Google `users/<id>` identities, not display names or RSVP, for attendance.
 Provider calls have ten-second timeouts and a 1 MB response cap. Each connector
 operation counts toward the existing worker invocation budget; apps must bound

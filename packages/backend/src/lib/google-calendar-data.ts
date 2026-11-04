@@ -5,7 +5,7 @@ import { calendarId, GoogleCalendarError, googleJson, resourceReceipt, textInput
 interface Grant { id: string; app_id: string; user_id: string; account_version: number; calendar_id: string; calendar_name: string; email: string }
 const eventId = (value: unknown) => textInput(value, /^[A-Za-z0-9_-]{1,1024}$/);
 const pageToken = (value: unknown) => value === undefined || value === '' ? '' : textInput(value, /^[A-Za-z0-9._~+/=-]{1,2048}$/);
-const EVENT_FIELDS = 'id,summary,status,start,end,hangoutLink,conferenceData(entryPoints(entryPointType,uri))';
+const EVENT_FIELDS = 'id,summary,status,recurringEventId,start,end,hangoutLink,conferenceData(entryPoints(entryPointType,uri))';
 async function get(token: string, base: string, path: string, params: Record<string, string> = {}) {
   const url = new URL(path, base); url.search = new URLSearchParams(params).toString();
   return googleJson(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -61,6 +61,16 @@ export async function readCalendarGrant(env: Env, appId: string, input: Record<s
   if (input.operation === 'grant_status') return { grant_id: grant.id, calendar_id: grant.calendar_id, calendar_name: grant.calendar_name, account_email: grant.email, user_id: grant.user_id };
   const token = await accountToken(env, grant.user_id, grant.account_version);
   const prefix = `calendars/${encodeURIComponent(grant.calendar_id)}/events`;
+  if (input.operation === 'instances') {
+    const starts = input.starts_at, ends = input.ends_at, now = Date.now();
+    if (typeof starts !== 'number' || typeof ends !== 'number' || !Number.isSafeInteger(starts) || !Number.isSafeInteger(ends)
+      || starts < now - 28 * 86_400_000 || ends > now + 30 * 86_400_000 || ends <= starts || ends - starts > 31 * 86_400_000) throw new GoogleCalendarError('invalid_meeting_window');
+    const data = await calendarGet(token, `${prefix}/${encodeURIComponent(eventId(input.event_id))}/instances`, {
+      maxResults: '100', showDeleted: 'true', timeMin: new Date(starts).toISOString(), timeMax: new Date(ends).toISOString(),
+      fields: `items(${EVENT_FIELDS}),nextPageToken`, pageToken: pageToken(input.page_token),
+    });
+    return { items: list(data, 'items'), nextPageToken: data.nextPageToken ?? null };
+  }
   if (input.operation === 'events') {
     const now = Date.now();
     const data = await calendarGet(token, prefix, { singleEvents: 'true', orderBy: 'startTime', maxResults: '100', timeMin: new Date(now - 7 * 86_400_000).toISOString(), timeMax: new Date(now + 30 * 86_400_000).toISOString(), fields: `items(${EVENT_FIELDS}),nextPageToken`, pageToken: pageToken(input.page_token) });
@@ -73,13 +83,13 @@ export async function readCalendarGrant(env: Env, appId: string, input: Record<s
     const event = await calendarGet(token, `${prefix}/${encodeURIComponent(eventId(input.event_id))}`, { fields: EVENT_FIELDS });
     const timing = eventTiming(event);
     if (input.starts_at !== timing.starts || input.ends_at !== timing.ends || input.meeting_code !== timing.code) throw new GoogleCalendarError('meeting_changed', 409);
-    if (timing.ends > Date.now() || timing.starts < Date.now() - 8 * 86_400_000) throw new GoogleCalendarError('invalid_meeting_window');
+    if (timing.ends > Date.now() || timing.starts < Date.now() - 28 * 86_400_000) throw new GoogleCalendarError('invalid_meeting_window');
     path = 'conferenceRecords'; field = 'conferenceRecords'; fields = 'conferenceRecords(name,startTime,endTime),nextPageToken';
     params.filter = `space.meeting_code = "${timing.code}" AND start_time < "${new Date(timing.ends).toISOString()}" AND end_time > "${new Date(timing.starts).toISOString()}"`;
   } else if (input.operation === 'participants') {
     parent = textInput(input.resource, /^conferenceRecords\/[A-Za-z0-9_-]{1,256}$/);
     await verifyResourceReceipt(env, input.receipt, grant.id, parent);
-    path = `${parent}/participants`; field = 'participants'; fields = 'participants(name,signedinUser(user),anonymousUser,phoneUser),nextPageToken';
+    path = `${parent}/participants`; field = 'participants'; fields = 'participants(name,signedinUser(user,displayName),anonymousUser(displayName),phoneUser(displayName),earliestStartTime,latestEndTime),nextPageToken';
   } else if (input.operation === 'sessions') {
     parent = textInput(input.resource, /^conferenceRecords\/[A-Za-z0-9_-]{1,256}\/participants\/[A-Za-z0-9_-]{1,256}$/);
     await verifyResourceReceipt(env, input.receipt, grant.id, parent);
@@ -90,7 +100,13 @@ export async function readCalendarGrant(env: Env, appId: string, input: Record<s
     const pattern = field === 'conferenceRecords' ? /^conferenceRecords\/[A-Za-z0-9_-]{1,256}$/ : field === 'participants' ? /^conferenceRecords\/[A-Za-z0-9_-]{1,256}\/participants\/[A-Za-z0-9_-]{1,256}$/ : /^conferenceRecords\/[A-Za-z0-9_-]{1,256}\/participants\/[A-Za-z0-9_-]{1,256}\/participantSessions\/[A-Za-z0-9_-]{1,256}$/;
     const name = textInput(item.name, pattern, 'google_invalid_response');
     if (parent && !name.startsWith(`${parent}/`)) throw new GoogleCalendarError('google_invalid_response', 502);
-    if (field === 'participants') return { name, ...(item.signedinUser ? { signedinUser: { user: item.signedinUser.user } } : {}), ...(item.anonymousUser ? { anonymousUser: {} } : {}), ...(item.phoneUser ? { phoneUser: {} } : {}), receipt: await resourceReceipt(env, grant.id, name) };
+    if (field === 'participants') return {
+      name, earliestStartTime: item.earliestStartTime, latestEndTime: item.latestEndTime,
+      ...(item.signedinUser ? { signedinUser: { user: item.signedinUser.user, displayName: String(item.signedinUser.displayName ?? '').slice(0, 500) } } : {}),
+      ...(item.anonymousUser ? { anonymousUser: { displayName: String(item.anonymousUser.displayName ?? '').slice(0, 500) } } : {}),
+      ...(item.phoneUser ? { phoneUser: { displayName: String(item.phoneUser.displayName ?? '').slice(0, 500) } } : {}),
+      receipt: await resourceReceipt(env, grant.id, name),
+    };
     return { name, startTime: item.startTime, endTime: item.endTime, ...(field === 'conferenceRecords' ? { receipt: await resourceReceipt(env, grant.id, name) } : {}) };
   }));
   return { [field]: items, nextPageToken: data.nextPageToken ?? null };
