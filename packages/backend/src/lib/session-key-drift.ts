@@ -28,7 +28,7 @@
  * cron trigger in wrangler.toml and on demand at GET /v1/internal/session-key-drift.
  */
 
-import { mintSession } from '@proappstore/build-core';
+import { credentialContext, mintSession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { dataWorkerUrl } from './data-worker-url.js';
 
@@ -126,7 +126,12 @@ export async function checkSessionKeyDrift(opts: DriftOptions): Promise<DriftRep
   ).bind(sampleSize).all<{ id: string }>();
   const ids = (results ?? []).map((r) => r.id);
 
-  const token = await mintSession({ uid: DRIFT_PROBE_SUBJECT, login: 'session-key-drift', roles: ['user'] }, env.SESSION_SIGNING_KEY, DRIFT_PROBE_TTL_SECONDS);
+  // #535: an explicit workload context — no human is present, and this probe must never be mistaken
+  // for a first-party credential by anything that reads `cred` instead of the old no-`via` heuristic.
+  const token = await mintSession(
+    { uid: DRIFT_PROBE_SUBJECT, login: 'session-key-drift', roles: ['user'], cred: credentialContext('workload_session') },
+    env.SESSION_SIGNING_KEY, DRIFT_PROBE_TTL_SECONDS,
+  );
   const probes = await Promise.all(ids.map((id) => probeOne(fetchImpl, env, id, token, now)));
   const drifted = probes.filter((p) => p.verdict === 'drift').map((p) => p.appId);
   const unreachable = probes.filter((p) => p.verdict === 'unreachable').map((p) => p.appId);

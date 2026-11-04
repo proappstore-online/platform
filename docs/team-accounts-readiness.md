@@ -28,11 +28,69 @@ Flags (all off): `ACCOUNTS_READ`, `ACCOUNTS_WRITE`, `ACCOUNT_AUTHORIZATION_SHADO
 
 The shadow matrix found one real expansion before any cutover: mapping a legacy app `admin` to the new `app_admin` would have granted secrets, webhook and publication rights it does not have today. The compatibility bundle `app_legacy_admin` was added. The matrix now reports no unexplained divergence for a personal-account fixture. It has not been run against production-shaped data.
 
+## Milestone 2a (#535): verified credential audiences and scopes
+
+Status: delivered behind the same default-off flags, in `platform` only. This is the T05
+prerequisite in blocker 1 below, not T05 itself — it does not enable, widen or replace anything
+T05 still has to do (blockers 2–8 are unchanged).
+
+What changed: `requireUser` (`lib/auth.ts`) now parses a session's `cred` claim — a versioned,
+signed envelope (`@proappstore/build-core`'s `credentialContext`, validated by
+`lib/accounts/credential-context.ts`'s `parseCredentialContext`) carrying the issuer's own verified
+`CredentialKind` and, for `app_bound`, the owning app id. `principalFor(user)` (`lib/auth.ts`) is now
+the ONE place that turns that into the resolver's `Principal`, replacing `user.via ? workload_session
+: first_party_session` in both `shadowObserve` and `routes/accounts.ts`'s `caller()`. A session with
+no verified claim — every token minted before this change, or an issuer that chose not to assert one
+— is treated as `workload_session`: it keeps today's `app.*` reach but can never exercise a
+governance permission (`isGovernance` in `contract.ts`). This is a **narrowing** of the old
+"no `via` ⇒ first-party" heuristic, not a widening: nothing in production grants real access on this
+classification today (`ACCOUNTS_WRITE` is off), so no caller loses anything it could actually do.
+
+Issuers updated to assert the claim, all in this repo:
+
+| Issuer | Context asserted |
+|---|---|
+| `routes/auth.ts` OAuth callback (GitHub/Google) | `first_party_session` for a first-party destination; `app_bound` to the app resolved **server-side from the verified redirect hostname** (`resolveAppOrigin`) for everything else — never from the caller-supplied `app_id` query parameter, which is unauthenticated on the plain-subdomain branch of `returnToAllowed`. An unresolved destination (e.g. a non-app reserved host) asserts no claim at all rather than guessing one. |
+| `routes/auth.ts` `/auth/exchange` (CLI device-token exchange) | always `first_party_session` |
+| `routes/auth.ts` `/auth/credentials/login` | `app_bound` to `users.credential_app_id` when set, else `first_party_session` — the same signal `routes/accounts.ts` already used to refuse team ownership |
+| `routes/oidc-session.ts`, `lib/session-key-drift.ts` | always `workload_session` (no human present) |
+| `routes/passkeys.ts` step-up | unchanged: it already spreads the original claims forward, which now includes `cred` — a re-authentication preserves, never upgrades, the context |
+| `mcp/oauth-provider.ts` `authorizationCodeGrant` | re-mints the FIRST issued session from the grant's own certain `appId` binding (`app_bound` to it, or `first_party_session` for the shared `/mcp` endpoint) instead of reusing the browser-side session verbatim, which previously carried no claim reflecting which endpoint the grant was actually for. `refreshTokenGrant` already carried claims forward unchanged — correct by construction, no change needed. |
+
+**Known remaining gap, not fixed this round:** `mcp/oauth-provider.ts`'s `issueBrokerCredential`
+(the remote-auth broker / recovery-request path) stores the caller's session verbatim, the same
+shape of gap `authorizationCodeGrant` had before this milestone, keyed off `target.appId` instead of
+stamping it into the stored session's `cred`. Not touched here for lack of confidence in that path's
+broader contract within this milestone's scope — flag it for whoever picks up T05 blocker 1's
+remainder.
+
+Verification: unit tests for the parser/builder (`credential-context.test.ts`, fails closed on a
+malformed, unversioned, unknown-kind, or mismatched-appId-presence claim); real-SQLite D1 route
+tests (`accounts-db.test.ts`, updated + extended — a legacy no-claim token, a workload session and an
+app-bound credential are all denied `POST /accounts`'s `credential_scope` check); `routes/auth.test.ts`
+(new coverage over the real OAuth callback and credentials/login route: first-party vs. app-subdomain
+vs. reserved-subdomain vs. custom-domain resolution); `mcp/oauth-provider.test.ts` (new coverage: the
+issued and refreshed session's `cred` reflects the grant's own appId, never the original browser
+session's). All run in the standard unit suite (no workerd needed — `authorize()`/`decide()` and the
+claim parser are pure or SQLite-backed, consistent with how milestone 1 verified the same layer).
+
+Also out of scope for this milestone, by the issue's own boundary: FAS's session minting (a separate
+store/repo) is untouched; no account route's flag changed; no backfill, transfer, invitation delivery,
+identity merge or runtime-eligibility change; ADR-009 unchanged.
+
 ## T05 (integrate every authorization surface): not ready
 
 Blockers, in order:
 
-1. **No credential audience claim.** A first-party session is recognised only by the absence of `via`. App-scoped MCP grants and any app-origin session must carry an explicit audience/scope, enforced by the broker, before account routes are enabled for anyone.
+1. **No credential audience claim — partially addressed (#535, milestone 2a above).** Every session
+   issuer in `platform` now asserts an explicit, versioned, verified `cred` claim instead of relying
+   on the absence of `via`, and the resolver's `Principal` is derived from it. Still open: FAS's own
+   issuers (a separate repo) assert nothing; `issueBrokerCredential` still doesn't stamp its
+   `target.appId`; and every credential minted before this change stays claim-less — narrowed to
+   `workload_session` (no governance), not reissued — until its holder next authenticates. The
+   broker enforcement this blocker originally called for (rejecting an app-scoped MCP grant that
+   reaches governance) is now possible because the claim exists, but account routes remain disabled
+   regardless, so it has not been exercised in production.
 2. **Gate replacement is not started.** `GATE_CLASSIFICATION` lists 55 backend files and 21 files in other services. The backend entries were read; all 21 other-service entries are classified from the inventory only and must be re-read line by line before their checks are replaced.
 3. **Service protocol versions.** Data worker, ProjectDO router, MCP ownership cache (60 s) and `build-core` ownership check have no account-aware protocol version, and the gateway cannot refuse team operations through incompatible services.
 4. **Outbox has no consumer.** `access_reconcile` rows are written `held`; GitHub collaborator revocation, ProjectDO projection and provider-grant revocation are not performed. Removal revokes D1 grants and bumps versions only.

@@ -482,10 +482,14 @@ describe('token exchange resource binding', () => {
 
     expect(res?.status).toBe(200);
     const body = await res!.json() as { access_token: string };
-    await expect(resolveOAuthToken(body.access_token, kv)).resolves.toMatchObject({
-      session: signed,
-      appId: 'crm',
-      bound: true,
+    const resolved = await resolveOAuthToken(body.access_token, kv);
+    expect(resolved).toMatchObject({ appId: 'crm', bound: true });
+    // #535: the issued session is RE-MINTED, not the original `signed` token verbatim — its claims
+    // carry the grant's own resolved appId as the verified credential context, which the original
+    // browser-side session (minted before this authorization existed) could never have asserted.
+    expect(resolved!.session).not.toBe(signed);
+    await expect(verifySession(resolved!.session, 'test-key')).resolves.toMatchObject({
+      uid: 'gh:1', login: 'alice', roles: ['user'], cred: { v: 1, kind: 'app_bound', appId: 'crm' },
     });
   });
 });
@@ -848,6 +852,27 @@ describe('grants (#457)', () => {
     expect(stored).not.toContain(issued.access_token);
     expect(stored).not.toContain(issued.refresh_token);
     await expect(resolveOAuthToken(issued.access_token, kv)).resolves.toMatchObject({ appId: 'hiring', bound: true, familyId: grants[0]!.id });
+  });
+
+  it("stamps the issued session's credential context from the grant's OWN appId, never from the browser session it was redeemed from (#535)", async () => {
+    const kv = makeKv();
+    // The browser-side session this code was issued from carries no `cred` claim at all — exactly
+    // the pre-#535 shape, and exactly the case that must not leave the resulting token ambiguous.
+    const appScoped = await authorize(kv, 'gh:1', 'hiring', 'a');
+    const shared = await authorize(kv, 'gh:1', null, 'b');
+    const appSession = await resolveOAuthToken(appScoped.access_token, kv);
+    const sharedSession = await resolveOAuthToken(shared.access_token, kv);
+    await expect(verifySession(appSession!.session, 'test-key')).resolves.toMatchObject({ cred: { v: 1, kind: 'app_bound', appId: 'hiring' } });
+    await expect(verifySession(sharedSession!.session, 'test-key')).resolves.toMatchObject({ cred: { v: 1, kind: 'first_party_session' } });
+  });
+
+  it('a refresh preserves the stamped credential context', async () => {
+    const kv = makeKv();
+    const issued = await authorize(kv, 'gh:1', 'hiring', 'a');
+    const res = await refresh(kv, issued.refresh_token);
+    const next = await res!.json() as { access_token: string };
+    const resolved = await resolveOAuthToken(next.access_token, kv);
+    await expect(verifySession(resolved!.session, 'test-key')).resolves.toMatchObject({ cred: { v: 1, kind: 'app_bound', appId: 'hiring' } });
   });
 
   it('lists only the asked account and endpoint', async () => {

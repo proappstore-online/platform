@@ -23,6 +23,8 @@ import { LEVELS, normalizeEntry, type NormalizedEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
 import { verifyCallerGrant } from './caller-grant.js';
+import { asAppId } from './accounts/contract.js';
+import { CREDENTIAL_CONTEXT_VERSION } from '@proappstore/build-core';
 import { fileQuotaRefusal } from '../routes/storage.js';
 
 export const SYSTEM_WORKER_USER = 'system:worker';
@@ -152,7 +154,12 @@ async function prepareWorkerCall(
     // A grant carries no sign-in time, so it can never satisfy a step-up.
     if (manifest.step_up) throw new WorkerCallError('Forbidden', `"${name}" needs a recent sign-in, which a worker request cannot carry`);
     try {
-      role = await enforceActionAuth(env.DB, appId, manifest, { id: caller.id, login: caller.id, avatarUrl: null, roles: caller.roles });
+      // #535: a worker-forwarded grant is intrinsically app_bound to this one app — it never reaches
+      // `requireUser`/`principalFor`, but the context is correct to state regardless.
+      role = await enforceActionAuth(env.DB, appId, manifest, {
+        id: caller.id, login: caller.id, avatarUrl: null, roles: caller.roles,
+        credentialContext: { v: CREDENTIAL_CONTEXT_VERSION, kind: 'app_bound', appId: asAppId(appId) },
+      });
     } catch (e) {
       if (e instanceof HttpError) throw new WorkerCallError('Forbidden', `"${name}": ${e.message}`);
       throw e;

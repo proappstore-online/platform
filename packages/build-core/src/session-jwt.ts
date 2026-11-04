@@ -43,8 +43,37 @@ export interface SessionClaims {
    * refusal, not as a backwards-compatible wildcard.
    */
   step_up_rp_id?: string;
+  /**
+   * The verified credential context (#535, ADR-013's T05 prerequisite): which
+   * audience this session was minted to act as. A generic signed envelope —
+   * this package has no notion of account roles or team governance, so `kind`
+   * is an opaque string here; `@proappstore/backend`'s
+   * `lib/accounts/credential-context.ts` is the validated reader/writer for
+   * the three kinds it defines (first_party_session / workload_session /
+   * app_bound) and is the only place that string vocabulary is authoritative.
+   * Absent on every token minted before this field existed, and on any token
+   * whose minter chose not to assert one: a reader that cares about audience
+   * MUST treat that absence as "no verified context", never infer one from
+   * `via`, a header, a body field or an account/app selection.
+   */
+  cred?: CredentialContextClaim;
   iat: number;
   exp: number;
+}
+
+export interface CredentialContextClaim {
+  v: number;
+  kind: string;
+  /** Only meaningful for an app-bound kind; a non-app-bound claim must omit it. */
+  appId?: string;
+}
+
+/** The version this build mints. A reader rejects any other version rather than guessing its shape. */
+export const CREDENTIAL_CONTEXT_VERSION = 1;
+
+/** Build the claim for a session this package mints. `appId` only for an app-bound kind. */
+export function credentialContext(kind: string, appId?: string): CredentialContextClaim {
+  return appId !== undefined ? { v: CREDENTIAL_CONTEXT_VERSION, kind, appId } : { v: CREDENTIAL_CONTEXT_VERSION, kind };
 }
 
 /** Claims the caller supplies; iat/exp are filled in by mintSession. */

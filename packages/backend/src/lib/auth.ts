@@ -2,7 +2,8 @@ import type { Context } from 'hono';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { asAppId, asUserId } from './accounts/contract.js';
-import { authorize, classifyDivergence, LEGACY_MIN_ROLE_PERMISSION } from './accounts/authorize.js';
+import { authorize, classifyDivergence, LEGACY_MIN_ROLE_PERMISSION, type Principal } from './accounts/authorize.js';
+import { parseCredentialContext, type CredentialContext } from './accounts/credential-context.js';
 
 export class HttpError extends Error {
   constructor(
@@ -29,6 +30,14 @@ export interface FasUser {
   stepUpRpId?: string;
   /** Session `via` (#146): set when the session was minted without a person signing in, e.g. 'oidc-e2e'. Never a first-party control-plane credential. */
   via?: string;
+  /**
+   * The verified credential context (#535): parsed from the session's `cred` claim via
+   * `accounts/credential-context.ts`. `null` for any token with no valid claim — every token minted
+   * before this field existed, and any the issuer chose not to assert one for. Account-governance
+   * decisions must derive their `Principal` from this (see `principalFor`), never from `via`: `via`'s
+   * absence was the heuristic this field replaces.
+   */
+  credentialContext: CredentialContext | null;
   /** Per-app roles: { appId: ['moderator', ...] }. */
 }
 
@@ -54,7 +63,30 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     ...(typeof claims.auth_method === 'string' ? { authMethod: claims.auth_method } : {}),
     ...(typeof claims.step_up_rp_id === 'string' ? { stepUpRpId: claims.step_up_rp_id } : {}),
     ...(typeof claims.via === 'string' ? { via: claims.via } : {}),
+    credentialContext: parseCredentialContext(claims.cred),
   };
+}
+
+/**
+ * The account-authorization `Principal` for a verified user (#535). The ONE place `requireAppAccess`
+ * shadow mode and `routes/accounts.ts`'s `caller()` derive a credential kind from, so both read the
+ * same rule. A verified `credentialContext` wins; with none (a legacy token, or an issuer that
+ * asserted no context) the principal denies every governance permission — `isGovernance` in
+ * `contract.ts` — by presenting as `workload_session`, never `first_party_session`: this is a
+ * narrowing from the pre-#535 "no `via` ⇒ first-party" heuristic, not a widening, because nothing in
+ * production currently grants real access on this classification (ACCOUNTS_WRITE is off).
+ */
+export function principalFor(user: FasUser): Principal {
+  const ctx = user.credentialContext;
+  if (ctx) {
+    return {
+      userId: asUserId(user.id),
+      credential: ctx.kind,
+      boundAppId: ctx.appId ?? undefined,
+      platformAdmin: user.roles.includes('admin'),
+    };
+  }
+  return { userId: asUserId(user.id), credential: 'workload_session', platformAdmin: user.roles.includes('admin') };
 }
 
 const DEFAULT_STEP_UP_MAX_AGE_SECONDS = 300;
@@ -187,9 +219,7 @@ async function shadowObserve(c: Context<{ Bindings: Env }>, appId: string, minRo
     const user = await requireUser(c);
     const perm = LEGACY_MIN_ROLE_PERMISSION[minRole];
     if (!perm) return;
-    const decision = await authorize(c.env.DB, {
-      userId: asUserId(user.id), credential: user.via ? 'workload_session' : 'first_party_session', platformAdmin: user.roles.includes('admin'),
-    }, { kind: 'app', appId: asAppId(appId) }, perm);
+    const decision = await authorize(c.env.DB, principalFor(user), { kind: 'app', appId: asAppId(appId) }, perm);
     const klass = classifyDivergence(legacyAllowed, decision);
     if (klass !== 'match') console.warn(JSON.stringify({ event: 'authz_shadow_divergence', class: klass, app_id: appId, user_id: user.id, min_role: minRole, reason: decision.allowed ? 'allowed' : decision.reason }));
   } catch { /* observation only */ }

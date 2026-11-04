@@ -43,7 +43,7 @@ describe('app tokens (#154)', () => {
   it('verifies a live token: identity from the row, login from users, roles fixed to user', async () => {
     const db = mockD1(mockStmt({ first: row() }), mockStmt({ first: { login: 'octo', avatar_url: null } }));
     const v = await verifyAppToken(db, 'leads', 'pas_at_x', NOW);
-    expect(v.user).toEqual({ id: 'gh:7', login: 'octo', avatarUrl: null, roles: ['user'] });
+    expect(v.user).toEqual({ id: 'gh:7', login: 'octo', avatarUrl: null, roles: ['user'], credentialContext: { v: 1, kind: 'app_bound', appId: 'leads' } });
     expect(v.scopes).toEqual({ access: 'read', actions: null });
     expect(v.tokenHash).toBe(await sha256Hex('pas_at_x'));
     expect(v.tokenId).toBe('a'.repeat(32));

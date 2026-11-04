@@ -9,7 +9,7 @@
  * last hours not days, and never hold the admin role.
  */
 import { Hono } from 'hono';
-import { internalTokenOk, mintSession, type NewSession } from '@proappstore/build-core';
+import { credentialContext, internalTokenOk, mintSession, type NewSession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError, isAdminId, requireUser } from '../lib/auth.js';
 import { verifyGithubOidc, type OidcClaims } from '../lib/github-oidc.js';
@@ -127,8 +127,9 @@ oidcSessionRoutes.post('/auth/exchange/oidc', async (c) => {
     .bind(grant.user_id).first<{ id: string; login: string; avatar_url: string | null }>();
   if (!user) return c.json({ error: 'the granted e2e account no longer exists' }, 403);
 
-  // Never admin, whatever ADMIN_GITHUB_IDS says about the account.
-  const session: NewSession = { uid: user.id, login: user.login, avatarUrl: user.avatar_url ?? null, roles, via };
+  // Never admin, whatever ADMIN_GITHUB_IDS says about the account. #535: explicitly workload —
+  // never first-party — so this grant can never reach account governance, whatever `via` says.
+  const session: NewSession = { uid: user.id, login: user.login, avatarUrl: user.avatar_url ?? null, roles, via, cred: credentialContext('workload_session') };
   const sessionToken = await mintSession(session, c.env.SESSION_SIGNING_KEY, ttl);
   const now = Date.now();
   const runId = typeof claims.run_id === 'string' || typeof claims.run_id === 'number' ? String(claims.run_id) : null;

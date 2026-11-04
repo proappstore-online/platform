@@ -139,11 +139,12 @@ export const EXPLICIT_GRANTABLE: readonly Permission[] = ['app.data.manage'];
 // ---------------------------------------------------------------------------
 
 const CREDENTIAL_KINDS = [
-  'first_party_session', // an interactive PAS session JWT (no `via` claim)
-  'workload_session', // a session minted without a human present (`via`, e.g. oidc-e2e)
+  'first_party_session', // a session minted for a human control-plane sign-in, never bound to one app
+  'workload_session', // a session minted without a human present (e.g. oidc-e2e), or one with no verified context
   'app_bound', // a credential issued to one app: app-origin session, end-user app token, app-scoped MCP grant
 ] as const;
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+export const isCredentialKind = (v: unknown): v is CredentialKind => typeof v === 'string' && (CREDENTIAL_KINDS as readonly string[]).includes(v);
 
 /** Permissions a credential kind may EVER exercise, intersected with the person's rights. */
 export function credentialMayExercise(kind: CredentialKind, perm: Permission, resourceAppId: AppId | null, boundAppId: AppId | null): boolean {

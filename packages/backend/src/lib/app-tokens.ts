@@ -5,6 +5,8 @@
  * never reach kv, storage, roles, or the token-management routes themselves.
  */
 import { HttpError, type FasUser } from './auth.js';
+import { asAppId } from './accounts/contract.js';
+import { CREDENTIAL_CONTEXT_VERSION } from '@proappstore/build-core';
 
 export const TOKEN_PREFIX = 'pas_at_';
 export const MAX_SCOPED_ACTIONS = 50;
@@ -86,7 +88,12 @@ export async function verifyAppToken(db: D1Database, appId: string, bearer: stri
   let scopes: TokenScopes;
   try { scopes = parseScopes(row.scopes); } catch { throw new HttpError('invalid, expired or revoked app token', 401); }
   return {
-    user: { id: row.user_id, login: user?.login ?? row.user_id, avatarUrl: user?.avatar_url ?? null, roles: ['user'] },
+    // #535: this token is intrinsically app_bound to the one app it was verified for — it never
+    // reaches `requireUser`/`principalFor`, but the context is correct to state regardless.
+    user: {
+      id: row.user_id, login: user?.login ?? row.user_id, avatarUrl: user?.avatar_url ?? null, roles: ['user'],
+      credentialContext: { v: CREDENTIAL_CONTEXT_VERSION, kind: 'app_bound', appId: asAppId(appId) },
+    },
     scopes,
     tokenHash,
     tokenId: row.token_id,

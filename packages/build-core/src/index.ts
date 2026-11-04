@@ -25,8 +25,8 @@ export type {
   ProvisionLimitScope,
   ProvisionQuotaResult,
 } from './provision-rate-limit.js';
-export { mintSession, verifySession } from './session-jwt.js';
-export type { SessionClaims, NewSession } from './session-jwt.js';
+export { mintSession, verifySession, credentialContext, CREDENTIAL_CONTEXT_VERSION } from './session-jwt.js';
+export type { SessionClaims, NewSession, CredentialContextClaim } from './session-jwt.js';
 export {
   DEFAULT_TEMPLATE_ID,
   TEMPLATE_CATALOGUE,

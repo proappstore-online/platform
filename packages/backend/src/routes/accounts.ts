@@ -6,8 +6,10 @@
  * disabled route answers 404 `accounts_disabled`, indistinguishable from an unknown path.
  *
  * Authority comes from the verified session, never from the body. Governance needs a first-party
- * session (no `via` claim); an end-user app token is not a session JWT and cannot reach `requireUser`
- * at all. Each mutation is one guarded batch (lib/accounts/operations.ts): authority and version
+ * session — `caller()` derives its `Principal` from the session's verified credential context
+ * (`lib/auth.ts`'s `principalFor`, #535), never from the absence of a `via` claim. A personal app
+ * token (`pas_at_…`) is not a session JWT and cannot reach `requireUser` at all. Each mutation is one
+ * guarded batch (lib/accounts/operations.ts): authority and version
  * conditions live in the write's own WHERE clause, so a concurrent removal or demotion cannot
  * be raced past a precheck. Invitation secrets are hashed, shown once to the inviter, and never
  * logged, audited or stored in a receipt. No email is sent from this milestone.
@@ -15,9 +17,9 @@
 import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
-import { HttpError, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
+import { HttpError, principalFor, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import {
-  INVITABLE_ROLES, MANAGEABLE_TARGET_ROLES, asAccountId, asUserId, isAccountRole,
+  INVITABLE_ROLES, MANAGEABLE_TARGET_ROLES, asAccountId, isAccountRole,
   type AccountRole, type Permission,
 } from '../lib/accounts/contract.js';
 import { authorize, type Decision, type Principal } from '../lib/accounts/authorize.js';
@@ -64,10 +66,7 @@ interface Caller { user: FasUser; principal: Principal }
 
 async function caller(c: Context<{ Bindings: Env }>): Promise<Caller> {
   const user = await requireUser(c);
-  return {
-    user,
-    principal: { userId: asUserId(user.id), credential: user.via ? 'workload_session' : 'first_party_session', platformAdmin: user.roles.includes('admin') },
-  };
+  return { user, principal: principalFor(user) };
 }
 
 async function body(c: Context<{ Bindings: Env }>): Promise<Record<string, unknown>> {

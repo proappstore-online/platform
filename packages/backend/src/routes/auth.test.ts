@@ -339,11 +339,11 @@ function fakeDb(opts: { tools?: Record<string, unknown>; toolsByApp?: Record<str
           }
           if (/FROM users WHERE credential_login/i.test(sql)) {
             const u = users.find((x) => x.credential_login === (stmt._args[0] as string));
-            return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
+            return (u ? { id: u.id, login: u.login, password_hash: u.password_hash, credential_app_id: u.credential_app_id ?? null } : null) as T | null;
           }
           if (/FROM users WHERE credential_email/i.test(sql)) {
             const u = users.find((x) => x.credential_email === (stmt._args[0] as string));
-            return (u ? { id: u.id, login: u.login, password_hash: u.password_hash } : null) as T | null;
+            return (u ? { id: u.id, login: u.login, password_hash: u.password_hash, credential_app_id: u.credential_app_id ?? null } : null) as T | null;
           }
           if (/FROM users WHERE id = .* AND provider/i.test(sql)) {
             const u = users.find((x) => x.id === (stmt._args[0] as string));
@@ -648,6 +648,19 @@ describe('POST /v1/auth/credentials/login', () => {
     const claims = await verifySession(token, KEY);
     expect(claims?.auth_method).toBe('password');
     expect(claims?.auth_time).toBeGreaterThanOrEqual(before);
+  });
+
+  it('#535: stamps the credential context — first-party for a plain credential account, app_bound once it owns an app', async () => {
+    const db = fakeDb();
+    const prov = await (await provision({ login: 'wolf-wolf-wolf' }, db)).json() as { password: string };
+    const { token: firstPartyToken } = await (await login({ login: 'wolf-wolf-wolf', password: prov.password }, db)).json() as { token: string };
+    await expect(verifySession(firstPartyToken, KEY)).resolves.toMatchObject({ cred: { v: 1, kind: 'first_party_session' } });
+
+    // The same `credential_app_id` signal routes/accounts.ts already uses to refuse this account
+    // team ownership (team_owner_not_permitted) now also drives the session's credential context.
+    db._users[0]!.credential_app_id = 'chess-academy';
+    const { token: appBoundToken } = await (await login({ login: 'wolf-wolf-wolf', password: prov.password }, db)).json() as { token: string };
+    await expect(verifySession(appBoundToken, KEY)).resolves.toMatchObject({ cred: { v: 1, kind: 'app_bound', appId: 'chess-academy' } });
   });
 
   it('401s on a wrong password and on an unknown login (no enumeration)', async () => {
@@ -1394,6 +1407,75 @@ describe('OAuth callback — #pas_session fragment retirement (#196)', () => {
     stubGithub();
     const res = await fragmentCallback(APP, { RETIRE_FRAGMENT_DELIVERY: 'true' });
     expect(new URL(res.headers.get('location')!).hash).toMatch(/^#pas_session=/);
+  });
+
+  // #535: the verified credential context, derived the same way `roles` already is — from the
+  // destination, never a caller-supplied hint — so a reader can tell a first-party sign-in from an
+  // app-origin one without relying on the absence of a `via` claim.
+  function tokenOf(res: Response): string {
+    return decodeURIComponent(new URL(res.headers.get('location')!).hash.replace('#pas_session=', ''));
+  }
+
+  it('a first-party destination mints a first_party_session credential context', async () => {
+    stubGithub();
+    const res = await fragmentCallback(FIRST_PARTY);
+    await expect(verifySession(tokenOf(res), TEST_SK)).resolves.toMatchObject({ cred: { v: 1, kind: 'first_party_session' } });
+  });
+
+  it('an app subdomain destination mints app_bound to the REAL app resolved from the hostname — never the caller-supplied app_id', async () => {
+    stubGithub();
+    // `app_id` in state names a different app than the actual destination subdomain: the resolved
+    // audience must come from the verified hostname, never this unauthenticated hint, or a caller
+    // could mislabel which app a minted session claims to be bound to.
+    const res = await fragmentCallback(APP, {}, 'attacker-app');
+    await expect(verifySession(tokenOf(res), TEST_SK)).resolves.toMatchObject({ cred: { v: 1, kind: 'app_bound', appId: 'someapp' } });
+  });
+
+  it('an app subdomain that is a reserved platform host (e.g. "api") resolves to no app — never guesses one', async () => {
+    stubGithub();
+    const res = await fragmentCallback('https://api.proappstore.online/cb');
+    expect(await verifySession(tokenOf(res), TEST_SK)).toMatchObject({ uid: 'gh:4242' });
+    expect((await verifySession(tokenOf(res), TEST_SK))?.cred).toBeUndefined();
+  });
+
+  it('a custom domain destination mints app_bound to the app the domain is registered to, resolved independently from D1 by resolveAppOrigin', async () => {
+    stubGithub();
+    // `returnToAllowed`'s own check (`activeCustomDomainAllowed`) requires state's app_id to already
+    // match the domain's real owner, so a mismatched app_id can never reach the callback for a custom
+    // domain at all (unlike the plain-subdomain case covered above) — the state's app_id must be the
+    // real owner here. What this test actually guards is that the minted credential context comes
+    // from `resolveAppOrigin`'s OWN domain-keyed D1 lookup, not from forwarding that query parameter:
+    // flipping `realOwner` without updating the lookup table would fail this assertion.
+    const realOwner = 'chess-academy';
+    const customDb = {
+      prepare: (sql: string) => {
+        const stmt = {
+          _args: [] as unknown[],
+          bind(...a: unknown[]) { stmt._args = a; return stmt; },
+          async first() {
+            if (!/app_custom_domains/i.test(sql)) return null;
+            if (/app_id\s*=\s*\?1/i.test(sql)) {
+              // activeCustomDomainAllowed: app_id bound first.
+              const [appId, domain] = stmt._args as [string, string];
+              return appId === realOwner && domain === 'chessclubs.online' ? { 1: 1 } : null;
+            }
+            // resolveAppOrigin: domain bound first, no app_id in the query at all.
+            const [domain] = stmt._args as [string];
+            return domain === 'chessclubs.online' ? { app_id: realOwner } : null;
+          },
+          async run() { return { meta: { changes: 1 } }; },
+        };
+        return stmt;
+      },
+    };
+    const state = stateFor('https://chessclubs.online/cb', realOwner);
+    const res = await app.request(
+      `/v1/auth/github/callback?code=gh-code&state=${state}`,
+      { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },
+      makeEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'sec', APP_BASE: 'https://api.proappstore.online' }, customDb as never),
+    );
+    expect(res.status).toBe(302);
+    await expect(verifySession(tokenOf(res), TEST_SK)).resolves.toMatchObject({ cred: { v: 1, kind: 'app_bound', appId: realOwner } });
   });
 });
 

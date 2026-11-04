@@ -15,7 +15,7 @@
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { Hono } from 'hono';
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie';
-import { internalTokenOk, mintSession, verifySession, type NewSession, type SessionClaims, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from '@proappstore/build-core';
+import { credentialContext, internalTokenOk, mintSession, verifySession, type NewSession, type SessionClaims, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from '@proappstore/build-core';
 import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
@@ -31,6 +31,8 @@ import {
 import { claimAttempt, recordSuccess } from '../lib/credential-rate-limit.js';
 import { traceIdFromTraceparent } from '../lib/log-ingest.js';
 import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
+import { isReservedId } from './app-directory.js';
+import { APP_ID_RE } from './validation.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -206,6 +208,43 @@ async function activeCustomDomainAllowed(env: Env, appId: string | undefined, ho
      LIMIT 1`,
   ).bind(appId, wildcardBase).first();
   return Boolean(wildcard);
+}
+
+/**
+ * The real owning app for a session about to be delivered to `hostname` (#535, ADR-013's T05
+ * prerequisite) — or `null` when the destination is not one app's origin. Derived ONLY from the
+ * verified redirect destination, never from the caller-supplied `app_id` query parameter: that
+ * parameter is authenticated only on the custom-domain branch of `returnToAllowed` below (it must
+ * match a real `app_custom_domains` row) — on the plain `*.proappstore.online` subdomain branch
+ * `platformReturnToAllowed` accepts any hostname without ever checking `app_id` against it, so a
+ * caller could otherwise mislabel which app a minted session claims to be bound to. Failing to
+ * resolve an app here means the session asserts no audience at all (never a guessed one): the
+ * credential-context fallback (`lib/auth.ts`'s `principalFor`) still denies it every governance
+ * permission, so an unresolved app origin is narrowed, never widened.
+ */
+async function resolveAppOrigin(env: Env, hostname: string): Promise<string | null> {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  if (isFirstPartyHost(host)) return null;
+  const dot = host.indexOf('.');
+  if (dot > 0) {
+    const sub = host.slice(0, dot);
+    const apex = host.slice(dot + 1);
+    if (FIRST_PARTY_APEXES.has(apex) && APP_ID_RE.test(sub) && !isReservedId(sub)) return sub;
+  }
+  try {
+    const exact = await env.DB.prepare(
+      `SELECT app_id FROM app_custom_domains WHERE domain = ?1 AND status = 'active' LIMIT 1`,
+    ).bind(host).first<{ app_id: string }>();
+    if (exact) return exact.app_id;
+    const wildcardBase = dot > 0 ? host.slice(dot + 1) : '';
+    if (!wildcardBase) return null;
+    const wildcard = await env.DB.prepare(
+      `SELECT app_id FROM app_custom_domains WHERE domain = ?1 AND COALESCE(kind, 'exact') = 'wildcard' AND status = 'active' LIMIT 1`,
+    ).bind(wildcardBase).first<{ app_id: string }>();
+    return wildcard?.app_id ?? null;
+  } catch {
+    return null; // a failed lookup asserts no audience — never a guessed one.
+  }
 }
 
 /** return_to must be one of our own origins — prevents the callback becoming an open redirect. */
@@ -441,7 +480,15 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     // keep working with a plain `user` token. Only first-party PAS surfaces
     // (console/dashboard/admin/agents/apex/localhost) receive elevated roles.
     const roles = isFirstPartyHost(dest.hostname) ? rolesFor(userId, c.env) : ['user'];
-    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles, auth_time: Math.floor(Date.now() / 1000), auth_method: provider };
+    // #535: the same first-party/app-origin split that decides `roles` also decides the verified
+    // credential context — an app-origin destination gets `app_bound` to the REAL app resolved from
+    // the destination (never the caller-supplied `app_id`), never first-party. When no app can be
+    // resolved (e.g. an intermediate broker hop) the session asserts no audience, which denies
+    // governance by default rather than guessing one.
+    const cred = isFirstPartyHost(dest.hostname)
+      ? credentialContext('first_party_session')
+      : await resolveAppOrigin(c.env, dest.hostname).then((resolved) => resolved ? credentialContext('app_bound', resolved) : undefined);
+    const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles, auth_time: Math.floor(Date.now() / 1000), auth_method: provider, ...(cred ? { cred } : {}) };
 
     // SECURITY (#87, #110): `query` no longer means "the token, in the query
     // string". It means "a one-time code, redeemed server-to-server". A query
@@ -906,9 +953,9 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   // the other column.
   const row = await c.env.DB.prepare(
     byEmail
-      ? 'SELECT id, login, password_hash FROM users WHERE credential_email = ?'
-      : 'SELECT id, login, password_hash FROM users WHERE credential_login = ?',
-  ).bind(login).first<{ id: string; login: string; password_hash: string | null }>();
+      ? 'SELECT id, login, password_hash, credential_app_id FROM users WHERE credential_email = ?'
+      : 'SELECT id, login, password_hash, credential_app_id FROM users WHERE credential_login = ?',
+  ).bind(login).first<{ id: string; login: string; password_hash: string | null; credential_app_id: string | null }>();
 
   // Always run one PBKDF2 pass — against a fixed dummy hash when the login (or
   // its hash) is absent — so response timing doesn't reveal whether the account
@@ -932,8 +979,15 @@ authRoutes.post('/auth/credentials/login', async (c) => {
   await recordSuccess(c.env.DB, login);
   await c.env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, row.id).run();
 
-  // Credential accounts are plain users (never 'creator'/'admin').
-  const session: NewSession = { uid: row.id, login: row.login, avatarUrl: null, roles: ['user'], auth_time: Math.floor(now / 1000), auth_method: 'password' };
+  // Credential accounts are plain users (never 'creator'/'admin'). #535: `credential_app_id` is the
+  // same signal `routes/accounts.ts` already uses to refuse an app-bound credential ownership of a
+  // team ("team_owner_not_permitted") — a non-null value makes this session app_bound to that app; an
+  // adult self-provisioned without OAuth (0042, `credential_app_id IS NULL`) is first-party, exactly
+  // like an OAuth sign-in, because they are a human PAS login with no owning app.
+  const session: NewSession = {
+    uid: row.id, login: row.login, avatarUrl: null, roles: ['user'], auth_time: Math.floor(now / 1000), auth_method: 'password',
+    cred: row.credential_app_id ? credentialContext('app_bound', row.credential_app_id) : credentialContext('first_party_session'),
+  };
   const token = await mintSession(session, c.env.SESSION_SIGNING_KEY);
   return c.json({ token });
 });
@@ -1078,7 +1132,8 @@ authRoutes.post('/auth/exchange', async (c) => {
        avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at`,
   ).bind(userId, String(ghUser.id), ghUser.login, ghUser.email ?? null, ghUser.avatar_url ?? null, now).run();
 
-  const claims: NewSession = { uid: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null, roles: rolesFor(userId, c.env), auth_time: Math.floor(now / 1000), auth_method: 'github' };
+  // #535: the PAS CLI device-token exchange is always first-party — there is no app origin here.
+  const claims: NewSession = { uid: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null, roles: rolesFor(userId, c.env), auth_time: Math.floor(now / 1000), auth_method: 'github', cred: credentialContext('first_party_session') };
   const sessionToken = await mintSession(claims, c.env.SESSION_SIGNING_KEY);
   return c.json({ sessionToken, user: { id: userId, login: ghUser.login, avatarUrl: ghUser.avatar_url ?? null } });
 });

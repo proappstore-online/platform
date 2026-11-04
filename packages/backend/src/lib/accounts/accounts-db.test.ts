@@ -1,4 +1,4 @@
-import { mintSession } from '@proappstore/build-core';
+import { credentialContext, mintSession, type CredentialContextClaim } from '@proappstore/build-core';
 import { describe, expect, it } from 'vitest';
 import { accountRoutes } from '../../routes/accounts.js';
 import { sqliteD1 } from '../../sqlite-d1.js';
@@ -19,8 +19,19 @@ function world(flags: Partial<Env> = { ACCOUNTS_WRITE: '1' }) {
     const cols = (await all<{ name: string; notnull: number; dflt_value: string | null }>('PRAGMA table_info(apps)')).filter((c) => c.notnull && c.dflt_value === null && !['id', 'creator_id'].includes(c.name)).map((c) => c.name);
     await db.prepare(`INSERT INTO apps (id, creator_id, ${cols.join(',')}) VALUES (?, ?, ${cols.map(() => '?').join(',')})`).bind(id, creator, ...cols.map((c) => (/_at$/.test(c) ? 1 : `${id}-${c}`))).run();
   };
-  const call = async (method: string, path: string, uid: string, body?: unknown, headers: Record<string, string> = {}, via?: string) => {
-    const token = await mintSession({ uid, login: uid, avatarUrl: null, roles: ['user'], ...(via ? { via } : {}), auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, KEY);
+  // #535: every route call in this file goes through the real `caller()`, which derives its
+  // `Principal` from the session's verified `cred` claim — defaulting here to first-party, since
+  // that's what the overwhelming majority of these tests exercise. Pass `cred` explicitly to test a
+  // different kind (app-bound, workload, or — via `noCred: true` — a legacy token with no claim at
+  // all, which must deny governance exactly like an unrecognised kind).
+  const call = async (
+    method: string, path: string, uid: string, body?: unknown, headers: Record<string, string> = {},
+    opts: { cred?: CredentialContextClaim; noCred?: boolean } = {},
+  ) => {
+    const token = await mintSession({
+      uid, login: uid, avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github',
+      ...(opts.noCred ? {} : { cred: opts.cred ?? credentialContext('first_party_session') }),
+    }, KEY);
     const res = await accountRoutes.request(path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }, env);
     return { res, status: res.status, json: (await res.json().catch(() => null)) as any };
   };
@@ -170,9 +181,17 @@ describe('routes: flags and credentials', () => {
   it('a non-interactive session and an app-bound credential account cannot create or own a team', async () => {
     const w = world();
     await w.user('gh:a'); await w.user('gh:bot', { credentialApp: 'some-app' });
-    expect((await w.call('POST', '/accounts', 'gh:a', { name: 'Team A' }, w.idem(), 'oidc-e2e')).json.error.code).toBe('credential_scope');
-    expect((await w.call('POST', '/accounts', 'gh:bot', { name: 'Team A' }, w.idem())).json.error.code).toBe('team_owner_not_permitted');
+    expect((await w.call('POST', '/accounts', 'gh:a', { name: 'Team A' }, w.idem(), { cred: credentialContext('workload_session') })).json.error.code).toBe('credential_scope');
+    // gh:bot's real session (minted at /auth/credentials/login) would carry app_bound to its owning
+    // app — the credential_scope check now catches it directly, before the credential_app_id lookup
+    // that used to be the only thing standing between it and team ownership.
+    expect((await w.call('POST', '/accounts', 'gh:bot', { name: 'Team A' }, w.idem(), { cred: credentialContext('app_bound', 'some-app') })).json.error.code).toBe('credential_scope');
+    // gh:ghost has no `users` row at all: a first-party session for an id the DB has never seen still
+    // falls back to the credential_app_id lookup (the fail-closed secondary guard), not to governance.
     expect((await w.call('POST', '/accounts', 'gh:ghost', { name: 'Team A' }, w.idem())).json.error.code).toBe('team_owner_not_permitted');
+    // And a legacy token with no verified credential context at all — the exact case #535 exists to
+    // stop being trusted as first-party — is denied before reaching either check.
+    expect((await w.call('POST', '/accounts', 'gh:a', { name: 'Team A' }, w.idem(), { noCred: true })).json.error.code).toBe('credential_scope');
     expect(await w.all('SELECT id FROM accounts')).toEqual([]);
   });
 

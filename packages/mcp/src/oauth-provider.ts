@@ -4,7 +4,7 @@
  * State is supplied by the serialized SQLite OAuthState authority.
  */
 
-import { mintSession, verifySession } from "./session.js";
+import { credentialContext, mintSession, verifySession } from "./session.js";
 import type { NewSession } from "./session.js";
 
 const AUTH_NONCE_COOKIE = "pas_mcp_oauth_nonce";
@@ -17,6 +17,16 @@ const DEFAULT_REFRESH_TTL_SECONDS = 30 * 86_400;
 const REFRESH_RETRY_SECONDS = 30;
 interface RotationResponse { access_token: string; token_type: string; expires_in: number; refresh_token: string }
 type AuthProvider = typeof AUTH_PROVIDERS[number];
+
+/**
+ * The credential context for a session this provider mints or stores, from its OWN certain resource
+ * binding (#535, ADR-013's T05 prerequisite) — never from whatever `cred` the original session
+ * happened to carry. `appId` is this grant's resolved audience: `null` for the shared `/mcp` endpoint
+ * (a direct human consent, first-party), a real id for `/mcp/apps/<id>` (that one app, never another).
+ */
+function mcpCredentialContext(appId: string | null) {
+  return appId ? credentialContext("app_bound", appId) : credentialContext("first_party_session");
+}
 
 export interface OAuthTokenResolution {
   session: string;
@@ -766,15 +776,22 @@ async function authorizationCodeGrant(body: URLSearchParams, config: OAuthConfig
   // re-mint unprivileged claims; elevated roles remain bounded by this expiry.
   const claims = await verifySession(codeData.session, config.sessionSigningKey);
   if (!claims) return json({ error: "invalid_grant" }, 400);
+  // #535: the certain resource binding this authorization itself carries (`codeData.appId`) replaces
+  // whatever `cred` the original browser-side session asserted — never the other way around. Without
+  // this, the FIRST access token's underlying session would keep whatever ambiguous or absent context
+  // it had at browser sign-in time, even though this grant's own appId is now known for certain.
+  const ttlSeconds = Math.max(1, claims.exp - Math.floor(Date.now() / 1000));
+  const seed: NewSession = { ...sessionSeed(claims), cred: mcpCredentialContext(codeData.appId ?? null) };
+  const session = await mintSession(seed, config.sessionSigningKey, ttlSeconds);
   const refreshToken = await issueRefreshToken(config, {
-    claims: sessionSeed(claims), clientId, appId: codeData.appId ?? null,
+    claims: seed, clientId, appId: codeData.appId ?? null,
     familyId, privilegedUntil: claims.exp,
   });
-  const expiresIn = Math.min(86_400, claims.exp - Math.floor(Date.now() / 1000));
+  const expiresIn = Math.min(86_400, ttlSeconds);
   // The access token carries its family only when a grant exists to revoke (#457).
   await config.kv.put(
     `token:${accessToken}`,
-    JSON.stringify({ session: codeData.session, appId: codeData.appId ?? null, familyId, clientId }),
+    JSON.stringify({ session, appId: codeData.appId ?? null, familyId, clientId }),
     { expirationTtl: expiresIn },
   );
   await writeGrant(config, claims.uid, codeData.appId ?? null, familyId, clientId);
