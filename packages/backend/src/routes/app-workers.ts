@@ -2,15 +2,47 @@
  * App workers (#253, ADR-009): deploy, admin flag, owner status/removal/rotation.
  *
  * Prototype gate (ADR-009 §5): a worker deploys and runs only for an app whose
- * `app_workers.enabled` flag a platform admin turned on, the flag can be turned
- * on only for a first-party app (owner in ADMIN_GITHUB_IDS), and at most
- * `APP_WORKER_CAP` apps hold it at once. The cap reads from the env var of the
- * same name (`parseAppWorkerCap`, below), default 5; raising it is Serge's call
- * (#516), not something to change here.
+ * `app_workers.enabled` flag is on. Who may turn it on, and whether a cap
+ * applies, depends on `APP_WORKER_OWNER_SELF_SERVE` (#267 item 10,
+ * `appWorkerOwnerSelfServeOpen`, lib/app-worker-usage.ts):
  *
- *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle
- *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate and checks, needs a recent sign-in (#406, #440)
- *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — off runs remove()
+ * - **off** (default): only a platform admin may turn the flag on
+ *   (`PUT /admin/.../worker-enabled`), only for a first-party app (owner in
+ *   `ADMIN_GITHUB_IDS`), and at most `APP_WORKER_CAP` apps hold it at once.
+ *   The cap reads from the env var of the same name (`parseAppWorkerCap`,
+ *   below), default 5.
+ * - **on**: the app's own owner may turn the flag on for their own app
+ *   (`PUT /apps/:appId/worker-enabled`, no admin action), for any app, and
+ *   the cap no longer applies. The admin route keeps working the same way,
+ *   also freed of the first-party/cap restriction, so an admin can still act
+ *   on any app directly. A verified deploy (OIDC or owner session) for an app
+ *   that has NEVER been enabled auto-enables it the same way, so an existing
+ *   CI workflow that only ever calls the deploy route (no separate enable
+ *   step) starts working with no change on the app's side.
+ *
+ * An explicit admin kill switch — `{enabled:false}` on the admin route, which
+ * stamps `app_workers.admin_disabled_at`/`admin_disabled_by` — is **never**
+ * cleared by a non-admin path, open or not: not the owner route, not
+ * deploy-time auto-enable. Only `{enabled:true}` on the admin route clears it.
+ * Owner self-disable (`DELETE`, or `{enabled:false}` on the owner route) never
+ * sets it — that is the owner's own choice, not a platform action, and stays
+ * owner-reversible. A disable from before this column existed, with no record
+ * distinguishing who disabled it, reads as admin-killed (migration 0125's
+ * conservative backfill): a human reviews the small population that affects,
+ * once, via the admin route, rather than guessing a historical disable was
+ * safe to treat as the owner's own.
+ *
+ * Unconditional on every setting above, because they are safety controls, not
+ * eligibility: the #275 account ceiling (`appWorkersOpen` — closes *new*
+ * enables only; running apps are unaffected), per-app daily quotas, and every
+ * runtime isolation/CPU/subrequest/egress control (lib/app-worker-host.ts,
+ * lib/app-worker-egress.ts). Re-enabling, by any path, never touches schedule
+ * breaker state (`scheduled_action_state`) — a paused schedule stays paused.
+ *
+ *   PUT    /v1/apps/:appId/worker/oidc            the app's main-branch workflow uploads its bundle; auto-enables a never-enabled app (#267 item 10)
+ *   PUT    /v1/apps/:appId/worker?sha=&ref=       owner: uploads the bundle from a session, same gate, checks and auto-enable, needs a recent sign-in (#406, #440)
+ *   PUT    /v1/apps/:appId/worker-enabled         owner: { enabled } — on needs APP_WORKER_OWNER_SELF_SERVE and no admin kill switch; off runs remove(), never sets one (#267 item 10)
+ *   PUT    /v1/admin/apps/:appId/worker-enabled   admin: { enabled } — on always clears a kill switch; off sets one
  *   GET    /v1/apps/:appId/worker                 owner: status, last deploy, last 20 deploys and invocations, schedules
  *   DELETE /v1/apps/:appId/worker                 owner: disable + remove()
  *   POST   /v1/apps/:appId/worker/rotate          owner: rotate token + event key
@@ -35,7 +67,7 @@ import { readCapped } from './hooks.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
 import type { AppWorkerExports } from '../lib/app-worker-host.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
-import { AppWorkerQuotaError, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
+import { AppWorkerQuotaError, appWorkerOwnerSelfServeOpen, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
 
 /** One manual run per schedule per minute (#255). */
 const RUN_NOW_INTERVAL_MS = 60_000;
@@ -66,17 +98,37 @@ async function recordDeploy(
 /**
  * Deploy an uploaded bundle: the admin flag before anything is read or stored,
  * then `parseBundle`, then the host. Every attempt is recorded in app_worker_deploys.
+ *
+ * #267 item 10: a verified deploy for an app that has NEVER been enabled — `enabled_at IS NULL`,
+ * never admin-killed, never owner-disabled; "never enabled" is not "currently disabled" — may
+ * auto-enable itself the same way an explicit owner self-serve call would, when
+ * `APP_WORKER_OWNER_SELF_SERVE` is open. This is what makes an existing CI workflow that already
+ * calls only this route (Hiring's does) work without a separate enable step or any admin action.
+ * `enableAppWorker` re-derives every eligibility and safety check (first-party/cap when the
+ * rollout is closed, the #275 ceiling, the admin kill switch) exactly as the explicit routes do —
+ * nothing here is a second, looser path.
  */
 async function deployBundle(
   c: Context<{ Bindings: Env }>, appId: string, source: { repository: string; ref?: string | undefined; sha?: string | undefined },
 ): Promise<Response> {
   // The flag before anything is read or stored: a disabled app uploads nothing.
-  const flag = await c.env.DB.prepare(
-    'SELECT w.enabled FROM app_workers w INNER JOIN apps a ON a.id = w.app_id WHERE w.app_id = ?',
-  ).bind(appId).first<{ enabled: number }>();
-  if (flag?.enabled !== 1) {
-    await recordDeploy(c.env, appId, source, 'refused', 'app workers are not enabled for this app');
-    throw new HttpError('app workers are not enabled for this app', 403);
+  const current = await c.env.DB.prepare(
+    'SELECT w.enabled, w.enabled_at, w.admin_disabled_at, a.creator_id FROM apps a LEFT JOIN app_workers w ON w.app_id = a.id WHERE a.id = ?',
+  ).bind(appId).first<{ enabled: number | null; enabled_at: number | null; admin_disabled_at: number | null; creator_id: string } | undefined>();
+
+  if (current?.enabled !== 1) {
+    const neverEnabled = !!current && current.enabled_at === null && current.admin_disabled_at === null;
+    if (!neverEnabled || !appWorkerOwnerSelfServeOpen(c.env)) {
+      await recordDeploy(c.env, appId, source, 'refused', 'app workers are not enabled for this app');
+      throw new HttpError('app workers are not enabled for this app', 403);
+    }
+    try {
+      await enableAppWorker(c, appId, current.creator_id, { isAdmin: false, onlyNeverEnabled: true });
+    } catch (e) {
+      const status = e instanceof HttpError ? e.status : 500;
+      await recordDeploy(c.env, appId, source, status < 500 ? 'refused' : 'failed', `auto-enable: ${String((e as Error)?.message ?? e)}`);
+      throw e;
+    }
   }
 
   const host = appWorkerHost(c.env);
@@ -128,43 +180,117 @@ appWorkerRoutes.put('/apps/:appId/worker', async (c) => {
   return deployBundle(c, appId, { repository: `session:${user.id}`, sha, ref });
 });
 
+/**
+ * Turn `app_workers.enabled` on for `appId`, as `actorId` (#267 item 10). Shared by the admin
+ * route, the owner self-serve route and deploy-time auto-enable, so none of the three paths can
+ * diverge on the checks that matter: an admin kill switch always wins over a non-admin actor,
+ * first-party-only + the cap of 5 when `APP_WORKER_OWNER_SELF_SERVE` is off, and always the #275
+ * account ceiling. The caller has already established who `actorId` is and that they are allowed
+ * to act on this app at all (`requireAdmin` / `requireAppOwner` / a verified OIDC deploy for this
+ * app's own repo) — this function only re-checks eligibility.
+ */
+async function enableAppWorker(c: Context<{ Bindings: Env }>, appId: string, actorId: string, caller: { isAdmin: boolean; onlyNeverEnabled?: boolean }): Promise<Response> {
+  const app = await c.env.DB.prepare(
+    'SELECT a.creator_id, w.admin_disabled_at FROM apps a LEFT JOIN app_workers w ON w.app_id = a.id WHERE a.id = ?',
+  ).bind(appId).first<{ creator_id: string; admin_disabled_at: number | null }>();
+  if (!app) throw new HttpError('app not found', 404);
+
+  // #267 item 10: an explicit admin kill switch (or a historical disable the migration conservatively
+  // treated as one, for lack of any record distinguishing it) only an admin may clear — never a
+  // non-admin actor, self-serve open or not, and never deploy-time auto-enable.
+  if (!caller.isAdmin && app.admin_disabled_at !== null) {
+    throw new HttpError('this app worker was disabled by a platform admin and needs an admin to re-enable it', 403);
+  }
+
+  const openAccess = appWorkerOwnerSelfServeOpen(c.env);
+  if (!openAccess && !isAdminId(app.creator_id, c.env)) {
+    throw new HttpError('app workers are limited to first-party apps during the prototype', 403);
+  }
+  // #275: the account guard closes new enables; an app already enabled stays as it is. Unconditional
+  // on openAccess — the ceiling is a safety control, not part of the eligibility policy it replaces.
+  const already = await c.env.DB.prepare('SELECT 1 AS on_ FROM app_workers WHERE app_id = ? AND enabled = 1').bind(appId).first();
+  if (!already && !(await appWorkersOpen(c.env))) throw new HttpError('app workers are closed to new apps (account ceiling)', 409);
+  // One statement, so two concurrent enables cannot both take the last slot. openAccess drops the
+  // cap (#267 item 10) by making the slot count effectively unbounded, rather than forking the SQL.
+  //
+  // The admin-kill-switch check above is a point-in-time read — a concurrent admin disable could
+  // land between it and this write. For a non-admin actor the UPDATE branch's own WHERE clause
+  // re-asserts `admin_disabled_at IS NULL` atomically, so that race can never clear a marker that
+  // exists by the time this statement actually runs; only the admin branch may unconditionally
+  // clear it, because only an admin may ever clear it at all.
+  const now = Date.now();
+  const cap = openAccess ? Number.MAX_SAFE_INTEGER : parseAppWorkerCap(c.env.APP_WORKER_CAP);
+  const res = await c.env.DB.prepare(
+    caller.isAdmin
+      ? `INSERT INTO app_workers (app_id, enabled, enabled_by, enabled_at, admin_disabled_at, admin_disabled_by)
+         SELECT ?1, 1, ?2, ?3, NULL, NULL
+          WHERE (SELECT COUNT(*) FROM app_workers WHERE enabled = 1 AND app_id <> ?1) < ?4
+         ON CONFLICT(app_id) DO UPDATE SET enabled = 1, enabled_by = excluded.enabled_by, enabled_at = excluded.enabled_at,
+           admin_disabled_at = NULL, admin_disabled_by = NULL`
+      : `INSERT INTO app_workers (app_id, enabled, enabled_by, enabled_at, admin_disabled_at, admin_disabled_by)
+         SELECT ?1, 1, ?2, ?3, NULL, NULL
+          WHERE (SELECT COUNT(*) FROM app_workers WHERE enabled = 1 AND app_id <> ?1) < ?4
+         ON CONFLICT(app_id) DO UPDATE SET enabled = 1, enabled_by = excluded.enabled_by, enabled_at = excluded.enabled_at
+          WHERE app_workers.admin_disabled_at IS NULL
+            ${caller.onlyNeverEnabled ? 'AND app_workers.enabled_at IS NULL' : ''}`,
+  ).bind(appId, actorId, now, cap).run();
+  if (!res.meta.changes) {
+    // Distinguish, for a non-admin actor only, a kill switch that landed between the earlier read
+    // and this write from a genuine cap/ceiling refusal — the admin branch has no such guard, so
+    // this re-check only ever applies to the owner/auto-enable paths.
+    if (!caller.isAdmin) {
+      const still = await c.env.DB.prepare('SELECT admin_disabled_at FROM app_workers WHERE app_id = ?').bind(appId).first<{ admin_disabled_at: number | null }>();
+      if (still?.admin_disabled_at !== null && still?.admin_disabled_at !== undefined) {
+        throw new HttpError('this app worker was disabled by a platform admin and needs an admin to re-enable it', 403);
+      }
+    }
+    if (caller.onlyNeverEnabled) throw new HttpError('the app worker changed during auto-enable; retry or explicitly enable it', 409);
+    throw new HttpError(`app worker cap reached (${cap})`, 409);
+  }
+  // #428: enabling the worker is the app going live — what is staged becomes callable.
+  const [promoted] = await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId),
+    // Recorded (#429), so a later deploy registers live even if the worker is disabled again.
+    c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)').bind(appId, now, actorId),
+  ]);
+  return c.json({ ok: true, enabled: true, promoted: promoted?.meta?.changes ?? 0 });
+}
+
 appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {
   const admin = await requireAdmin(c);
   const appId = c.req.param('appId');
   const body = await c.req.json<{ enabled?: unknown }>().catch(() => null);
   if (typeof body?.enabled !== 'boolean') throw new HttpError('body must be { "enabled": true | false }', 400);
+  if (!body.enabled) {
+    await disableAppWorker(c.env, appId, { by: admin.id, now: Date.now() });
+    return c.json({ ok: true, enabled: false });
+  }
+  return enableAppWorker(c, appId, admin.id, { isAdmin: true });
+});
 
-  const app = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?').bind(appId).first<{ creator_id: string }>();
-  if (!app) throw new HttpError('app not found', 404);
-
+/**
+ * Owner self-serve enable (#267 item 10). Exists on every deployment; inert (403) unless
+ * `APP_WORKER_OWNER_SELF_SERVE` is on, and always refuses over an admin kill switch
+ * (`enableAppWorker`). Disabling needs no rollout flag and never sets the kill switch — an owner
+ * could already self-disable via `DELETE /apps/:appId/worker`; this just accepts the same shape
+ * for symmetry. Turning it on is a step-up action like the owner bundle upload (#406, #440): a
+ * leaked session should not be able to light up server code for an app it did not already have one
+ * running on.
+ */
+appWorkerRoutes.put('/apps/:appId/worker-enabled', async (c) => {
+  const appId = c.req.param('appId');
+  const user = await requireAppOwner(c, appId);
+  const body = await c.req.json<{ enabled?: unknown }>().catch(() => null);
+  if (typeof body?.enabled !== 'boolean') throw new HttpError('body must be { "enabled": true | false }', 400);
   if (!body.enabled) {
     await disableAppWorker(c.env, appId);
     return c.json({ ok: true, enabled: false });
   }
-
-  if (!isAdminId(app.creator_id, c.env)) {
-    throw new HttpError('app workers are limited to first-party apps during the prototype', 403);
+  if (!appWorkerOwnerSelfServeOpen(c.env)) {
+    throw new HttpError('self-service app-worker enablement is not open yet', 403);
   }
-  // #275: the account guard closes new enables; an app already enabled stays as it is.
-  const already = await c.env.DB.prepare('SELECT 1 AS on_ FROM app_workers WHERE app_id = ? AND enabled = 1').bind(appId).first();
-  if (!already && !(await appWorkersOpen(c.env))) throw new HttpError('app workers are closed to new apps (account ceiling)', 409);
-  // One statement, so two concurrent enables cannot both take the last slot.
-  const now = Date.now();
-  const cap = parseAppWorkerCap(c.env.APP_WORKER_CAP);
-  const res = await c.env.DB.prepare(
-    `INSERT INTO app_workers (app_id, enabled, enabled_by, enabled_at)
-     SELECT ?1, 1, ?2, ?3
-      WHERE (SELECT COUNT(*) FROM app_workers WHERE enabled = 1 AND app_id <> ?1) < ?4
-     ON CONFLICT(app_id) DO UPDATE SET enabled = 1, enabled_by = excluded.enabled_by, enabled_at = excluded.enabled_at`,
-  ).bind(appId, admin.id, now, cap).run();
-  if (!res.meta.changes) throw new HttpError(`app worker cap reached (${cap})`, 409);
-  // #428: enabling the worker is the app going live — what is staged becomes callable.
-  const [promoted] = await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId),
-    // Recorded (#429), so a later deploy registers live even if the worker is disabled again.
-    c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)').bind(appId, now, admin.id),
-  ]);
-  return c.json({ ok: true, enabled: true, promoted: promoted?.meta?.changes ?? 0 });
+  requireRecentAuth(user, c.env);
+  return enableAppWorker(c, appId, user.id, { isAdmin: false });
 });
 
 appWorkerRoutes.get('/apps/:appId/worker', async (c) => {

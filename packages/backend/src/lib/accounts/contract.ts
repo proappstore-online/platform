@@ -229,6 +229,7 @@ const OWNER_ONLY = 'requireAppOwner: owner-level publisher action';
 /** Keys are repo-relative paths. A test fails when a source file using an ownership gate is missing here. */
 export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/auth.ts': live('the gate itself: creator_id, team_members, platform-admin bypass'),
+  'packages/backend/src/lib/app-worker-host.ts': live('disableAppWorker persists the administrator kill switch; callers establish owner/admin authority before invoking it'),
   'packages/backend/src/lib/operation-log.ts': live('owner flag decides who sees an operation'),
   'packages/backend/src/lib/operator-audit-marks.ts': live('wraps requireAppOwner and remembers the owner for the refusal audit'),
   'packages/backend/src/lib/provision-data.ts': hist('INSERT apps.creator_id at provisioning; dev_profiles seed'),
@@ -240,7 +241,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/analytics.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/app-billing-account.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/app-directory.ts': proj('directory is_owner and owned-app list'),
-  'packages/backend/src/routes/app-workers.ts': live('owner gate, plus ADMIN_GITHUB_IDS check on the creator: the ADR-009 platform-trust gate, unchanged by this milestone'),
+  'packages/backend/src/routes/app-workers.ts': live('owner and verified repository deployment gates; self-service eligibility, administrator kill switch, and prototype fallback when disabled'),
   'packages/backend/src/routes/apps.ts': proj('owned/team app lists; the PUT owner check at ~214 is live authorization'),
   'packages/backend/src/routes/connectors.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/data-import.ts': live(OWNER_ONLY),

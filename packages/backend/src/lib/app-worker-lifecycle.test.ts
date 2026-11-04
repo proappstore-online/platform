@@ -62,7 +62,10 @@ function fakeDb(): D1Database {
       }
       return { changes: 1 };
     }
-    if (s.startsWith('UPDATE app_workers SET enabled = 0')) { if (worker) worker.enabled = 0; return { changes: 1 }; }
+    if (s.startsWith('INSERT INTO app_workers (app_id, enabled, enabled_at)')) {
+      if (worker) { worker.enabled = 0; worker.enabled_at ??= args[1]; }
+      return { changes: 1 };
+    }
     if (s.startsWith('SELECT count FROM app_log_usage')) return { first: null };
     if (s.startsWith('INSERT INTO app_log_usage')) return { changes: 1 };
     // #275: the invocation reservation and the finished invocation's metering (lib/app-worker-usage.test.ts covers them).

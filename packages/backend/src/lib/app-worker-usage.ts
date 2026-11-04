@@ -225,6 +225,19 @@ export async function appWorkerUsage(env: Pick<Env, 'DB'>, appId: string, days: 
 
 // ── The account guard ───────────────────────────────────────────────────────
 
+/**
+ * `APP_WORKER_OWNER_SELF_SERVE` (#267 item 10): whether an app's own owner — not only a platform
+ * admin — may turn the app-worker flag on for an app that is not first-party, and whether the hard
+ * cap of 5 still applies to new enables. Unset or anything other than `'1'`/`'true'`: off, the
+ * exact prototype-gate behavior from before #267 item 10 (admin-only, first-party-only, capped at
+ * 5). This is a reversible eligibility switch, not a safety control: the #275 account ceiling
+ * (`appWorkersOpen`), per-app quotas, the per-app kill switch and every runtime isolation/limit/
+ * egress control apply identically whether this is on or off.
+ */
+export function appWorkerOwnerSelfServeOpen(env: Pick<Env, 'APP_WORKER_OWNER_SELF_SERVE'>): boolean {
+  return env.APP_WORKER_OWNER_SELF_SERVE === '1' || env.APP_WORKER_OWNER_SELF_SERVE === 'true';
+}
+
 /** Whether new apps may be enabled (APP_WORKER_OPEN). A missing row reads as closed. */
 export async function appWorkersOpen(env: Pick<Env, 'DB'>): Promise<boolean> {
   const row = await env.DB.prepare('SELECT open FROM app_worker_platform WHERE id = 1').first<{ open: number }>();

@@ -10,10 +10,15 @@ GitHub, a webhook from Stripe, a server-side route that holds an API key. The
 design and its constraints are [ADR-009](./adr/009-app-workers.md); this page is
 the developer reference.
 
-::: warning Prototype
-App workers run only for apps a platform admin has enabled (at most 5, first-party
-apps only), and no production app is enabled yet. Deploys for any other app are
-refused with `403 app workers are not enabled for this app`.
+::: info Owner deployment
+App owners can deploy workers through their existing main-branch GitHub OIDC
+workflow. With `APP_WORKER_OWNER_SELF_SERVE=1`, the first verified deployment
+automatically enables a never-enabled app, including existing Google-owned apps.
+An explicit owner or administrator stop is never undone by redeploying. An owner
+can explicitly reverse their own stop; only an administrator can clear an
+administrator stop. Quotas, the account ceiling, isolation and runtime limits remain
+in force. The owner-approved release decision supersedes the earlier fixed
+observation wait; see [ADR-009 §6](./adr/009-app-workers.md#_6-exit-criteria).
 :::
 
 ## What the worker is
@@ -502,18 +507,24 @@ pas hook deliveries github --status failed
 pas secret set GITHUB_TOKEN             # hidden prompt; or: … | pas secret set NAME --stdin
 ```
 
-Platform administrators can enable or disable the prototype worker for a named
-app. These commands call the admin endpoint, so they require `pas login` with
+Platform administrators can enable or disable a worker for a named
+app. These existing CLI commands call the admin endpoint, so they require `pas login` with
 an admin account; an ordinary app owner receives the server's authorization
 error.
 
 ```bash
-pas worker enable <appId>               # allow this first-party app's worker to deploy and run
-pas worker disable <appId>              # stop the app worker
+pas worker enable <appId>               # enable the app worker; clears an administrator stop
+pas worker disable <appId>              # stop the app worker; owner cannot override this stop
 ```
 
 The same data is available over HTTP (owner session):
 
+- `PUT /v1/apps/:id/worker-enabled` with `{ "enabled": true }` explicitly enables
+  the owner's worker (recent sign-in required); `{ "enabled": false }` stops it.
+  No separate enable request is needed for a never-enabled app's first verified
+  OIDC deployment. Historical disabled workers may require administrator review
+  after migration 0125; the migration never treats a prior unexplained stop as
+  permission to restart.
 - `GET /v1/apps/:id/worker` returns the enabled flag, `last_deploy`, and
   `deploys`: the last 20 deploy attempts, newest first. Each has `id`,
   `repository`, `ref`, `sha`, `bundle_sha256`, `status` (`deployed`, `refused`

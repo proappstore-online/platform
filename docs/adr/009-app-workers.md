@@ -373,7 +373,7 @@ isolation, egress control and custom limits **without** a public URL and
 prototype falls back to `account` + the shim. `dispatch` is phase 2 **only** if
 `loader` does not cover what general availability needs.
 
-**Prototype gate (any backend).** Until §6's criteria hold: an admin-set
+**Historical prototype gate (superseded for `loader` by the release decision below).** An admin-set
 `app_workers_enabled` flag per app, a hard cap of 5 app workers, and
 **first-party apps only**. *First-party* means the app's owner is a platform
 admin — their GitHub id is in `ADMIN_GITHUB_IDS`. #253 enforces this when the
@@ -381,7 +381,44 @@ flag is set: the flag cannot be turned on for an app whose owner is not an admin
 
 ### 6. Exit criteria
 
-Two separate gates.
+#### Owner release decision — 2026-11-05 Australia/Melbourne
+
+The product owner explicitly requested immediate release and waived the remaining
+observation wait: “not needed anymore, stable enough!” This supersedes the fixed
+14-day prerequisite for gate B on the selected `loader` backend. The earlier
+7 November UTC date was calculated from the Oct 24–Nov 6 observation window in
+[duperdash#7](https://github.com/proappstore-online/duperdash/issues/7) and
+[platform#306](https://github.com/proappstore-online/platform/issues/306); it is
+not a technical dependency or a claim that all 14 days were verified complete.
+The decision is recorded on
+[#267](https://github.com/proappstore-online/platform/issues/267#issuecomment-6637278404).
+
+Release with `APP_WORKER_OWNER_SELF_SERVE = "1"`. A verified app owner may enable
+their own worker, and a verified first deployment automatically enables an app
+that has never been enabled or explicitly stopped. This includes existing apps
+such as Hiring and owners authenticated with Google. Remove the first-party
+restriction and prototype cap; retain owner/repository authentication, egress
+control, runtime limits, isolation, rotation support, quotas and the account
+ceiling. Only an administrator may clear an explicit administrator stop.
+Migration 0125 conservatively treats historical disabled workers that were
+previously enabled as admin-stopped, because earlier records do not identify the
+actor. Re-enablement does not clear schedule breakers.
+
+Legacy DuperDash retirement (#263) and full-window quota calibration (#306) remain
+follow-ups, not blockers for this release. Keep the existing conservative quotas
+and account ceiling until measurements justify changes. No legacy resource
+deletion or credential revocation is part of this release. The existing loader
+needs no Workers for Platforms purchase or migration.
+
+Turning the policy variable off restores prototype eligibility for future enables;
+it does not stop running workers. Use the existing administrator disable endpoint
+to stop an individual worker. Validate the release through normal CI and deployed
+owner/OIDC flows; user OAuth consent and application attendance results require
+their own verification.
+
+#### Original gates (historical; apply the supersession above to gate B)
+
+Two separate gates were originally defined:
 
 **A. Purchase Workers for Platforms** (only if `loader` was found insufficient and
 `dispatch` is needed), when all hold: (1) duperdash has run on PAS for ≥ 2 weeks

@@ -330,9 +330,37 @@ async function removeCommon(env: Pick<Env, 'DB' | 'STORAGE'>, appId: string): Pr
 /**
  * Turn an app's worker off and remove it: the admin flag-off path, the owner's
  * DELETE and app deletion all come here.
+ *
+ * `adminKillSwitch` (#267 item 10) marks this as an explicit admin action, not an owner's own
+ * choice or app deletion — `admin_disabled_at`/`admin_disabled_by` so a later owner self-serve
+ * enable (`APP_WORKER_OWNER_SELF_SERVE`) or deploy-time auto-enable can refuse to undo it.
+ * Upserts rather than updating: an app that has never had an `app_workers` row (never deployed,
+ * never enabled) has nothing for a bare `UPDATE` to match, so without this the kill switch would
+ * silently persist nothing and that app's next verified deploy would read "never enabled" and
+ * auto-enable right past the admin's stop. Throws 404 if the app itself does not exist — the only
+ * disable path that needs to check, because every other one reaches here only after
+ * `requireAppOwner` (which already implies the app exists) or app deletion (irrelevant by then).
+ * Omitted: the flag is left as it was (an owner disabling their own, already-not-admin-killed
+ * worker leaves no kill-switch mark to clear; re-disabling an already admin-killed one is a no-op).
  */
-export async function disableAppWorker(env: Env, appId: string): Promise<void> {
-  await env.DB.prepare('UPDATE app_workers SET enabled = 0 WHERE app_id = ?').bind(appId).run();
+export async function disableAppWorker(env: Env, appId: string, adminKillSwitch?: { by: string; now: number }): Promise<void> {
+  if (adminKillSwitch) {
+    const app = await env.DB.prepare('SELECT 1 FROM apps WHERE id = ?').bind(appId).first();
+    if (!app) throw new HttpError('app not found', 404);
+    await env.DB.prepare(
+      `INSERT INTO app_workers (app_id, enabled, admin_disabled_at, admin_disabled_by)
+       VALUES (?1, 0, ?2, ?3)
+       ON CONFLICT(app_id) DO UPDATE SET enabled = 0, admin_disabled_at = ?2, admin_disabled_by = ?3`,
+    ).bind(appId, adminKillSwitch.now, adminKillSwitch.by).run();
+  } else {
+    // Persist an owner's stop even before the first deploy. A non-null enabled_at
+    // prevents deploy-time auto-enablement; explicit owner enable can still reverse it.
+    await env.DB.prepare(`INSERT INTO app_workers (app_id, enabled, enabled_at)
+      SELECT ?1, 0, ?2 WHERE EXISTS (SELECT 1 FROM apps WHERE id = ?1)
+        OR EXISTS (SELECT 1 FROM app_workers WHERE app_id = ?1)
+      ON CONFLICT(app_id) DO UPDATE SET enabled = 0, enabled_at = COALESCE(app_workers.enabled_at, ?2)`)
+      .bind(appId, Date.now()).run();
+  }
   await appWorkerHost(env).remove(appId);
 }
 

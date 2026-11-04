@@ -239,6 +239,16 @@ export interface Env {
    * routes/app-workers.ts). Unset or not a positive integer: the default, 5.
    */
   APP_WORKER_CAP?: string;
+
+  /**
+   * #267 item 10: owner eligibility policy switch (`appWorkerOwnerSelfServeOpen`,
+   * lib/app-worker-usage.ts). `'1'`/`'true'`: an app's own owner — not only a platform admin — may
+   * enable its app worker, for any app (not only first-party), and the cap of 5 no longer applies.
+   * Unset or anything else: the original prototype gate (admin-only, first-party-only, capped at 5).
+   * Does not affect the #275 account ceiling, per-app quotas, the per-app kill switch, or any
+   * runtime isolation/limit/egress control — those are unconditional on every backend.
+   */
+  APP_WORKER_OWNER_SELF_SERVE?: string;
 }
 
 export interface PushSubscriptionRow {
