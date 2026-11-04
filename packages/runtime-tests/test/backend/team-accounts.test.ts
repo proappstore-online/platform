@@ -1,5 +1,5 @@
 import { createExecutionContext, env as providedEnv } from 'cloudflare:test';
-import { mintSession } from '@proappstore/build-core';
+import { credentialContext, mintSession, type CredentialContextClaim } from '@proappstore/build-core';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../../../backend/src/index';
 import { requireAppAccess, type TeamRole } from '../../../backend/src/lib/auth';
@@ -36,12 +36,16 @@ afterAll(async () => { await purge(); await resetTables(); });
 
 let seq = 0;
 const key = () => `rt-key-${++seq}-${crypto.randomUUID()}`;
-const token = (uid: string, via?: string) => mintSession({ uid, login: uid, avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', ...(via ? { via } : {}) }, base.SESSION_SIGNING_KEY);
+// #535: real D1/workerd route calls go through the actual `caller()`, which derives its `Principal`
+// from the session's verified `cred` claim — defaulting here to first-party, since that's what the
+// overwhelming majority of these tests exercise. Pass `cred` explicitly for a different kind.
+const token = (uid: string, cred: CredentialContextClaim = credentialContext('first_party_session')) =>
+  mintSession({ uid, login: uid, avatarUrl: null, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred }, base.SESSION_SIGNING_KEY);
 
-async function call(uid: string, method: string, path: string, body?: unknown, opts: { env?: Env; headers?: Record<string, string>; via?: string } = {}) {
+async function call(uid: string, method: string, path: string, body?: unknown, opts: { env?: Env; headers?: Record<string, string>; cred?: CredentialContextClaim } = {}) {
   const res = await worker.fetch(new Request(`${BASE}/v1${path}`, {
     method,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${await token(uid, opts.via)}`, ...(opts.headers ?? {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${await token(uid, opts.cred)}`, ...(opts.headers ?? {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   }), opts.env ?? on, createExecutionContext());
   return { status: res.status, headers: res.headers, json: (await res.json().catch(() => null)) as any };
@@ -261,10 +265,10 @@ describe('cross-account and credential isolation', () => {
   it('a non-interactive session and a bogus bearer cannot govern; governance needs a first-party session', async () => {
     const acct = await createTeam('gh:cs-o');
     await seedUser('gh:cs-t');
-    const viaSess = await call('gh:cs-o', 'POST', `/accounts/${acct}/invitations`, { role: 'guest', user_id: 'gh:cs-t' }, { via: 'oidc-e2e', headers: { 'idempotency-key': key() } });
+    const viaSess = await call('gh:cs-o', 'POST', `/accounts/${acct}/invitations`, { role: 'guest', user_id: 'gh:cs-t' }, { cred: credentialContext('workload_session'), headers: { 'idempotency-key': key() } });
     expect(viaSess.status).toBe(403);
     expect(viaSess.json.error.code).toBe('credential_scope');
-    expect((await call('gh:cs-o', 'POST', '/accounts', { name: 'Via Team' }, { via: 'oidc-e2e', headers: { 'idempotency-key': key() } })).json.error.code).toBe('credential_scope');
+    expect((await call('gh:cs-o', 'POST', '/accounts', { name: 'Via Team' }, { cred: credentialContext('workload_session'), headers: { 'idempotency-key': key() } })).json.error.code).toBe('credential_scope');
     const bogus = await worker.fetch(new Request(`${BASE}/v1/me/accounts`, { headers: { authorization: 'Bearer pas_app_token_not_a_session' } }), on, createExecutionContext());
     expect(bogus.status).toBe(401);
   });
