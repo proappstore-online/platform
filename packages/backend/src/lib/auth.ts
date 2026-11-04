@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
+import { asAppId, asUserId } from './accounts/contract.js';
+import { authorize, classifyDivergence, LEGACY_MIN_ROLE_PERMISSION } from './accounts/authorize.js';
 
 export class HttpError extends Error {
   constructor(
@@ -25,6 +27,8 @@ export interface FasUser {
   authMethod?: string;
   /** Verified WebAuthn relying party of a passkey step-up (#331). */
   stepUpRpId?: string;
+  /** Session `via` (#146): set when the session was minted without a person signing in, e.g. 'oidc-e2e'. Never a first-party control-plane credential. */
+  via?: string;
   /** Per-app roles: { appId: ['moderator', ...] }. */
 }
 
@@ -49,6 +53,7 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<FasUse
     ...(typeof claims.auth_time === 'number' ? { authTime: claims.auth_time } : {}),
     ...(typeof claims.auth_method === 'string' ? { authMethod: claims.auth_method } : {}),
     ...(typeof claims.step_up_rp_id === 'string' ? { stepUpRpId: claims.step_up_rp_id } : {}),
+    ...(typeof claims.via === 'string' ? { via: claims.via } : {}),
   };
 }
 
@@ -165,6 +170,35 @@ export async function requireAppAccess(
   c: Context<{ Bindings: Env }>,
   appId: string,
   minRole: TeamRole = 'viewer',
+): Promise<FasUser & { teamRole: TeamRole }> {
+  if (c.env.ACCOUNT_AUTHORIZATION_SHADOW !== '1') return legacyAppAccess(c, appId, minRole);
+  // Shadow mode (#534 T03): the legacy decision stays authoritative; the account resolver's decision is
+  // compared and any divergence logged. Observation never changes or delays the outcome on failure.
+  let result: (FasUser & { teamRole: TeamRole }) | undefined;
+  let failure: unknown;
+  try { result = await legacyAppAccess(c, appId, minRole); } catch (e) { failure = e; }
+  await shadowObserve(c, appId, minRole, failure === undefined);
+  if (failure !== undefined) throw failure;
+  return result!;
+}
+
+async function shadowObserve(c: Context<{ Bindings: Env }>, appId: string, minRole: TeamRole, legacyAllowed: boolean): Promise<void> {
+  try {
+    const user = await requireUser(c);
+    const perm = LEGACY_MIN_ROLE_PERMISSION[minRole];
+    if (!perm) return;
+    const decision = await authorize(c.env.DB, {
+      userId: asUserId(user.id), credential: user.via ? 'workload_session' : 'first_party_session', platformAdmin: user.roles.includes('admin'),
+    }, { kind: 'app', appId: asAppId(appId) }, perm);
+    const klass = classifyDivergence(legacyAllowed, decision);
+    if (klass !== 'match') console.warn(JSON.stringify({ event: 'authz_shadow_divergence', class: klass, app_id: appId, user_id: user.id, min_role: minRole, reason: decision.allowed ? 'allowed' : decision.reason }));
+  } catch { /* observation only */ }
+}
+
+async function legacyAppAccess(
+  c: Context<{ Bindings: Env }>,
+  appId: string,
+  minRole: TeamRole,
 ): Promise<FasUser & { teamRole: TeamRole }> {
   const user = await requireUser(c);
 

@@ -131,6 +131,14 @@ export interface Env {
    */
   ADMIN_GITHUB_IDS?: string;
   /**
+   * Team accounts (#534). Deployment gates, not user authority; all default OFF. '1' enables.
+   * ACCOUNTS_READ serves the read routes, ACCOUNTS_WRITE the mutating ones (and implies reads).
+   * ACCOUNT_AUTHORIZATION_SHADOW only logs divergences between the legacy and account decisions.
+   */
+  ACCOUNTS_READ?: string;
+  ACCOUNTS_WRITE?: string;
+  ACCOUNT_AUTHORIZATION_SHADOW?: string;
+  /**
    * Optional GitHub token used by the server-side compliance check at
    * /v1/provision (raises GitHub's unauth rate limit of 60/hr to 5000/hr).
    * A fine-grained PAT with read-only "Contents" + "Metadata" permissions
