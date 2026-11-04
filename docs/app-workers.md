@@ -243,6 +243,57 @@ Installation tokens are short-lived and repo-scoped. They are not user tokens:
 the PAT. Until the platform's GitHub App is configured, the connect routes answer
 `503 connector not configured`; `pat` mode needs only the app secret.
 
+### Google Calendar and Meet
+
+Declare `{"name":"calendar","kind":"google_calendar","modes":["oauth"]}` in
+`connectors`. This connector uses the PAS Google client and envelope encryption;
+apps do not receive Google credentials or need app secrets. The platform operator
+must enable Calendar and Meet REST APIs and register
+`https://api.proappstore.online/v1/connectors/google-calendar/callback` on the
+existing Google Web client. The existing sign-in callback remains registered.
+
+Use `pas.connectors.googleCalendar('calendar', request)` from an enabled app worker.
+Results are JSON objects; failures are `{error, status}` with a safe error code.
+The SDK forwards the authenticated caller from an HTTP handler. Scheduled handlers
+can read existing app grants but cannot connect accounts or create grants.
+
+| Operation | Required fields / result |
+| --- | --- |
+| `status` | User required; returns `configured`, `connected`, `email`, `version` for this app's authorization. |
+| `start` | User required; `callback_path` and `return_to` must be relative paths on this app. Returns `authorization_url` for personal Google consent. |
+| `complete` | Same user/app required; one-use `code`, `state`. Returns relative `return_to` and account `email`. |
+| `calendars` | Authorized user required; optional `page_token`; returns readable exact IDs in `calendars` and `next_page_token`. |
+| `grant` | Authorized user required; exact `calendar_id` (not `primary`). Returns `grant_id`, `user_id`, calendar metadata and account email. |
+| `grant_status`, `revoke_grant` | `grant_id`, restricted to the current app. |
+| `events`, `event` | `grant_id`; `events` takes optional `page_token`, returns `items` and `nextPageToken`; `event` requires `event_id`. |
+| `conferences` | `grant_id`, `event_id`, `meeting_code`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Requires the exact live event and a completed meeting in the last eight days. |
+| `participants`, `sessions` | `grant_id`, `resource`, `receipt` from the preceding list, optional `page_token`. |
+| `disconnect_account` | Authorized user required; `expected_version`. Erases the platform account credential and invalidates all its app grants. Use only after explicitly explaining this global effect to the user. |
+
+The public callback only forwards code/state to the pinned app origin; the app
+posts them to its authenticated worker for `complete`. Remove the code from SPA
+history. State expires after ten minutes and cannot be replayed or completed by
+another user. Connecting in one app does not authorize another app. Reconnection
+replaces the account version, invalidating old app authorizations and calendar
+grants; users must explicitly connect/grant again. Publisher transfer invalidates
+that app's authorization, grants and pending callbacks.
+
+An app must enforce its own tenant/role checks before granting or using calendar
+access. Store only the opaque grant ID and metadata, verify its `user_id` and
+`calendar_id` if metadata is user-writable, and revoke the old grant when replacing
+it. Disconnecting a tenant should revoke only its grant, not the shared account.
+A grant authorizes the app worker to read the selected calendar; it is not an
+application-user credential and must not be exposed as a public endpoint.
+
+Events are bounded to the past seven / next thirty days, 100 per page, without
+descriptions or attachments. Meet conference/participant results include a signed
+five-minute `receipt` for their `name`; child queries require this receipt and
+cannot switch grants or parent resources. Participant names are stripped. Use
+stable Google `users/<id>` identities, not display names or RSVP, for attendance.
+Provider calls have ten-second timeouts and a 1 MB response cap. Each connector
+operation counts toward the existing worker invocation budget; apps must bound
+pagination and report incomplete results as errors, never absence.
+
 ## The SDK: `@proappstore/sdk/worker`
 
 ```ts

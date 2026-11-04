@@ -6,6 +6,15 @@ const ghHook = { name: 'gh', verify: { kind: 'github-app' }, to: 'worker' } as u
 const otherHook = { name: 'other', verify: { kind: 'hmac' }, to: 'worker' } as unknown as HookDef;
 
 describe('validateConnectors', () => {
+  it('accepts one read-only Google OAuth connector alongside GitHub, with no PAT or hooks', () => {
+    const google = { name: 'calendar', kind: 'google_calendar', modes: ['oauth'] };
+    expect(validateConnectors([google, { name: 'github', kind: 'github', modes: ['pat'], pat_secret: 'GH_PAT' }], []))
+      .toMatchObject({ connectors: [{ ...google, pat_secret: null, events: [], hook: null }, { kind: 'github' }] });
+    for (const extra of [{ modes: ['pat'] }, { modes: ['oauth', 'app'] }, { pat_secret: 'TOKEN' }, { hook: 'gh' }, { events: ['push'] }]) {
+      expect(validateConnectors([{ ...google, ...extra }], [ghHook])).toHaveProperty('error');
+    }
+    expect(validateConnectors([google, { ...google, name: 'second' }], [])).toHaveProperty('error');
+  });
   it('treats an absent section as no connectors', () => {
     expect(validateConnectors(undefined, [])).toEqual({ connectors: [] });
     expect(validateConnectors(null, [])).toEqual({ connectors: [] });
@@ -24,7 +33,7 @@ describe('validateConnectors', () => {
   it('refuses a non-array, unknown fields, other kinds and a second github connector', () => {
     expect(validateConnectors({}, [])).toEqual({ error: 'connectors must be an array of at most 3 connectors' });
     expect(validateConnectors([{ name: 'g', kind: 'github', modes: ['app'], x: 1 }], [])).toEqual({ error: 'connectors[0]: unknown field "x"' });
-    expect(validateConnectors([{ name: 'g', kind: 'gitlab', modes: ['app'] }], [])).toEqual({ error: 'connectors[0].kind must be "github"' });
+    expect(validateConnectors([{ name: 'g', kind: 'gitlab', modes: ['app'] }], [])).toEqual({ error: 'connectors[0].kind must be "github" or "google_calendar"' });
     expect(validateConnectors([{ name: 'g', kind: 'github', modes: ['app'] }, { name: 'h', kind: 'github', modes: ['app'] }], []))
       .toEqual({ error: 'connectors[1]: an app declares at most one github connector' });
   });

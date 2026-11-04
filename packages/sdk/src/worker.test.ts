@@ -11,6 +11,7 @@ function envWithPas() {
     storage: { put: vi.fn(async () => ({ key: 'k', size: 1 })), get: vi.fn(async () => null) },
     log: vi.fn(async () => true),
     rooms: { publish: vi.fn(async () => ({ delivered: 2 })) },
+    connectors: { token: vi.fn(async () => null), googleCalendar: vi.fn(async () => ({ connected: false })) },
   };
   return { pas, env: { PAS: pas, PAS_WORKER_TOKEN: 'tok', APP_ID: 'demo' } as unknown as AppWorkerEnv };
 }
@@ -47,6 +48,15 @@ describe('defineAppWorker (#254)', () => {
 });
 
 describe('pasClient', () => {
+  it('Google connector forwards the caller grant for consent and the invocation for scheduled reads', async () => {
+    const { env, pas } = envWithPas();
+    const user = pasClient(env, { id: 'request', attempt: 1 }, 'signed-caller');
+    await user.connectors.googleCalendar('calendar', { operation: 'start', callback_path: '/callback', return_to: '/settings' });
+    expect(pas.connectors.googleCalendar).toHaveBeenLastCalledWith('calendar', { operation: 'start', callback_path: '/callback', return_to: '/settings' }, { token: 'tok', invocation: 'request:1', as: 'signed-caller' });
+    const scheduled = pasClient(env, { id: 'schedule', attempt: 2 });
+    await scheduled.connectors.googleCalendar('calendar', { operation: 'events', grant_id: 'grant' });
+    expect(pas.connectors.googleCalendar).toHaveBeenLastCalledWith('calendar', { operation: 'events', grant_id: 'grant' }, { token: 'tok', invocation: 'schedule:2' });
+  });
   it('passes the token and invocation on every namespace', async () => {
     const { env, pas } = envWithPas();
     const p = pasClient(env, { id: 'e1', attempt: 1 });

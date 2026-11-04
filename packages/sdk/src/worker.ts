@@ -41,6 +41,24 @@ export function hookBody(payload: { body?: unknown; body_encoding?: unknown }): 
   return bytes;
 }
 
+export type GoogleCalendarRequest = {
+  operation: 'status' | 'start' | 'complete' | 'calendars' | 'grant' | 'disconnect_account' | 'revoke_grant' | 'grant_status' | 'events' | 'event' | 'conferences' | 'participants' | 'sessions';
+  callback_path?: string;
+  return_to?: string;
+  state?: string;
+  code?: string;
+  expected_version?: number;
+  calendar_id?: string;
+  grant_id?: string;
+  event_id?: string;
+  page_token?: string;
+  starts_at?: number;
+  ends_at?: number;
+  meeting_code?: string;
+  resource?: string;
+  receipt?: string;
+};
+
 export interface PasClient {
   actions: {
     /** Run a registered action whose `callers` include "worker", as `system:worker`. */
@@ -53,6 +71,8 @@ export interface PasClient {
     get(name: string): Promise<string | null>;
   };
   connectors: {
+    /** Platform-held Google Calendar/Meet connection; credentials never enter the app worker. */
+    googleCalendar(name: string, request: GoogleCalendarRequest): Promise<Record<string, unknown>>;
     /**
      * A GitHub credential for a connector declared in mcp.json `connectors` (#258): an installation
      * token (repo-scoped when `repo` is given), else the connector's PAT, else null. `mode: 'pat'`
@@ -109,7 +129,7 @@ interface CallCtx { token: string; invocation: string; as?: unknown }
 interface PasBinding {
   actions: { call(name: string, params: unknown, ctx: CallCtx): Promise<unknown>; batch(calls: unknown, ctx: CallCtx): Promise<unknown> };
   secrets: { get(name: string, ctx: CallCtx): Promise<string | null> };
-  connectors: { token(name: string, opts: unknown, ctx: CallCtx): Promise<string | null> };
+  connectors: { token(name: string, opts: unknown, ctx: CallCtx): Promise<string | null>; googleCalendar(name: string, request: GoogleCalendarRequest, ctx: CallCtx): Promise<Record<string, unknown>> };
   storage: { put(key: string, body: unknown, opts: unknown, ctx: CallCtx): Promise<unknown>; get(key: string, ctx: CallCtx): Promise<unknown> };
   rooms: { publish(roomId: string, data: unknown, ctx: CallCtx): Promise<unknown> };
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
@@ -130,7 +150,10 @@ export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 
       batch: (calls) => pas.actions.batch(calls, actionCtx) as Promise<{ name: string; results: unknown[] }[]>,
     },
     secrets: { get: (name) => pas.secrets.get(name, ctx) },
-    connectors: { token: (name, opts) => pas.connectors.token(name, opts ?? {}, ctx) },
+    connectors: {
+      token: (name, opts) => pas.connectors.token(name, opts ?? {}, ctx),
+      googleCalendar: (name, request) => pas.connectors.googleCalendar(name, request, actionCtx),
+    },
     storage: {
       put: (key, body, opts) => pas.storage.put(key, body, opts ?? {}, ctx) as Promise<{ key: string; size: number }>,
       get: (key) => pas.storage.get(key, ctx) as Promise<{ body: ArrayBuffer; contentType: string } | null>,

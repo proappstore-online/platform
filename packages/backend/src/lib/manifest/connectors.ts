@@ -6,7 +6,7 @@ import { HOOK_NAME, type HookDef } from './hooks.js';
 const MAX_CONNECTORS_PER_APP = 3;
 const CONNECTOR_MODES = ['app', 'pat'] as const;
 const CONNECTOR_EVENT = /^[a-z][a-z_]{0,49}$/;
-export interface ConnectorDef { name: string; kind: 'github'; modes: string[]; pat_secret: string | null; events: string[]; hook: string | null }
+export interface ConnectorDef { name: string; kind: 'github' | 'google_calendar'; modes: string[]; pat_secret: string | null; events: string[]; hook: string | null }
 
 /**
  * The `connectors` section: `[{ name, kind: "github", modes: ["app","pat"], pat_secret?, events?, hook? }]`.
@@ -26,7 +26,14 @@ export function validateConnectors(raw: unknown, hooks: HookDef[]): { error: str
     const { name, kind, modes, pat_secret, events = [], hook } = item as Record<string, unknown>;
     if (typeof name !== 'string' || !HOOK_NAME.test(name)) return { error: `${at}.name must match ${HOOK_NAME.source}` };
     if (out.some((x) => x.name === name)) return { error: `${at}: duplicate name "${name}"` };
-    if (kind !== 'github') return { error: `${at}.kind must be "github"` };
+    if (kind === 'google_calendar') {
+      if (!Array.isArray(modes) || modes.length !== 1 || modes[0] !== 'oauth') return { error: `${at}.modes must be ["oauth"] for Google Calendar` };
+      if (pat_secret !== undefined || hook !== undefined || !Array.isArray(events) || events.length) return { error: `${at}: Google Calendar has no PAT, hooks or webhook events` };
+      if (out.some(x => x.kind === kind)) return { error: `${at}: an app declares at most one Google Calendar connector` };
+      out.push({ name, kind, modes: ['oauth'], pat_secret: null, events: [], hook: null });
+      continue;
+    }
+    if (kind !== 'github') return { error: `${at}.kind must be "github" or "google_calendar"` };
     // Installations bind to the app, not to a connector name, so a second github connector would be ambiguous (#303 G2).
     if (out.some((x) => x.kind === 'github')) return { error: `${at}: an app declares at most one github connector` };
     if (!Array.isArray(modes) || modes.length === 0 || modes.some((m) => !CONNECTOR_MODES.includes(m as never)) || new Set(modes).size !== modes.length) {

@@ -25,6 +25,7 @@ import {
   workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
 import { workerRoomPublish } from '../lib/room-access.js';
+import { workerGoogleCalendar } from '../lib/google-calendar-worker.js';
 
 type Run = <T>(method: string, action: string, ctx: unknown, fn: (appId: string, caller: CallerIdentity | null) => Promise<T>) => Promise<T>;
 
@@ -75,6 +76,9 @@ class ConnectorsApi extends RpcTarget {
   /** A GitHub token for a connector the manifest declares (#258); null when none applies. */
   token(name: string, opts: { repo?: string; mode?: 'app' | 'pat' } | undefined, ctx: unknown): Promise<string | null> {
     return this.#run('connectors.token', String(name ?? ''), ctx, (appId) => workerConnectorToken(this.#env, appId, name, opts));
+  }
+  googleCalendar(name: string, input: unknown, ctx: unknown): Promise<Record<string, unknown>> {
+    return this.#run('connectors.googleCalendar', String(name ?? ''), ctx, (appId, caller) => workerGoogleCalendar(this.#env, appId, name, input, caller));
   }
 }
 

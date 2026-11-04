@@ -87,6 +87,7 @@ import { roomRoutes } from './routes/rooms.js';
 import { appWorkerRoutes } from './routes/app-workers.js';
 import { hookRoutes } from './routes/hooks.js';
 import { connectorRoutes } from './routes/connectors.js';
+import { googleCalendarRoutes } from './routes/google-calendar.js';
 import { ownershipRoutes } from './routes/ownership.js';
 import { appDirectoryRoutes } from './routes/app-directory.js';
 import { ideaBuildersRoutes } from './routes/idea-builders.js';
@@ -376,6 +377,7 @@ v1.route('/', roomRoutes);
 v1.route('/', appWorkerRoutes);
 v1.route('/', hookRoutes);
 v1.route('/', connectorRoutes);
+v1.route('/', googleCalendarRoutes);
 v1.route('/', ownershipRoutes);
 v1.route('/', ideaBuildersRoutes); // storefront /ideas "I'm building this" claims
 app.route('/v1', v1);
