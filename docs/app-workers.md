@@ -284,6 +284,17 @@ replaces the account version, invalidating old app authorizations and calendar
 grants; users must explicitly connect/grant again. Publisher transfer invalidates
 that app's authorization, grants and pending callbacks.
 
+Deleting a user's account in an app also revokes that user's calendar grants,
+app authorization and pending consent for that app, removing the platform's
+app/user grant metadata as well. This is enforced by the
+platform for every app, including scheduled reads; apps do not need a custom
+connector cleanup handler. A deleted app account cannot start a new connection
+(`app_account_deleted`). Shared Google credentials and connections in other apps
+are preserved. Reads recheck authorization before provider calls and before
+returning data, so a response arriving after revocation is discarded. Requests
+already sent to Google cannot be recalled, and data already delivered to an app
+is subject to that app's retention and deletion controls.
+
 An app must enforce its own tenant/role checks before granting or using calendar
 access. Store only the opaque grant ID and metadata, verify its `user_id` and
 `calendar_id` if metadata is user-writable, and revoke the old grant when replacing

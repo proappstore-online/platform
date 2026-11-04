@@ -19,7 +19,7 @@ export async function workerGoogleCalendar(env: Env, appId: string, name: unknow
         case 'status': return await accountStatus(env, appId, caller.id);
         case 'start': return await beginGoogleOAuth(env, appId, caller.id, request.callback_path, request.return_to);
         case 'complete': return await completeGoogleOAuth(env, appId, caller.id, request.state, request.code);
-        case 'calendars': return await listAccountCalendars(env, caller.id, request.page_token, authorizedVersion!);
+        case 'calendars': return await listAccountCalendars(env, appId, caller.id, request.page_token, authorizedVersion!);
         case 'grant': return await createCalendarGrant(env, appId, caller.id, request.calendar_id, authorizedVersion!);
         case 'disconnect_account': return await disconnectGoogleAccount(env, caller.id, request.expected_version);
       }

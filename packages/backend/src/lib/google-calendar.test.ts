@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sqliteD1 } from '../sqlite-d1.js';
-import { makeEnv } from '../test-helpers.js';
+import { makeEnv, testToken } from '../test-helpers.js';
 import type { Env } from '../types.js';
 import { workerGoogleCalendar } from './google-calendar-worker.js';
 import { GOOGLE_CALENDAR_SCOPES, googleJson, hashState, resourceReceipt, verifyResourceReceipt } from './google-calendar-common.js';
 import { googleCalendarRoutes } from '../routes/google-calendar.js';
+import { deleteAppAccountRoutes } from '../routes/delete-app-account.js';
 import { Hono } from 'hono';
 
 const KEK = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
@@ -41,6 +42,13 @@ async function grant() {
   const result = await call({ operation: 'grant', calendar_id: 'team@example.test' });
   expect(result.grant_id).toBeTypeOf('string');
   return result.grant_id as string;
+}
+async function deleteAppAccount(appId = 'hiring', userId = USER) {
+  const router = new Hono<{ Bindings: Env }>().route('/v1', deleteAppAccountRoutes);
+  const response = await router.request(`/v1/apps/${appId}/users/${encodeURIComponent(userId)}/account`, {
+    method: 'DELETE', headers: { Authorization: `Bearer ${await testToken(userId)}` },
+  }, { ...env, STORAGE: { list: async () => ({ objects: [], truncated: false }) } } as unknown as Env);
+  expect(response.status).toBe(200);
 }
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
@@ -195,6 +203,84 @@ describe('PAS Google Calendar connection and grants', () => {
     expect(requests.filter(url => url.hostname === 'oauth2.googleapis.com')).toHaveLength(2);
     fetcher.mockResolvedValueOnce(new Response('secret provider diagnostic', { status: 429 }));
     expect(await call({ operation: 'event', grant_id, event_id: 'event1' })).toEqual({ error: 'google_rate_limited', status: 502 });
+  });
+  it('account deletion stops scheduled access and pending consent only for the deleted app/user', async () => {
+    const grant_id = await grant();
+    // Model a second app the user already authorized at this account version.
+    db.sql.exec(`INSERT INTO google_calendar_app_authorizations VALUES ('other','gh:1',1)`);
+    const other = await call({ operation: 'grant', calendar_id: 'team@example.test' }, 'other');
+    const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const state = new URL(start.authorization_url as string).searchParams.get('state');
+    const credential = db.sql.prepare('SELECT * FROM google_calendar_accounts').get();
+    await deleteAppAccount();
+    fetcher.mockClear();
+    expect(await call({ operation: 'events', grant_id }, 'hiring', null)).toMatchObject({ error: 'reconnect_required' });
+    expect(await call({ operation: 'complete', state, code: 'late-code' })).toMatchObject({ error: 'expired_or_used_callback' });
+    expect(await call({ operation: 'start', callback_path: '/callback', return_to: '/' })).toMatchObject({ error: 'app_account_deleted', status: 403 });
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: false, email: null });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(db.sql.prepare('SELECT * FROM google_calendar_accounts').get()).toEqual(credential);
+    expect(await call({ operation: 'events', grant_id: other.grant_id }, 'other', null)).toHaveProperty('items');
+    await deleteAppAccount();
+  });
+  it('account deletion during an OAuth exchange cannot replace the shared credential or reauthorize', async () => {
+    await grant();
+    const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const state = new URL(start.authorization_url as string).searchParams.get('state');
+    const credential = db.sql.prepare('SELECT * FROM google_calendar_accounts').get();
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(url).pathname.endsWith('/userinfo')) await deleteAppAccount();
+      return provider(url, init);
+    });
+    expect(await call({ operation: 'complete', state, code: 'late-code' })).toMatchObject({ error: 'connection_changed' });
+    expect(db.sql.prepare('SELECT * FROM google_calendar_accounts').get()).toEqual(credential);
+    expect(db.sql.prepare("SELECT COUNT(*) AS n FROM google_calendar_app_authorizations WHERE app_id='hiring'").get()!.n).toBe(0);
+  });
+  it('deletion during token refresh prevents the next provider read', async () => {
+    const grant_id = await grant();
+    vi.setSystemTime(now + 3_600_001);
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(url).hostname === 'oauth2.googleapis.com') await deleteAppAccount();
+      return provider(url, init);
+    });
+    expect(await call({ operation: 'events', grant_id }, 'hiring', null)).toMatchObject({ error: 'reconnect_required' });
+    expect(requests.some(url => url.pathname.endsWith('/events'))).toBe(false);
+  });
+  it('a concurrent account version change cannot authorize an exchange whose credential write lost', async () => {
+    const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const state = new URL(start.authorization_url as string).searchParams.get('state');
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(url).pathname.endsWith('/userinfo')) db.sql.exec('UPDATE google_calendar_accounts SET version = version + 1');
+      return provider(url, init);
+    });
+    expect(await call({ operation: 'complete', state, code: 'code' })).toMatchObject({ error: 'connection_changed' });
+    expect(db.sql.prepare('SELECT COUNT(*) AS n FROM google_calendar_app_authorizations').get()!.n).toBe(0);
+  });
+  it.each(['events', 'calendars'])('discards %s data if deletion wins during the provider read', async operation => {
+    const grant_id = await grant();
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(url).pathname.endsWith(operation === 'events' ? '/events' : '/calendarList')) await deleteAppAccount();
+      return provider(url, init);
+    });
+    expect(await call({ operation, grant_id })).toMatchObject({ error: 'reconnect_required' });
+  });
+  it('refuses stale grants when an app-account deletion marker already exists', async () => {
+    const grant_id = await grant();
+    db.sql.prepare('INSERT INTO per_app_deleted_users (app_id,user_id,deleted_by,deleted_at) VALUES (?,?,?,?)').run('hiring', USER, USER, now);
+    fetcher.mockClear();
+    expect(await call({ operation: 'events', grant_id }, 'hiring', null)).toMatchObject({ error: 'reconnect_required' });
+    expect(await call({ operation: 'calendars' })).toMatchObject({ error: 'reconnect_required' });
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: false });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('does not start a Meet read after deletion during the preceding event lookup', async () => {
+    const grant_id = await grant();
+    fetcher.mockImplementation(async (url, init) => {
+      if (new URL(url).pathname.endsWith('/events/event1')) await deleteAppAccount();
+      return provider(url, init);
+    });
+    expect(await call({ operation: 'conferences', grant_id, event_id: 'event1', meeting_code: 'abc-defg-hij', starts_at: now - 7_200_000, ends_at: now - 3_600_000 }, 'hiring', null)).toMatchObject({ error: 'reconnect_required' });
+    expect(requests.some(url => url.hostname === 'meet.googleapis.com')).toBe(false);
   });
 });
 

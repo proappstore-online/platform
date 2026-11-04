@@ -1,7 +1,10 @@
-import { SELF, env as providedEnv } from 'cloudflare:test';
+import { SELF, env as providedEnv, fetchMock } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
+import { workerGoogleCalendar } from '../../../backend/src/lib/google-calendar-worker';
+import { beginGoogleOAuth, completeGoogleOAuth } from '../../../backend/src/lib/google-calendar-accounts';
+import { GOOGLE_CALENDAR_SCOPES } from '../../../backend/src/lib/google-calendar-common';
 
 const env = providedEnv as unknown as Env;
 
@@ -102,5 +105,50 @@ describe('per-app account deletion (#379)', () => {
     expect((await del('stash', USER, USER)).status).toBe(200);
     expect(await (await del('stash', USER, USER)).json()).toEqual({ ok: true, files: 0 });
     expect((await del('nope', USER, USER)).status).toBe(404);
+  });
+
+  it('revokes only this app/user connector access and pending consent, preserving shared credentials', async () => {
+    for (const uid of [USER, 'gh:3']) {
+      await env.DB.prepare("INSERT INTO google_calendar_accounts (user_id, version, status, google_subject, email, credential_ct, updated_at) VALUES (?, 1, 'connected', '123456', 'test@example.test', ?, 1)")
+        .bind(uid, new Uint8Array([1, 2, 3])).run();
+    }
+    const grants: string[] = [];
+    for (const [appId, uid] of [['stash', USER], ['notes', USER], ['stash', 'gh:3']]) {
+      const grantId = crypto.randomUUID(); grants.push(grantId);
+      await env.DB.prepare('INSERT OR IGNORE INTO app_connectors (app_id, name, kind, modes, events, created_at) VALUES (?, ?, ?, ?, ?, 1)')
+        .bind(appId, 'calendar', 'google_calendar', '["oauth"]', '[]').run();
+      await env.DB.prepare('INSERT INTO google_calendar_app_authorizations VALUES (?, ?, 1)').bind(appId, uid).run();
+      await env.DB.prepare('INSERT INTO google_calendar_grants (id, app_id, user_id, account_version, calendar_id, calendar_name, created_at) VALUES (?, ?, ?, 1, ?, ?, 1)')
+        .bind(grantId, appId, uid, 'team@example.test', 'Team').run();
+      await env.DB.prepare('INSERT INTO google_calendar_oauth_states (state_hash, app_id, user_id, account_version, callback_url, return_to, expires_at) VALUES (?, ?, ?, 1, ?, ?, ?)')
+        .bind(grantId, appId, uid, `https://${appId}.proappstore.online/callback`, `https://${appId}.proappstore.online/`, Date.now() + 60_000).run();
+    }
+    const before = await env.DB.prepare('SELECT * FROM google_calendar_accounts WHERE user_id = ?').bind(USER).first();
+    expect((await del('stash', USER, USER)).status).toBe(200);
+    const call = (appId: string, grant_id: string) => workerGoogleCalendar(env, appId, 'calendar', { operation: 'grant_status', grant_id }, null);
+    expect(await call('stash', grants[0])).toMatchObject({ error: 'reconnect_required' });
+    expect(await call('notes', grants[1])).toMatchObject({ grant_id: grants[1] });
+    expect(await call('stash', grants[2])).toMatchObject({ grant_id: grants[2] });
+    for (const table of ['google_calendar_app_authorizations', 'google_calendar_oauth_states', 'google_calendar_grants']) {
+      expect(await env.DB.prepare(`SELECT * FROM ${table} WHERE app_id = 'stash' AND user_id = ?`).bind(USER).first()).toBeNull();
+      expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first('n')).toBe(2);
+    }
+    expect(await env.DB.prepare('SELECT * FROM google_calendar_accounts WHERE user_id = ?').bind(USER).first()).toEqual(before);
+    expect((await del('stash', USER, USER)).status).toBe(200);
+  });
+
+  it('commits OAuth credentials and app authorization together on real D1', async () => {
+    const googleEnv = { ...env, GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret' };
+    const start = await beginGoogleOAuth(googleEnv, 'stash', USER, '/callback', '/');
+    const state = new URL(start.authorization_url).searchParams.get('state')!;
+    fetchMock.get('https://oauth2.googleapis.com').intercept({ path: '/token', method: 'POST' })
+      .reply(200, JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600, scope: GOOGLE_CALENDAR_SCOPES.join(' ') }));
+    fetchMock.get('https://openidconnect.googleapis.com').intercept({ path: '/v1/userinfo' })
+      .reply(200, JSON.stringify({ sub: '123456', email: 'test@example.test', email_verified: true }));
+    expect(await completeGoogleOAuth(googleEnv, 'stash', USER, state, 'test-code')).toMatchObject({ email: 'test@example.test' });
+    expect(await env.DB.prepare('SELECT account_version FROM google_calendar_app_authorizations WHERE app_id = ? AND user_id = ?').bind('stash', USER).first('account_version')).toBe(1);
+    await del('stash', USER, USER);
+    await expect(beginGoogleOAuth(googleEnv, 'stash', USER, '/callback', '/')).rejects.toThrow('app_account_deleted');
+    fetchMock.assertNoPendingInterceptors();
   });
 });
