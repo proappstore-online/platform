@@ -65,7 +65,7 @@ describe('pas marketing add (#410)', () => {
     expect(r.appId).toBe('kanban-pro');
     expect(r.added.sort()).toEqual([
       'marketing/package.json', 'marketing/public/icon-192.png', 'marketing/src/pages/index.astro', 'marketing/src/pages/privacy.astro', 'marketing/src/site.ts',
-    ]);
+    ].map(path => join(...path.split('/'))).sort());
     expect(r.skipped).toEqual([]);
     expect(JSON.parse(read('marketing/package.json')).name).toBe('@kanban-pro/marketing');
     expect(readFileSync(join(app, 'marketing/public/icon-192.png'))).toEqual(ICON); // binary copied byte for byte
@@ -84,8 +84,8 @@ describe('pas marketing add (#410)', () => {
     writeFileSync(join(app, 'marketing', 'src', 'site.ts'), 'export const site = { mine: true }\n');
     writeFileSync(join(app, 'marketing', 'package.json'), '{"name":"mine"}');
     const r = await addMarketing({ cwd: app, fetchTemplate, fetchListing: async () => ({ tagline: 'Never applied' }) });
-    expect(r.skipped.sort()).toEqual(['marketing/package.json', 'marketing/src/site.ts']);
-    expect(r.added).toContain('marketing/src/pages/index.astro');
+    expect(r.skipped.sort()).toEqual([join('marketing', 'package.json'), join('marketing', 'src', 'site.ts')].sort());
+    expect(r.added).toContain(join('marketing', 'src', 'pages', 'index.astro'));
     expect(read('marketing/src/site.ts')).toBe('export const site = { mine: true }\n');
     expect(read('marketing/package.json')).toBe('{"name":"mine"}');
     expect(r.prefilled).toEqual([]);

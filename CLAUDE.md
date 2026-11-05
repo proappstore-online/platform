@@ -45,6 +45,12 @@ issue belongs to before you start.
 
 ## Verification bar
 
+Windows-hosted coders: follow [the supported verification workflow](docs/windows-verification.md).
+`pnpm verify` records every gate, its exit code and its log under `artifacts/verification/`.
+On Windows it explicitly leaves POSIX gates pending and exits nonzero; that report is a local
+preflight, never a passing release gate. The complete bar below remains mandatory on a supported
+POSIX runner for the exact candidate contents.
+
 Run from this directory before committing. Keep this list equal to the gates in
 `.github/workflows/ci.yml`:
 

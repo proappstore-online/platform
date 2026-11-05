@@ -16,3 +16,4 @@ docs/.vitepress/dist/
 .vibe-check/
 artifacts/offline-browser/
 artifacts/google-consent/
+artifacts/verification/

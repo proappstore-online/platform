@@ -157,7 +157,7 @@ describe('ai-gateway fallback (#22)', () => {
         if (statSync(p).isDirectory()) { walk(p); continue; }
         if (!p.endsWith('.ts') || p.endsWith('.test.ts') || p.endsWith('ai-gateway.ts')) continue;
         const src = readFileSync(p, 'utf8');
-        if (/api\.anthropic\.com|api\.openai\.com/.test(src)) offenders.push(p.slice(root.length + 1));
+        if (/api\.anthropic\.com|api\.openai\.com/.test(src)) offenders.push(p.slice(root.length + 1).replaceAll('\\', '/'));
       }
     };
     walk(root);

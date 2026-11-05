@@ -123,7 +123,7 @@ describe('ownership gate classification', () => {
   const files = [
     ...walk(join(root, 'packages/backend/src')).filter((f) => PATTERNS.backend!.test(readFileSync(f, 'utf8'))),
     ...['admin', 'agent-teams', 'build-core', 'data-worker', 'mcp'].flatMap((pkg) => walk(join(root, 'packages', pkg, 'src')).filter((f) => PATTERNS.other!.test(readFileSync(f, 'utf8')))),
-  ].map((f) => relative(root, f)).filter((f) => !OWN.test(f));
+  ].map((f) => relative(root, f).replaceAll('\\', '/')).filter((f) => !OWN.test(f));
 
   it('classifies every source file that uses an ownership gate', () => {
     expect(files.length).toBeGreaterThan(50);

@@ -22,6 +22,7 @@
     }
   },
   "scripts": {
+    "verify": "node scripts/verification.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "knip": "knip --no-progress",

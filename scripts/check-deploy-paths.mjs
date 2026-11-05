@@ -110,7 +110,7 @@ export function directDeps(pkg) {
         const top = target.split(sep)[0];
         if (!target.startsWith('..') && top !== pkg && packageDirs.includes(top)) dep = top;
       }
-      if (dep && dep !== pkg && !deps.has(dep)) deps.set(dep, `${relative(root, file)} imports ${spec}`);
+      if (dep && dep !== pkg && !deps.has(dep)) deps.set(dep, `${relative(root, file).split(sep).join('/')} imports ${spec}`);
     }
   }
   for (const e of EMBEDS[pkg] ?? []) if (!deps.has(e.pkg)) deps.set(e.pkg, `${e.via} embeds it`);
