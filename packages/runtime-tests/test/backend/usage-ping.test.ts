@@ -11,6 +11,11 @@ const env = providedEnv as unknown as Env;
 // parallel pings cannot record 50x the time. #381: payouts are archived, so no
 // ping writes a payout meter event any more.
 
+const DAY_MS = 86_400_000;
+const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+// Noon UTC on today's date: a fixed same-day clock, far from midnight and from session expiry drift.
+const utcAt = (h: number, m = 0, s = 0) => { const d = new Date(); d.setUTCHours(h, m, s, 0); return d.getTime(); };
+
 let now: number;
 let meter: ReturnType<typeof vi.spyOn>;
 const ping = async (deltaSeconds = 90, deltaApiCalls = 0) => viaHostApi(`${BASE}/v1/usage/ping`, {
@@ -18,12 +23,16 @@ const ping = async (deltaSeconds = 90, deltaApiCalls = 0) => viaHostApi(`${BASE}
   headers: { Authorization: `Bearer ${await session('gh:1')}`, 'Content-Type': 'application/json', 'X-PAS-App': 'meetup' },
   body: JSON.stringify({ appId: 'meetup', deltaSeconds, deltaApiCalls }),
 }).then((r) => r.json<{ recorded: boolean; reason?: string; sessionSeconds: number }>());
-const row = () => env.DB.prepare("SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = 'meetup' AND user_id = 'gh:1'").first<{ session_seconds: number; api_calls: number; last_seen: number }>();
+const row = (day = dayKey(utcAt(12))) => env.DB.prepare("SELECT session_seconds, api_calls, last_seen FROM usage_daily WHERE app_id = 'meetup' AND user_id = 'gh:1' AND day = ?1").bind(day).first<{ session_seconds: number; api_calls: number; last_seen: number }>();
 
 beforeEach(async () => {
   // The entrypoint and tests share workerd's global context. Freeze only Date.now:
   // storage, I/O and request interleaving remain real, even on a loaded runner.
-  now = Date.now();
+  // #538: a deterministic same-day clock. Wall-clock now straddled UTC midnight and split one
+  // scenario across two usage_daily rows.
+  now = utcAt(12);
+  // Noon plus the longest advance any scenario makes (~91 s) stays far inside the same UTC day.
+  expect(now % DAY_MS).toBeLessThan(DAY_MS - 90_000);
   vi.spyOn(Date, 'now').mockImplementation(() => now);
   mockNetwork();
   await resetTables();
@@ -90,6 +99,23 @@ describe('usage pings claim each interval once (#320)', () => {
     });
     expect(await res.json()).toMatchObject({ recorded: false, reason: 'unverified-origin' });
     expect(await row()).toBeNull();
+    expect(meter).not.toHaveBeenCalled();
+  });
+});
+
+describe('UTC-midnight rollover (#538)', () => {
+  it('pings either side of midnight accrue to separate daily rows', async () => {
+    now = utcAt(23, 59, 30);
+    const dayD = dayKey(now);
+    expect(await ping(90, 1)).toMatchObject({ recorded: true, sessionSeconds: 90 });
+    now += 91_000;
+    const dayNext = dayKey(now);
+    expect(dayNext).not.toBe(dayD);
+    expect(dayNext).toBe(dayKey(utcAt(23, 59, 30) + DAY_MS));
+    expect(await ping(90, 1)).toMatchObject({ recorded: true, sessionSeconds: 90 });
+
+    expect(await row(dayD)).toMatchObject({ session_seconds: 90, api_calls: 1, last_seen: utcAt(23, 59, 30) });
+    expect(await row(dayNext)).toMatchObject({ session_seconds: 90, api_calls: 1, last_seen: now });
     expect(meter).not.toHaveBeenCalled();
   });
 });
