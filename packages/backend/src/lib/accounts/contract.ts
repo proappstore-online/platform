@@ -264,6 +264,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/oidc-session.ts': live('isAdminId gate on minting e2e sessions (platform trust, not account authority)'),
   'packages/backend/src/routes/ownership.ts': live('creator-only transfer/recovery; T07 turns it into account-to-account transfer'),
   'packages/backend/src/routes/pags.ts': live(OWNER_ONLY),
+  'packages/backend/src/routes/promoters.ts': live('requireAppOwner for the owner lifecycle routes; enrollment is a person-session relationship that grants no publisher, team or admin right'),
   'packages/backend/src/routes/provision.ts': prov('claim check: creator_id vs the provisioning actor'),
   'packages/backend/src/routes/provisioning-plans.ts': live('plan state owner/other from creator_id and team role'),
   'packages/backend/src/routes/qa.ts': live(OWNER_ONLY),

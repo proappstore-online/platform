@@ -14,6 +14,9 @@ const MARKUP = /[<>]|&(#\d+|#x[0-9a-f]+|[a-z]+);/i;
 const CONTROL = /[\x00-\x1f\x7f]/;
 const LINKISH = /:\/\/|\bwww\.|\b[a-z0-9-]+\.(com|org|net|io|dev|app|online|co|me|xyz|ai)\b|\S+@\S+/i;
 
+/** Plain text only (no markup, links, email addresses or control characters), trimmed; null when empty. Shared with promoter display names. */
+export const plainText = (value: unknown, name: string, max: number) => text(value, name, max);
+
 export interface PublicProfileInput { display_name: string | null; label: string | null; visible: boolean }
 
 function text(value: unknown, name: string, max: number): string | null {

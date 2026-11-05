@@ -87,6 +87,7 @@ const mainSidebar = [
       { text: "App Workers", link: "/app-workers" },
       { text: "App billing", link: "/app-billing" },
       { text: "Public team and join enquiries", link: "/public-team-projection" },
+      { text: "Promoters (app-scoped enrollment)", link: "/promoters" },
       { text: "Browser verifier on ProAgentStore (trial)", link: "/pags-verifier" },
       { text: "Agent Customization", link: "/agent-customization" },
       { text: "AI Gateway (Agent Teams)", link: "/ai-gateway" },
