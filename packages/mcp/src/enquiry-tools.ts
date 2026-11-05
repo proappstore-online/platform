@@ -39,20 +39,22 @@ export function registerEnquiryTools(
 
   server.tool(
     "list_enquiries",
-    "List enquiries submitted through your app's about- marketing site, newest first, with counts { new, total }. Optional status filter (new or handled). When a page is full, `next.before_id` is the cursor for the following page. Owner (or platform admin) only. Read-only.",
+    "List enquiries to your app, newest first. Each has a `type`: `general` (the contact form on the about- site) or `team_join` (a request to join the app's team; it grants no membership and sends no email, so review it, then use your normal invitation flow). `counts` { new, total } and new_general_count / new_team_join_count cover the whole inbox, whatever the filter. Optional status (new or handled) and type (general or team_join) filters. When a page is full, `next.before_id` is the cursor for the following page. Owner (or platform admin) only. Read-only.",
     {
       app_id: APP_ID,
       status: z.enum(["new", "handled"]).optional().describe("Only enquiries in this state"),
+      type: z.enum(["general", "team_join"]).optional().describe("Only this kind of enquiry; omit for all"),
       limit: z.number().int().min(1).max(100).optional().describe("Page size, default 50"),
       before_id: ENQUIRY_ID.optional().describe("Cursor: next.before_id from the previous page"),
     },
     READ_ONLY,
-    async ({ app_id, status, limit, before_id }) => {
+    async ({ app_id, status, type, limit, before_id }) => {
       const { userId, token } = getUserContext();
       if (!token) return json({ error: NOT_AUTHENTICATED }, true);
-      await audit({ env, subject: userId }, { tool: "list_enquiries", action: "invoked", input: { app_id, status, limit, before_id } });
+      await audit({ env, subject: userId }, { tool: "list_enquiries", action: "invoked", input: { app_id, status, type, limit, before_id } });
       const q = new URLSearchParams();
       if (status) q.set("status", status);
+      if (type) q.set("type", type);
       if (limit) q.set("limit", String(limit));
       if (before_id) q.set("before_id", before_id);
       const qs = q.toString();
@@ -62,7 +64,7 @@ export function registerEnquiryTools(
 
   server.tool(
     "get_enquiry",
-    "Read one enquiry (name, email, message, status, who handled it and when) from your app's about- marketing site. Owner (or platform admin) only. Read-only.",
+    "Read one enquiry (name, email, message, type, status, who handled it and when) from your app's about- marketing site. Owner (or platform admin) only. Read-only.",
     { app_id: APP_ID, enquiry_id: ENQUIRY_ID },
     READ_ONLY,
     async ({ app_id, enquiry_id }) => {

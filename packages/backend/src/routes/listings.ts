@@ -5,6 +5,7 @@ import { wrap } from '../lib/route-wrap.js';
 import { auditModeration, chunkText, moderateChunks, moderateText } from '../lib/moderation.js';
 import { withinModerationRate } from '../lib/ai-budget.js';
 import { getAppVisibility } from '../lib/visibility.js';
+import { publicMembers } from '../lib/public-team.js';
 import { listingPermissionIds, listingPermissions } from '../lib/app-permissions.js';
 import { aboutOrigin } from './enquiries.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
@@ -81,6 +82,19 @@ listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
   // bursts from popular apps.
   c.header('Cache-Control', 'public, max-age=60');
   return c.json({ ...publicDto, permissions });
+}));
+
+/**
+ * The public team list (#542): only what each current member chose to publish. Never a user id,
+ * email, provider id, access role, `invited_by` or pending invitation. A private or missing app
+ * is answered identically, so the route cannot be used to probe for apps.
+ */
+listingsRoutes.get('/storefront/apps/:id/team', wrap(async (c) => {
+  const appId = c.req.param('id')!;
+  const appRow = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(appId).first<{ id: string }>();
+  if (!appRow || (await getAppVisibility(c.env.DB, appId)).mode === 'private') return c.text('not found', 404);
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json({ members: await publicMembers(c.env.DB, appId) });
 }));
 
 /** The revision names the host will serve (packages/host/src/marketing-site.ts): a commit SHA or a short slug. */

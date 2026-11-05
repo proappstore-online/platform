@@ -77,6 +77,17 @@ describe('enquiry MCP tools (#413)', () => {
     expect(sent(1).path).toBe('/v1/apps/stash/enquiries');
   });
 
+  it('list_enquiries forwards the type filter, and omits it when not given (#542)', async () => {
+    reply({ enquiries: [], counts: { new: 0, total: 0, new_general_count: 0, new_team_join_count: 0 }, next: null });
+    await call('list_enquiries', { app_id: 'stash', type: 'team_join', status: 'new' });
+    expect(sent().path).toBe('/v1/apps/stash/enquiries?status=new&type=team_join');
+    reply({ enquiries: [] });
+    await call('list_enquiries', { app_id: 'stash', limit: 5 });
+    expect(sent(1).path).toBe('/v1/apps/stash/enquiries?limit=5');
+    expect(() => z.object(tools.get('list_enquiries')!.schema).parse({ app_id: 'stash', type: 'applicant' })).toThrow();
+    expect(z.object(tools.get('list_enquiries')!.schema).parse({ app_id: 'stash', type: 'general' })).toMatchObject({ type: 'general' });
+  });
+
   it('a non-owner gets the backend refusal as an error (403 passes through)', async () => {
     reply('forbidden', 403);
     const r = await call('list_enquiries', { app_id: 'stash' });

@@ -1,12 +1,15 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, isAdminId, requireUser, requireAppAccess, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
+import { HttpError, isAdminId, requireUser, requireAppAccess, requireAppOwner, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import { sendEmail, type EmailConfig } from '../lib/email.js';
+import { hideProfile, moderationView, parseProfileInput, saveOwnProfile, withdrawOwnProfile } from '../lib/public-team.js';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
 // #378: owner-only reads are never cached.
 teamRoutes.use('/apps/:appId/team', privateNoStore);
+teamRoutes.use('/apps/:appId/team/public', privateNoStore);
+teamRoutes.use('/apps/:appId/team/public/*', privateNoStore);
 
 /** Resolve a GitHub username to a gh:<id> user ID. Returns null on failure. */
 async function resolveGitHubUser(username: string, ghToken?: string): Promise<string | null> {
@@ -62,6 +65,52 @@ teamRoutes.get('/apps/:appId/team', wrap(async (c) => {
     .all<{ user_id: string; role: string; created_at: number }>();
 
   return c.json({ appId, members: results ?? [] });
+}));
+
+/**
+ * Public team profile (#542). What a member chooses to publish on the storefront team list
+ * (GET /v1/storefront/apps/:id/team). Opt-in: nothing is public until the member sets
+ * visible = true, and removal, rejoin or a publisher transfer clears it (migration 0128).
+ * A label is presentation, never a permission.
+ *
+ *   GET    /apps/:appId/team/public            owner: every current member and what they published
+ *   PUT    /apps/:appId/team/public/me         current member: { display_name, label, visible }
+ *   DELETE /apps/:appId/team/public/me         current member: withdraw (visible = false)
+ *   DELETE /apps/:appId/team/public/:userId    owner: take one person off the public list
+ */
+teamRoutes.get('/apps/:appId/team/public', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  return c.json({ appId, members: await moderationView(c.env.DB, appId) });
+}));
+
+/** A person manages only their own profile, with their own signed-in session. */
+async function profileOwner(c: Parameters<typeof requireUser>[0]) {
+  const user = await requireUser(c);
+  if (user.via) throw new HttpError('sign in as yourself to manage your public profile', 403);
+  return user;
+}
+
+teamRoutes.put('/apps/:appId/team/public/me', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const user = await profileOwner(c);
+  const input = parseProfileInput(await c.req.json().catch(() => null));
+  if (!(await saveOwnProfile(c.env.DB, appId, user.id, input))) throw new HttpError('only a current team member can publish a profile', 403);
+  return c.json({ ok: true, appId, visible: input.visible, display_name: input.display_name, label: input.label });
+}));
+
+teamRoutes.delete('/apps/:appId/team/public/me', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const user = await profileOwner(c);
+  if (!(await withdrawOwnProfile(c.env.DB, appId, user.id))) throw new HttpError('only a current team member can manage a profile', 403);
+  return c.json({ ok: true, appId, visible: false });
+}));
+
+teamRoutes.delete('/apps/:appId/team/public/:userId', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  if (!(await hideProfile(c.env.DB, appId, c.req.param('userId')!))) throw new HttpError('that member is not on the public list', 404);
+  return c.json({ ok: true, appId, visible: false });
 }));
 
 /**

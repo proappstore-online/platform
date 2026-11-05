@@ -2,9 +2,14 @@
  * Enquiries from an app's about- marketing site (#412, epic #411).
  *
  *   POST  /v1/apps/:appId/enquiries               public: { name, email, message } from about-<appId>
- *   GET   /v1/apps/:appId/enquiries?status=&before=   owner: newest first, with the count of new ones
+ *   GET   /v1/apps/:appId/enquiries?status=&type=&before=   owner: newest first, with the count of new ones
  *   GET   /v1/apps/:appId/enquiries/:id            owner
  *   PATCH /v1/apps/:appId/enquiries/:id            owner: { status: 'new' | 'handled' }
+ *   POST  /v1/storefront/apps/:appId/enquiries/team-join   public apps: a typed `team_join` enquiry (#542)
+ *
+ * Each enquiry has a `type`: `general` (the contact form) or `team_join` (a request to join
+ * the app's team). `?type=` filters the owner's list. A team_join enquiry is only a message in
+ * the owner's inbox: it grants no membership and no access, and sends no email.
  *
  * Enquiries are stored in the platform per app — not emailed out, not in the
  * app's own data — and only the app's owner (or a platform admin) reads them.
@@ -20,6 +25,7 @@
 import { Hono, type Context } from 'hono';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { privateNoStore } from '../lib/route-wrap.js';
+import { getAppVisibility } from '../lib/visibility.js';
 import type { Env } from '../types.js';
 
 export const ENQUIRY_IP_LIMIT = 5;
@@ -119,8 +125,10 @@ interface EnquiryRow {
   created_at: number;
   handled_at: number | null;
   handled_by: string | null;
+  type: string;
 }
-const COLUMNS = 'id, name, email, message, status, created_at, handled_at, handled_by';
+const COLUMNS = 'id, name, email, message, type, status, created_at, handled_at, handled_by';
+const ENQUIRY_TYPES = ['general', 'team_join'] as const;
 
 async function owned(c: Context<{ Bindings: Env }>): Promise<string> {
   const appId = c.req.param('appId')!;
@@ -132,6 +140,8 @@ enquiryRoutes.get('/apps/:appId/enquiries', async (c) => {
   const appId = await owned(c);
   const status = c.req.query('status');
   if (status !== undefined && status !== 'new' && status !== 'handled') throw new HttpError("status must be 'new' or 'handled'", 400);
+  const type = c.req.query('type');
+  if (type !== undefined && !(ENQUIRY_TYPES as readonly string[]).includes(type)) throw new HttpError("type must be 'general' or 'team_join'", 400);
   const before = Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER);
   if (!Number.isFinite(before)) throw new HttpError('before must be a timestamp', 400);
   // Floored: a fractional LIMIT is a SQLite datatype mismatch (a 500), #429.
@@ -144,17 +154,29 @@ enquiryRoutes.get('/apps/:appId/enquiries', async (c) => {
   const beforeId = c.req.query('before_id');
   if (beforeId !== undefined && !ID_RE.test(beforeId)) throw new HttpError('before_id must be an enquiry id', 400);
   const rows = await c.env.DB.prepare(
-    `SELECT ${COLUMNS} FROM app_enquiries WHERE app_id = ?1 AND (?2 IS NULL OR status = ?2) AND created_at < ?3
+    `SELECT ${COLUMNS} FROM app_enquiries WHERE app_id = ?1 AND (?2 IS NULL OR status = ?2) AND (?6 IS NULL OR type = ?6) AND created_at < ?3
         AND (?5 IS NULL OR (created_at, rowid) < (SELECT created_at, rowid FROM app_enquiries WHERE app_id = ?1 AND id = ?5))
       ORDER BY created_at DESC, rowid DESC LIMIT ?4`,
-  ).bind(appId, status ?? null, before, limit, beforeId ?? null).all<EnquiryRow>();
+  ).bind(appId, status ?? null, before, limit, beforeId ?? null, type ?? null).all<EnquiryRow>();
   const counts = await c.env.DB.prepare(
-    "SELECT SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS new_count, COUNT(*) AS total FROM app_enquiries WHERE app_id = ?",
-  ).bind(appId).first<{ new_count: number | null; total: number }>();
+    `SELECT SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS new_count, COUNT(*) AS total,
+        SUM(CASE WHEN status = 'new' AND type = 'general' THEN 1 ELSE 0 END) AS new_general_count,
+        SUM(CASE WHEN status = 'new' AND type = 'team_join' THEN 1 ELSE 0 END) AS new_team_join_count
+       FROM app_enquiries WHERE app_id = ?`,
+  ).bind(appId).first<{ new_count: number | null; total: number; new_general_count: number | null; new_team_join_count: number | null }>();
   const list = rows.results ?? [];
   // The next page's cursor, when this one is full.
   const next = list.length === limit ? { before_id: list[list.length - 1]!.id } : null;
-  return c.json({ enquiries: list, counts: { new: counts?.new_count ?? 0, total: counts?.total ?? 0 }, next });
+  // `counts` is exactly as before. The per-type counts are siblings, so a client that compares `counts` is unaffected.
+  // They cover the whole inbox, whatever `type` filters the page.
+  return c.json({
+    enquiries: list,
+    counts: { new: counts?.new_count ?? 0, total: counts?.total ?? 0 },
+    new_count: counts?.new_count ?? 0,
+    new_general_count: counts?.new_general_count ?? 0,
+    new_team_join_count: counts?.new_team_join_count ?? 0,
+    next,
+  });
 });
 
 enquiryRoutes.get('/apps/:appId/enquiries/:id', async (c) => {
@@ -180,4 +202,73 @@ enquiryRoutes.patch('/apps/:appId/enquiries/:id', async (c) => {
     : null;
   if (!res?.meta?.changes) throw new HttpError('no such enquiry', 404);
   return c.json({ id, status: body.status });
+});
+
+// ---------------------------------------------------------------------------
+// #542: a team_join enquiry from an eligible app's storefront or about- site.
+// ---------------------------------------------------------------------------
+
+const STOREFRONT_ORIGIN = 'https://proappstore.online';
+const TAGS = /<\/?[a-z!][^>]*>/i;
+const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+const URLISH = /:\/\/|\bwww\./i;
+
+/** An applicant is a person: no markup in any field, no link in the name, no control characters. */
+function teamJoinProblem(name: string, email: string, message: string): string | null {
+  if (TAGS.test(name) || TAGS.test(email) || TAGS.test(message) || /[<>]/.test(name)) return 'markup is not allowed';
+  if (CONTROL.test(name) || CONTROL.test(email) || CONTROL.test(message)) return 'control characters are not allowed';
+  if (URLISH.test(name)) return 'name must not contain a link';
+  return null;
+}
+
+/**
+ * Only a public app takes a team_join enquiry; a private or missing app is answered identically (404).
+ * The request must come from the app's own about- site or the storefront (exact origins); the
+ * contact endpoint above keeps its stricter about--only check. Honeypot, size, shape and the atomic
+ * rate limits are those of the contact form, shared with it: a join request cannot add capacity.
+ * One open join request per email per app: a repeat is answered like a success and stores nothing, so
+ * the response never reveals whether an address already applied.
+ */
+enquiryRoutes.post('/storefront/apps/:appId/enquiries/team-join', async (c) => {
+  const appId = c.req.param('appId')!;
+  c.header('Cache-Control', 'no-store');
+  if (!/^[a-z][a-z0-9-]{0,56}$/.test(appId) || !(await c.env.DB.prepare('SELECT 1 FROM apps WHERE id = ?').bind(appId).first())
+    || (await getAppVisibility(c.env.DB, appId)).mode === 'private') {
+    return c.text('not found', 404);
+  }
+  const origin = c.req.header('Origin');
+  if (origin !== aboutOrigin(appId) && origin !== STOREFRONT_ORIGIN) throw new HttpError("team requests are accepted from the app's about- site or the storefront only", 403);
+  if (Number(c.req.header('Content-Length') ?? 0) > MAX_BODY_BYTES) throw new HttpError('request too large', 413);
+  if (!/application\/json/i.test(c.req.header('Content-Type') ?? '')) throw new HttpError('send JSON', 415);
+
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  const invalid = (detail: string) => c.json({ ok: false, error: 'invalid', detail }, 400);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return invalid('unreadable body');
+  // Honeypot: answer exactly like a success, store nothing.
+  if (typeof body[ENQUIRY_HONEYPOT] === 'string' && (body[ENQUIRY_HONEYPOT] as string).trim() !== '') return c.json({ ok: true }, 201);
+
+  const name = field(body, 'name', MAX_NAME);
+  const email = field(body, 'email', MAX_EMAIL);
+  const message = field(body, 'message', MAX_MESSAGE);
+  for (const v of [name, email, message]) if (typeof v !== 'string') return invalid(v.error);
+  if (!EMAIL_RE.test(email as string)) return invalid('email is not an email address');
+  const problem = teamJoinProblem(name as string, email as string, message as string);
+  if (problem) return invalid(problem);
+
+  const now = Date.now();
+  const ipHash = await sha256Hex(`${appId}\u0000${c.req.header('CF-Connecting-IP') ?? 'unknown'}`);
+  const id = crypto.randomUUID();
+  const stored = await c.env.DB.prepare(
+    `INSERT INTO app_enquiries (id, app_id, name, email, message, status, ip_hash, created_at, type)
+     SELECT ?1, ?2, ?3, ?4, ?5, 'new', ?6, ?7, 'team_join'
+      WHERE (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND ip_hash = ?6 AND created_at > ?8) < ?10
+        AND (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND created_at > ?9) < ?11
+        AND NOT EXISTS (SELECT 1 FROM app_enquiries WHERE app_id = ?2 AND type = 'team_join' AND status = 'new' AND lower(email) = lower(?4))`,
+  ).bind(id, appId, name, email, message, ipHash, now, now - HOUR_MS, now - DAY_MS, ENQUIRY_IP_LIMIT, ENQUIRY_APP_DAILY_LIMIT).run();
+  if (stored.meta?.changes) return c.json({ ok: true, id }, 201);
+
+  const repeat = await c.env.DB.prepare("SELECT 1 FROM app_enquiries WHERE app_id = ? AND type = 'team_join' AND status = 'new' AND lower(email) = lower(?)").bind(appId, email).first();
+  if (repeat) return c.json({ ok: true }, 201);
+  c.header('Retry-After', '3600');
+  return c.json({ ok: false, error: 'rate-limited' }, 429);
 });
