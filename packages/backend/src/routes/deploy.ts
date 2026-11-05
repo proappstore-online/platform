@@ -10,6 +10,8 @@ import { replaceAppTools } from './tools.js';
 import { siteManifestFrom, type SiteManifest } from '../lib/manifest/site.js';
 import { isAppRepository } from '../lib/app-deploy-oidc.js';
 import { ensureMirrorTable } from '../lib/entitlement-mirror.js';
+import { attestReferralReadiness } from '../lib/promoters/readiness.js';
+import { wrap } from '../lib/route-wrap.js';
 
 /**
  * Keyless deploy credentials.
@@ -119,16 +121,20 @@ deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
     return c.json({ error: `R2 credential request failed: ${(e as Error).message}` }, 502);
   }
 
-  // Audit the mint (best-effort — an audit failure must never block a deploy).
+  // Record/invalidate before returning upload credentials. If this fails we must
+  // not hand out credentials that can overwrite a previously verified deployment.
+  let deployId: number | null = null;
   try {
-    await c.env.DB.prepare(
+    const audit = await c.env.DB.prepare(
       `INSERT INTO deploy_audit (app_id, repository, ref, sha, prefix, minted_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
       .bind(appId, claims.repository, claims.ref ?? '', claims.sha ?? null, prefix, Date.now())
       .run();
+    deployId = audit.meta?.last_row_id ?? null;
   } catch (e) {
     console.error(`deploy_audit insert failed for ${appId}: ${(e as Error).message}`);
+    return c.json({ error: 'could not record deployment' }, 503);
   }
 
   return c.json({
@@ -141,8 +147,18 @@ deployRoutes.post('/apps/:appId/deploy-credentials', async (c) => {
     expiresInSeconds: TTL_SECONDS,
     repository: claims.repository,
     sha: claims.sha ?? null,
+    deploy_id: deployId,
   });
 });
+
+deployRoutes.post('/apps/:appId/referral-readiness/oidc', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const oidc = await authorizeDeployOidc(c, appId);
+  if ('refusal' in oidc) return oidc.refusal;
+  const readiness = await attestReferralReadiness(c.env.DB, appId, oidc.claims.repository, oidc.claims.sha,
+    await c.req.json().catch(() => null));
+  return c.json({ referral_tracking: readiness });
+}));
 
 /**
  * Keyless tools registration: the deploy workflow ships the repo's mcp.json

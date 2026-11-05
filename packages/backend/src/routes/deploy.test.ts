@@ -113,6 +113,16 @@ describe('POST /apps/:appId/deploy-credentials', () => {
     expect((await call('aiuniversity')).status).toBe(401);
   });
 
+  it('does not return upload credentials when readiness invalidation cannot be recorded (#553)', async () => {
+    const response = await deployRoutes.request('/apps/aiuniversity/deploy-credentials', {
+      method: 'POST', headers: { Authorization: `Bearer ${await signToken()}` },
+    }, { CF_API_TOKEN: 'cf-token', CF_ACCOUNT_ID: ACCOUNT, R2_PARENT_ACCESS_KEY_ID: 'parent-key-id',
+      DB: { prepare: () => { throw new Error('D1 unavailable'); } },
+    } as never);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'could not record deployment' });
+  });
+
   it('mints only the existing chess prefix for the transferred repo and refuses other refs/IDs', async () => {
     const repo = 'ChessClubs-online/chess-clubs';
     const identity = { repository_id: '1261947598', repository_owner_id: '342714948' };

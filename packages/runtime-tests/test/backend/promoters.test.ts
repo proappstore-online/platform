@@ -1,3 +1,4 @@
+import { seedReferralReady } from '../../../backend/src/promoter-test-helpers';
 import { SELF, env as providedEnv } from 'cloudflare:test';
 import { credentialContext, mintSession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -31,10 +32,38 @@ beforeEach(async () => {
   for (const uid of [OWNER, ADA, BOB]) await seedUser(uid);
   await seedApp('shop', OWNER); await seedApp('other', BOB); await seedApp('quiet', OWNER);
   await env.DB.prepare("INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('quiet','private','[]',1)").run();
+  await seedReferralReady(env.DB, 'shop', 'other');
   await env.DB.prepare("INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',1),('other','gh:3','owner',1)").run();
 });
 
 describe('promoter enrollment on D1 (#549)', () => {
+  it('gates recruitment on a verified deployment and preserves an existing relationship across a redeploy (#553)', async () => {
+    expect((await enroll(ADA)).status).toBe(201);
+    const before = await first('SELECT * FROM app_promoters WHERE app_id = ? AND user_id = ?', 'shop', ADA);
+    await env.DB.prepare(`INSERT INTO deploy_audit (app_id, repository, ref, sha, prefix, minted_at)
+      VALUES ('shop','proappstore-online/shop','refs/heads/main','next-sha','apps/shop/',2)`).run();
+    const unavailable = await call('GET', '/storefront/promoters/apps/shop/readiness', null);
+    expect(await unavailable.json()).toEqual({ enrollment_open: true,
+      referral_tracking: { ready: false, reason: 'deployment_unverified', protocol_version: 1 } });
+    const refusal = await enroll(BOB);
+    expect([refusal.status, await refusal.text()]).toEqual([403, 'referral_tracking_not_ready']);
+    const list = await (await call('GET', '/storefront/promoters/apps', null)).json<{ apps: { appId: string }[] }>();
+    expect(list.apps.map((a) => a.appId)).toEqual(['other']);
+    expect(await first('SELECT * FROM app_promoters WHERE app_id = ? AND user_id = ?', 'shop', ADA)).toEqual(before);
+    expect((await call('GET', '/apps/shop/promoters/me', ADA)).status).toBe(200);
+    await seedReferralReady(env.DB, 'shop');
+    expect((await enroll(BOB)).status).toBe(201);
+  });
+
+  it('explains legacy/older deployments without revealing private apps (#553)', async () => {
+    await env.DB.prepare("UPDATE app_referral_readiness SET verified = 0, auth_mode = 'legacy-bearer' WHERE app_id = 'shop'").run();
+    expect(await (await call('GET', '/storefront/promoters/apps/shop/readiness', null)).json()).toMatchObject({ referral_tracking: { ready: false, reason: 'legacy_auth' } });
+    expect((await enroll(ADA)).status).toBe(403);
+    await env.DB.prepare("UPDATE app_referral_readiness SET auth_mode = 'platform-cookie', sdk_version = '1.16.101' WHERE app_id = 'shop'").run();
+    expect(await (await call('GET', '/storefront/promoters/apps/shop/readiness', null)).json()).toMatchObject({ referral_tracking: { ready: false, reason: 'sdk_unsupported' } });
+    for (const id of ['quiet', 'missing']) expect((await call('GET', `/storefront/promoters/apps/${id}/readiness`, null)).status).toBe(404);
+  });
+
   it('enrolls a person who owns no app, grants nothing else, and replays idempotently', async () => {
     const people = await env.DB.prepare('SELECT id, login FROM users ORDER BY id').all();
     const team = await env.DB.prepare('SELECT * FROM team_members ORDER BY app_id, user_id').all();

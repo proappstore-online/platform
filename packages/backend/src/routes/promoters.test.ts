@@ -1,3 +1,4 @@
+import { seedReferralReady } from '../promoter-test-helpers.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { credentialContext, mintSession } from '@proappstore/build-core';
 import { app } from '../index.js';
@@ -32,7 +33,7 @@ const lift = (promoterId: string, appId = 'shop', uid = OWNER) => call('POST', `
 const resolve = (code: string) => app.request(`/v1/storefront/promoters/code/${encodeURIComponent(code)}`, {}, env);
 const snapshot = () => JSON.stringify(['users', 'team_members', 'apps', 'app_roles', 'app_visibility'].map((t) => rows(`SELECT * FROM ${t} ORDER BY 1, 2`)));
 
-beforeEach(() => {
+beforeEach(async () => {
   db = sqliteD1();
   db.sql.exec(`PRAGMA foreign_keys = ON;
     INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at) VALUES
@@ -40,6 +41,7 @@ beforeEach(() => {
     INSERT INTO apps (id, creator_id, created_at) VALUES ('shop','gh:1',1),('other','gh:3',2),('quiet','gh:1',3);
     INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',0),('other','gh:3','owner',0);
     INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('quiet','private','[]',0);`);
+  await seedReferralReady(db, 'shop', 'other');
   env = makeEnv({ DB: db }) as Env;
   tokens.clear();
 });
@@ -295,7 +297,7 @@ describe('app state: private, closed, removed, transferred', () => {
     expect([priv.status, await priv.text()]).toEqual([missing.status, await missing.text()]);
     expect(missing.status).toBe(404);
     expect((await call('PUT', '/apps/shop/promoters/settings', OWNER, { enrollment_open: false })).status).toBe(200);
-    expect(await json(await call('GET', '/apps/shop/promoters/settings', OWNER))).toEqual({ enrollment_open: false });
+    expect(await json(await call('GET', '/apps/shop/promoters/settings', OWNER))).toEqual({ enrollment_open: false, referral_tracking: { ready: true, reason: null, protocol_version: 1 } });
     const closed = await enrollAs(ADA, 'shop');
     expect([closed.status, await closed.text()]).toEqual([403, 'enrollment_closed']);
     expect((await call('PUT', '/apps/shop/promoters/settings', OWNER, { enrollment_open: 'no' })).status).toBe(400);

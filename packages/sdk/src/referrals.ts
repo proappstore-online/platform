@@ -1,5 +1,7 @@
 interface AuthLike {
   token: string | null;
+  usesPlatformCookie?: boolean;
+  isSignedIn?: boolean;
   authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
@@ -175,7 +177,8 @@ export class Referrals {
 
   private async send(): Promise<ReferralClaimResult | null> {
     const held = this.pending();
-    if (!held || !this.auth.token) return null;
+    // HttpOnly cookie sessions intentionally have no JS-visible bearer token.
+    if (!held || !(this.auth.usesPlatformCookie ? this.auth.isSignedIn : this.auth.token)) return null;
     try {
       const response = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/referrals/claim`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: held.code }),

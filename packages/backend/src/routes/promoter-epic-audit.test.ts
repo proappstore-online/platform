@@ -1,3 +1,4 @@
+import { seedReferralReady } from '../promoter-test-helpers.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -46,6 +47,7 @@ beforeEach(async () => {
       ('gh:10','google','10','${INVITEE_LOGIN}','${INVITEE_EMAIL}',0,0),('gh:11','google','11','second-invitee','second@example.invalid',0,0);
     INSERT INTO apps (id, creator_id, created_at) VALUES ('shop','gh:1',1),('other','gh:1',2);
     INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',0),('other','gh:1','owner',0);`);
+  await seedReferralReady(db, 'shop', 'other');
   env = makeEnv({ DB: db }) as Env;
   pat = await promote(PAT); pru = await promote(PRU);
 });

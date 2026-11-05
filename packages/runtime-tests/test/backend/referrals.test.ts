@@ -1,3 +1,4 @@
+import { seedReferralReady } from '../../../backend/src/promoter-test-helpers';
 import { SELF, env as providedEnv } from 'cloudflare:test';
 import { credentialContext, mintSession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -8,6 +9,13 @@ import { BASE, mockNetwork, resetTables, seedApp, seedUser, viaHostApi } from '.
 // only the HostApi service binding keeps X-PAS-App, so a forged header on a direct request is not an activation.
 
 const env = providedEnv as unknown as Env;
+const SDK = '../../../sdk/src/';
+const { Referrals } = await import(/* @vite-ignore */ `${SDK}referrals`) as {
+  Referrals: new (appId: string, api: string, auth: { token: null; usesPlatformCookie: boolean; isSignedIn: boolean; authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response> },
+    storage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void }) => {
+      capture(href: string): string | null; claim(): Promise<unknown>;
+    };
+};
 const OWNER = 'gh:1', PAT = 'gh:2', PRU = 'gh:3', NEW1 = 'gh:10', NEW2 = 'gh:11', NEW3 = 'gh:12', NEW4 = 'gh:13';
 const TABLES = ['app_referral_events', 'app_referral_attributions', 'app_user_activations', 'app_promoter_events', 'app_promoters', 'per_app_deleted_users', 'app_visibility', 'team_members', 'kv'];
 
@@ -41,12 +49,36 @@ beforeEach(async () => {
   await resetTables();
   for (const uid of [OWNER, PAT, PRU, NEW1, NEW2, NEW3, NEW4]) await seedUser(uid);
   await seedApp('shop', OWNER); await seedApp('other', OWNER);
+  await seedReferralReady(env.DB, 'shop', 'other');
   await env.DB.prepare("INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',1),('other','gh:1','owner',1)").run();
   const enroll = async (uid: string, appId = 'shop') => (await (await owner('POST', `/apps/${appId}/promoters/enroll`, uid, { consent: true })).json<{ promoter: { code: string } }>()).promoter.code;
   patCode = await enroll(PAT); pruCode = await enroll(PRU);
 });
 
 describe('referral attribution on D1 (#550)', () => {
+  it('captures with the SDK across sign-in, claims via host mediation and credits exactly once (#553)', async () => {
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+    const auth = { token: null, usesPlatformCookie: true, isSignedIn: false,
+      authenticatedFetch: async (input: string | URL, init?: RequestInit) => viaHostApi(String(input), { ...init,
+        headers: { ...Object.fromEntries(new Headers(init?.headers)), Authorization: `Bearer ${await appBound(NEW4)}`, 'X-PAS-App': 'shop' } }),
+    };
+    const beforeSignIn = new Referrals('shop', BASE, auth, storage);
+    expect(beforeSignIn.capture(`https://shop.proappstore.online/?ref=${patCode}`)).toBe(patCode);
+    expect(await beforeSignIn.claim()).toBeNull();
+    // A new SDK instance after the auth redirect reads the same captured code.
+    auth.isSignedIn = true;
+    const afterSignIn = new Referrals('shop', BASE, auth, storage);
+    expect(await afterSignIn.claim()).toEqual({ credited: false, state: 'pending' });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect((await use(NEW4)).status).toBe(200);
+      expect(await claim(NEW4, patCode)).toEqual({ credited: true, state: 'confirmed' });
+    }
+    expect(await count("SELECT COUNT(*) AS n FROM app_referral_attributions WHERE referred_user_id = 'gh:13' AND status = 'confirmed'")).toBe(1);
+    expect(await count("SELECT COUNT(*) AS n FROM app_referral_events WHERE action = 'confirmed'")).toBe(1);
+  });
+
   it('captures pending, then confirms exactly once on the first activation made through the host', async () => {
     expect(await claim(NEW1, patCode)).toEqual({ credited: false, state: 'pending' });
     expect(await count('SELECT COUNT(*) AS n FROM app_user_activations')).toBe(0); // a claim is not an activation

@@ -92,6 +92,9 @@ Errors are plain-text bodies, as elsewhere. The public code check for the "inval
 
 Apps on an older SDK, or in legacy-bearer mode (no host mediation), do not capture or activate and are not credited.
 
+Recruitment is gated separately by [deployed referral readiness](./promoter-readiness.md).
+Unknown deployments remain unavailable until their authorized deployment workflow verifies and attests the referral contract.
+
 ## Compatibility
 
 Additive: migration `0130` adds three tables and two triggers and rewrites no row. The only change to existing behaviour is a

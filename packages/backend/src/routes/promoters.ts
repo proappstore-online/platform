@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireAppOwner, requireUser } from '../lib/auth.js';
 import { privateNoStore, wrap } from '../lib/route-wrap.js';
+import { referralReadiness } from '../lib/promoters/readiness.js';
 import {
   eligibleApps, enroll, getSettings, listEvents, listForOwner, ownDto, ownRelationship, ownRelationships, parseEnrollment, parseReturnPath,
   putSettings, renameSelf, resolveCode, setStatus, withdraw,
@@ -44,6 +45,17 @@ const body = (c: Ctx) => c.req.json().catch(() => null);
 promoterRoutes.get('/storefront/promoters/apps', wrap(async (c) => {
   c.header('Cache-Control', 'public, max-age=60');
   return c.json(await eligibleApps(c.env.DB, { after: c.req.query('after'), limit: c.req.query('limit') }));
+}));
+
+// Safe explanation for a destination that is absent from eligible discovery.
+promoterRoutes.get('/storefront/promoters/apps/:appId/readiness', wrap(async (c) => {
+  c.header('Cache-Control', 'no-store');
+  const appId = c.req.param('appId')!;
+  const app = await c.env.DB.prepare(`SELECT COALESCE(s.enrollment_open, 1) AS enrollment_open FROM apps a
+    LEFT JOIN app_visibility v ON v.app_id = a.id LEFT JOIN app_promoter_settings s ON s.app_id = a.id
+    WHERE a.id = ? AND (v.mode IS NULL OR v.mode <> 'private')`).bind(appId).first<{ enrollment_open: number }>();
+  if (!app) throw new HttpError('not found', 404);
+  return c.json({ enrollment_open: app.enrollment_open === 1, referral_tracking: await referralReadiness(c.env.DB, appId) });
 }));
 
 promoterRoutes.get('/storefront/promoters/code/:code', wrap(async (c) => {

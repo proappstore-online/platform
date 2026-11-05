@@ -1,6 +1,7 @@
 import { HttpError } from '../auth.js';
 import { plainText } from '../public-team.js';
 import { generateCode, normalizeCode } from './codes.js';
+import { READY_SQL, referralReadiness } from './readiness.js';
 
 /**
  * App-scoped promoter enrollment (#549, epic #548). A promoter is an existing PAS user who enrolled
@@ -50,7 +51,7 @@ function ownerDto(r: Row) {
 
 /** Not private (a private or missing app is the same refusal), and the owner has not closed enrollment. */
 const eligible = (n: number) => `EXISTS (SELECT 1 FROM apps a LEFT JOIN app_visibility v ON v.app_id = a.id LEFT JOIN app_promoter_settings s ON s.app_id = a.id
-  WHERE a.id = ?${n} AND (v.mode IS NULL OR v.mode <> 'private') AND COALESCE(s.enrollment_open, 1) = 1)`;
+  WHERE a.id = ?${n} AND (v.mode IS NULL OR v.mode <> 'private') AND COALESCE(s.enrollment_open, 1) = 1 AND ${READY_SQL})`;
 const erased = (a: number, u: number) => `EXISTS (SELECT 1 FROM per_app_deleted_users d WHERE d.app_id = ?${a} AND d.user_id = ?${u})`;
 
 async function assertCanEnroll(db: D1Database, appId: string, userId: string) {
@@ -60,6 +61,7 @@ async function assertCanEnroll(db: D1Database, appId: string, userId: string) {
   ).bind(appId).first<{ open: number; is_private: number | null }>();
   if (!app || app.is_private) throw new HttpError('not found', 404);
   if (!app.open) throw new HttpError('enrollment_closed', 403);
+  if (!(await referralReadiness(db, appId)).ready) throw new HttpError('referral_tracking_not_ready', 403);
   if (await db.prepare('SELECT 1 FROM per_app_deleted_users WHERE app_id = ? AND user_id = ?').bind(appId, userId).first()) throw new HttpError('account_deleted_in_app', 403);
 }
 
@@ -213,7 +215,7 @@ export async function listEvents(db: D1Database, appId: string, query: { promote
 
 export async function getSettings(db: D1Database, appId: string) {
   const row = await db.prepare('SELECT enrollment_open FROM app_promoter_settings WHERE app_id = ?').bind(appId).first<{ enrollment_open: number }>();
-  return { enrollment_open: row ? row.enrollment_open === 1 : true };
+  return { enrollment_open: row ? row.enrollment_open === 1 : true, referral_tracking: await referralReadiness(db, appId) };
 }
 
 export async function putSettings(db: D1Database, appId: string, body: unknown, actorId: string, now = Date.now()) {
@@ -234,7 +236,7 @@ export async function eligibleApps(db: D1Database, query: { after?: string | und
   const { results } = await db.prepare(
     `SELECT a.id AS app_id, l.icon_url, l.tagline, l.category FROM apps a
        LEFT JOIN app_listings l ON l.app_id = a.id LEFT JOIN app_visibility v ON v.app_id = a.id LEFT JOIN app_promoter_settings s ON s.app_id = a.id
-      WHERE (v.mode IS NULL OR v.mode <> 'private') AND COALESCE(s.enrollment_open, 1) = 1 AND (?1 IS NULL OR a.id > ?1)
+      WHERE (v.mode IS NULL OR v.mode <> 'private') AND COALESCE(s.enrollment_open, 1) = 1 AND ${READY_SQL} AND (?1 IS NULL OR a.id > ?1)
       ORDER BY a.id LIMIT ?2`,
   ).bind(query.after ?? null, limit).all<{ app_id: string; icon_url: string | null; tagline: string | null; category: string | null }>();
   const list = results ?? [];

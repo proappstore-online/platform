@@ -35,6 +35,10 @@ on:
         description: "Node.js major version for build and E2E"
         type: number
         default: 22
+      referral-readiness:
+        description: "Verify the uploaded build with the app's synthetic test:referral-readiness script and attest referral protocol v1"
+        type: boolean
+        default: false
     secrets:
       RUNNER_BILLING_TOKEN:
         description: "Repo-level runner billing token (private repos only); passed by `secrets: inherit`"
@@ -377,6 +381,7 @@ jobs:
             echo "AWS_SECRET_ACCESS_KEY=$(echo "$RESP" | jq -r '.secretAccessKey')"
             echo "AWS_SESSION_TOKEN=$(echo "$RESP" | jq -r '.sessionToken')"
             echo "R2_ENDPOINT=$(echo "$RESP" | jq -r '.endpoint')"
+            echo "PAS_DEPLOY_ID=$(echo "$RESP" | jq -r '.deploy_id // empty')"
           } >> "$GITHUB_ENV"
 
       - name: Upload to R2
@@ -387,6 +392,39 @@ jobs:
             --endpoint-url "$R2_ENDPOINT" \
             --delete --no-progress
           echo "Deployed apps/${{ github.event.repository.name }} from ${{ github.sha }}"
+
+      - name: Verify and attest referral readiness
+        if: inputs.referral-readiness
+        env:
+          APP_ID: ${{ github.event.repository.name }}
+          PAS_REFERRAL_DIST: ${{ steps.dist.outputs.dir }}
+        run: |
+          # Explicit opt-in: test the uploaded build in an isolated synthetic
+          # environment: capture -> cookie-auth activation -> exactly one credit.
+          # Do not create synthetic credits in the production app's ledger.
+          # A missing/failing test never leaves a deployment advertised as ready.
+          [ -n "$PAS_DEPLOY_ID" ] || { echo "::error::no deployment audit ID"; exit 1; }
+          pnpm run test:referral-readiness
+          node --input-type=module <<'JS'
+          import { createRequire } from 'node:module';
+          import { existsSync, readFileSync } from 'node:fs';
+          import { dirname, resolve } from 'node:path';
+          const root = existsSync('web/package.json') ? resolve('web/package.json') : resolve('package.json');
+          const require = createRequire(root);
+          const sdk = JSON.parse(readFileSync(resolve(dirname(require.resolve('@proappstore/sdk')), '../package.json'), 'utf8'));
+          if (sdk.name !== '@proappstore/sdk') throw new Error('could not resolve installed SDK');
+          const { APP_ID, PAS_DEPLOY_ID, ACTIONS_ID_TOKEN_REQUEST_URL: url, ACTIONS_ID_TOKEN_REQUEST_TOKEN: auth } = process.env;
+          const tokenResponse = await fetch(url + '&audience=https://api.proappstore.online', { headers: { Authorization: 'bearer ' + auth } });
+          if (!tokenResponse.ok) throw new Error('OIDC token request failed');
+          const { value: token } = await tokenResponse.json();
+          const response = await fetch('https://api.proappstore.online/v1/apps/' + APP_ID + '/referral-readiness/oidc', {
+            method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ protocol_version: 1, deploy_id: Number(PAS_DEPLOY_ID), sdk_version: sdk.version,
+              auth_mode: 'platform-cookie', synthetic_verified: true }),
+          });
+          if (!response.ok) throw new Error('readiness attestation refused: ' + response.status);
+          if (!(await response.json()).referral_tracking?.ready) throw new Error('deployment is not referral ready');
+          JS
 
       - name: Verify source maps are not public
         run: |

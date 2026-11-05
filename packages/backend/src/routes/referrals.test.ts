@@ -1,3 +1,4 @@
+import { seedReferralReady } from '../promoter-test-helpers.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialContext, mintSession } from '@proappstore/build-core';
 import { app } from '../index.js';
@@ -48,6 +49,7 @@ beforeEach(async () => {
     INSERT INTO apps (id, creator_id, created_at) VALUES ('shop','gh:1',1),('other','gh:1',2),('quiet','gh:1',3);
     INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',0),('other','gh:1','owner',0);
     INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('quiet','private','[]',0);`);
+  await seedReferralReady(db, 'shop', 'other');
   env = makeEnv({ DB: db }) as Env;
   patCode = (await promote(PAT)).code; pruCode = (await promote(PRU)).code;
 });

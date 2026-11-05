@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { initPro } from './index.js';
+import { Auth } from './auth.js';
 import { REFERRAL_CAPTURE_TTL_MS, Referrals, type ReferralStorage } from './referrals.js';
 
 // #550: deterministic capture across the sign-in redirect and claim after sign-in. No DOM, no network.
@@ -80,6 +81,31 @@ describe('capture', () => {
 });
 
 describe('claim', () => {
+  it('claims after cookie sign-in through real auth mediation, without exposing a bearer token (#553)', async () => {
+    const storage = memory();
+    vi.stubGlobal('window', { location: { hash: '', href: 'https://shop.proappstore.online/', origin: 'https://shop.proappstore.online', pathname: '/', search: '' } });
+    const fetcher = vi.fn(async (input: string | URL, _init?: RequestInit) => String(input).includes('/auth/me')
+      ? reply({ id: 'synthetic', login: 'synthetic', roles: [], appRoles: {} })
+      : reply({ credited: false, state: 'pending' }));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const auth = new Auth('shop', 'https://api.proappstore.online', 'platform-cookie');
+      const referrals = new Referrals('shop', 'https://api.proappstore.online', auth, storage);
+      referrals.capture(`https://shop.proappstore.online/?ref=${CODE}`);
+      expect(await referrals.claim()).toBeNull();
+      expect(fetcher).not.toHaveBeenCalled();
+      await auth.init();
+      expect(auth.isSignedIn).toBe(true);
+      expect(auth.token).toBeNull();
+      expect(await referrals.claim()).toEqual({ credited: false, state: 'pending' });
+      const [url, options] = fetcher.mock.calls.at(-1)!;
+      expect(String(url)).toBe('/.pas/api/v1/apps/shop/referrals/claim');
+      expect(options?.credentials).toBe('same-origin');
+      expect(new Headers(options?.headers).get('Authorization')).toBeNull();
+      expect(referrals.pending()).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('sends nothing without a code or without a signed-in person, and keeps the code for later', async () => {
     const none = setup();
     expect(await none.referrals.claim()).toBeNull();
