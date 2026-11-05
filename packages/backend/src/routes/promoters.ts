@@ -32,7 +32,7 @@ promoterRoutes.use('/apps/:appId/promoters', privateNoStore);
 promoterRoutes.use('/apps/:appId/promoters/*', privateNoStore);
 
 /** Only a person signed in as themselves: not an app-bound, workload or machine credential. */
-async function person(c: Ctx) {
+export async function person(c: Ctx) {
   const user = await requireUser(c);
   if (user.via || user.credentialContext?.kind !== 'first_party_session') throw new HttpError('sign in as yourself to use the promoter workspace', 403);
   return user;

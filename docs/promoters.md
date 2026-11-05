@@ -6,8 +6,8 @@ description: "App-scoped promoter enrollment: who can promote an app, public ref
 
 A **promoter** is an existing PAS user who has chosen to help grow one app. This is the first backend slice of
 epic #548 (#549). It covers enrollment, the public referral code, narrow own-promoter access and the owner's
-controls. It does **not** yet count the users a promoter brings (#550), compute totals or shares (#551), or
-build any screen (Console #14, Storefront #13). No cash, commission or payout is created or implied.
+controls. Counting the users a promoter brings is [Referral capture and attribution](./referral-attribution.md) (#550). This page does **not** cover totals or shares (#551) or
+any screen (Console #14, Storefront #13). No cash, commission or payout is created or implied.
 
 ## What enrolling does and does not do
 
@@ -40,7 +40,8 @@ build any screen (Console #14, Storefront #13). No cash, commission or payout is
   database, stable for the life of the relationship. The canonical identity is the internal `promoter_id`; the code is
   only its public handle. Codes are typed forgivingly (case, spaces and hyphens are ignored).
 - The shareable link is `https://proappstore.online/apps/<appId>?ref=<code>` (`share_url`; `share_path` is the same
-  path). Capturing `ref` through sign-in and attributing a first-time user is #550; this slice only issues the code.
+  path). The SDK captures `ref` through sign-in and the platform attributes a first-time user: see
+  [Referral capture and attribution](./referral-attribution.md).
 - A code resolves only while the promoter is `active` **and** the app is public.
 
 ## Eligibility
@@ -119,7 +120,7 @@ consumer settles the shape.
 
 - **Sign-in:** a first-party person session is required, the same bar as the Google connection controls. Nothing here
   promises that Google sign-in is configured; it uses whatever PAS sign-in the person already used.
-- **Query parameter** `ref` and the app-detail path are proposals for #550; the `code` itself is stable either way.
+- **Query parameter** `ref` is what the SDK reads (#550); the code itself is stable either way.
 - **Code revocation** is by status (suspend or withdraw). Rotating a code for a live promoter is not offered; it would
   need a decision on old links, which belongs with #550.
 - **Discovery** returns only fields the storefront already publishes.

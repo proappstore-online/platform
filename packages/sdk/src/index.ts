@@ -20,6 +20,7 @@ import { Usage } from './usage.js';
 import { Email } from './email.js';
 import { Webhooks } from './webhooks.js';
 import { Invites } from './invites.js';
+import { Referrals } from './referrals.js';
 import { Actions } from './actions.js';
 import { Tokens } from './tokens.js';
 import { Logs } from './logs.js';
@@ -37,6 +38,8 @@ export type {
   Invite, InviteListItem, CreateInviteOptions, RedeemResult,
   DelegatedInvitePolicy, GroupAdminGrant,
 } from './invites.js';
+export { Referrals, REFERRAL_CAPTURE_TTL_MS } from './referrals.js';
+export type { ReferralState, ReferralClaimResult, ReferralStorage } from './referrals.js';
 export { Actions, ActionError } from './actions.js';
 export type { ActionVerifyResult, ActionCallOptions } from './actions.js';
 export { BillingApi } from './billing.js';
@@ -127,6 +130,8 @@ export class ProAppStore {
   readonly email: Email;
   readonly webhooks: Webhooks;
   readonly invites: Invites;
+  /** Referral capture across sign-in (#550): keeps a `?ref=` code and claims it once signed in. Started automatically. */
+  readonly referrals: Referrals;
   readonly actions: Actions;
   /** Personal app tokens for the HTTP actions route (#154). */
   readonly tokens: Tokens;
@@ -174,6 +179,10 @@ export class ProAppStore {
     this.email = new Email(opts.appId, apiBase, this.auth);
     this.webhooks = new Webhooks(opts.appId, apiBase, this.auth);
     this.invites = new Invites(opts.appId, apiBase, this.auth);
+    this.referrals = new Referrals(opts.appId, apiBase, this.auth);
+    // Capture a personal link's code now, and claim it each time a person is signed in (a no-op when none was captured).
+    this.referrals.capture();
+    this.auth.onChange((user) => { if (user) void this.referrals.claim(); });
     this.worker = new WorkerHttp();
     this.actions = new Actions(opts.appId, apiBase, this.auth, this.logs);
     this.tokens = new Tokens(opts.appId, apiBase, this.auth);

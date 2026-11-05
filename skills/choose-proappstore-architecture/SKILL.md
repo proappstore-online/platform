@@ -39,7 +39,7 @@ not create, provision, deploy or audit anything; hand those off.
    unsupported, and then as a *flagged gap*, never as the default.
 2. **Never fabricate APIs.** Name only SDK surfaces that exist: the modules
    `app.auth`, `app.actions`, `app.db` (and `app.db.tenant()`), `app.kv`,
-   `app.counters`, `app.storage`, `app.account` (per-app account deletion), `app.rooms`, `app.roles`, `app.invites`,
+   `app.counters`, `app.storage`, `app.account` (per-app account deletion), `app.rooms`, `app.roles`, `app.invites`, `app.referrals` (captures a `?ref=` promoter link across sign-in; automatic),
    `app.proxy`, `app.ai`, `app.maps`, `app.notifications`, `app.email`,
    `app.sms`, `app.webhooks`, `app.subscription`, `app.billing` (what the app itself sells, #509), `app.license`,
    `app.usage`, `app.logs`, `app.tokens`, and `app.worker` (the app's own

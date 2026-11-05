@@ -150,8 +150,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 46443,
-      "digest": "d4d71649d66195ba85e0cebb07cb111b82742182946d096475d0467e194d0cbb",
+      "bytes": 46521,
+      "digest": "353db99beeccbd32d6fce4f7b12f9afa80a6149a07a1317ccd1671331b85bb16",
       "files": [
         {
           "path": "evals/cases.json",
@@ -205,8 +205,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 10002,
-          "sha256": "4309536a3a740128919ee376165cbf8437f246ddbd321f51c1d8d121c870e501"
+          "bytes": 10080,
+          "sha256": "c9e6f1d2cbb36430465df7d3b96ce74baaf342a312edb2ef44a47d40f4d0d41d"
         }
       ],
       "evaluations": {
@@ -226,9 +226,9 @@
           "bundle_bytes": 49152
         },
         "actual": {
-          "skill_md_bytes": 10002,
+          "skill_md_bytes": 10080,
           "references_bytes": 27200,
-          "bundle_bytes": 46443
+          "bundle_bytes": 46521
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

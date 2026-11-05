@@ -1,0 +1,113 @@
+interface AuthLike {
+  token: string | null;
+  authenticatedFetch(input: string | URL, init?: RequestInit): Promise<Response>;
+}
+
+/** The slice of Web Storage the capture needs (injectable, so it works without a DOM). */
+export interface ReferralStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+/**
+ * What the platform answered for a claim. Never who the promoter is.
+ * `pending`: captured, credited when the person's first activation is recorded; `confirmed`: credited;
+ * `not_eligible` / `invalid_code` / `already_attributed`: nothing to credit (and nothing more to retry);
+ * `unverified_origin`: this request was not made from inside the app, so nothing was stored.
+ */
+export type ReferralState = 'pending' | 'confirmed' | 'not_eligible' | 'invalid_code' | 'already_attributed' | 'unverified_origin';
+export interface ReferralClaimResult { credited: boolean; state: ReferralState }
+
+const STORAGE_KEY = 'pas_referral';
+/** How long a captured code is kept on this device before it is dropped. The platform's own pending window is the same. */
+export const REFERRAL_CAPTURE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+// The platform's code alphabet: 2-9 and A-Z without I and O.
+const CODE = /^[2-9A-HJ-NP-Z]{8}$/;
+
+function normalize(value: string | null): string | null {
+  const code = value?.toUpperCase().replace(/[\s-]/g, '') ?? '';
+  return CODE.test(code) ? code : null;
+}
+
+function defaultStorage(): ReferralStorage | null {
+  try { return typeof window !== 'undefined' && window.localStorage ? window.localStorage : null; } catch { return null; }
+}
+
+/**
+ * Referral capture across sign-in (#550). A personal link carries `?ref=<code>`. `capture()` keeps the code on this
+ * device (first valid code wins, and it expires) so it survives the trip to PAS sign-in and back; `claim()` then
+ * sends only that public code to the platform from inside the signed-in app. The platform resolves the code to a
+ * verified promoter itself, decides whether this person qualifies, and credits them only when its own record of
+ * their first activation of the app exists. The SDK cannot confirm or count anything. It never fingerprints the
+ * device and never links two PAS identities: a referral made on another device or under another sign-in is not
+ * recognised, by design.
+ *
+ * The SDK starts this itself: it captures on load and claims once the person is signed in. Nothing is sent when
+ * no code was captured.
+ */
+export class Referrals {
+  private inFlight: Promise<ReferralClaimResult | null> | null = null;
+
+  constructor(
+    private readonly appId: string,
+    private readonly apiBase: string,
+    private readonly auth: AuthLike,
+    private readonly storage: ReferralStorage | null = defaultStorage(),
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Keep the `ref` code from `href` (default: this page). Returns the code now held, or null. The URL is not changed. */
+  capture(href?: string): string | null {
+    const held = this.pending();
+    if (held) return held.code; // the first valid code stands
+    let code: string | null = null;
+    try { code = normalize(new URL(href ?? (typeof window !== 'undefined' ? window.location.href : '')).searchParams.get('ref')); } catch { code = null; }
+    if (!code || !this.storage) return code;
+    try { this.storage.setItem(STORAGE_KEY, JSON.stringify({ code, appId: this.appId, capturedAt: this.now() })); } catch { /* storage may be blocked */ }
+    return code;
+  }
+
+  /** The code held for this app, unless it has expired. */
+  pending(): { code: string; capturedAt: number } | null {
+    try {
+      const raw = this.storage?.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const held = JSON.parse(raw) as { code?: unknown; appId?: unknown; capturedAt?: unknown };
+      if (held.appId !== this.appId || typeof held.capturedAt !== 'number' || normalize(String(held.code)) !== held.code) { this.clear(); return null; }
+      if (this.now() - held.capturedAt > REFERRAL_CAPTURE_TTL_MS || held.capturedAt > this.now() + 60_000) { this.clear(); return null; }
+      return { code: held.code as string, capturedAt: held.capturedAt };
+    } catch { this.clear(); return null; }
+  }
+
+  clear(): void {
+    try { this.storage?.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  }
+
+  /**
+   * Send the held code to the platform, if there is one and the person is signed in. A definite answer (credited,
+   * pending, or a reason there is nothing to credit) clears the code; a network or server failure keeps it for the
+   * next attempt. Returns null when there was nothing to send or the attempt failed. Concurrent calls share one request.
+   */
+  claim(): Promise<ReferralClaimResult | null> {
+    this.inFlight ??= this.send().finally(() => { this.inFlight = null; });
+    return this.inFlight;
+  }
+
+  private async send(): Promise<ReferralClaimResult | null> {
+    const held = this.pending();
+    if (!held || !this.auth.token) return null;
+    try {
+      const response = await this.auth.authenticatedFetch(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/referrals/claim`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: held.code }),
+      });
+      if (!response.ok) return null;
+      const result = (await response.json()) as ReferralClaimResult;
+      if (typeof result?.state !== 'string') return null;
+      this.clear();
+      return result;
+    } catch {
+      return null;
+    }
+  }
+}

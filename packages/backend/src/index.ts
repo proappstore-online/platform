@@ -78,6 +78,8 @@ import { engagementRoutes } from './routes/engagements.js';
 import { internalRoutes } from './routes/internal.js';
 import { teamRoutes } from './routes/teams.js';
 import { promoterRoutes } from './routes/promoters.js';
+import { referralRoutes } from './routes/referrals.js';
+import { activationObserver } from './lib/referrals/activation.js';
 import { accountRoutes } from './routes/accounts.js';
 import { inviteRoutes } from './routes/invites.js';
 import { rolesRoutes } from './routes/roles.js';
@@ -158,8 +160,9 @@ const REQUEST_METRIC_EXCLUDED = new Set(['logs', 'incidents', 'telemetry', 'aler
 
 app.use('/v1/apps/:appId/*', async (c, next) => {
   const started = Date.now();
-  await next();
+  // Read before next(): afterwards the param resolves against the last handler that ran, which for an unmatched path is a '*' middleware with no :appId.
   const appId = c.req.param('appId');
+  await next();
   const status = c.res.status;
   // The id is whatever the URL said: only a well-formed app id is a label (bounded, no paths).
   if (!appId || !/^[a-z][a-z0-9-]{0,57}$/.test(appId) || c.req.method === 'OPTIONS' || status === 101
@@ -319,6 +322,8 @@ app.get('/docs', (c) =>
 );
 
 const v1 = new Hono<{ Bindings: Env }>();
+// #550: records a person's first authenticated activation of an app, from the request itself (never from a client claim).
+v1.use('*', activationObserver);
 v1.route('/', authRoutes);
 v1.route('/', mcpBrokerRoutes);
 v1.route('/', mcpGrantRoutes);
@@ -370,6 +375,7 @@ v1.route('/', engagementRoutes);
 v1.route('/', internalRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', promoterRoutes);
+v1.route('/', referralRoutes);
 v1.route('/', accountRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
