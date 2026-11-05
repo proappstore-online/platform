@@ -247,6 +247,38 @@ describe('managed test principals (#432)', () => {
     expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken({ ...jti(), environment: 'prod-smoke' })), makeEnv(ok))).status).toBe(200);
   });
 
+  it('refuses a wrong-audience token for a principal grant before touching the database, and does not burn its jti', async () => {
+    const wrong = mockD1();
+    const res = await app.request('/v1/auth/exchange/oidc', exchange(await signToken({ ...jti('aud-1'), aud: 'https://other.example' })), makeEnv(wrong));
+    expect(res.status).toBe(401);
+    expect(wrong.prepare).not.toHaveBeenCalled(); // no grant read, no principal read, no replay row
+    expect(wrong.batch).not.toHaveBeenCalled();
+    // The same jti, presented with the right audience, is still unspent.
+    const db = mockD1(mockStmt({ all: { results: [pgrant()] } }), active(), fresh(), botUser());
+    expect((await app.request('/v1/auth/exchange/oidc', exchange(await signToken(jti('aud-1'))), makeEnv(db))).status).toBe(200);
+  });
+
+  it('never grants more than user (or creator by an explicit scope): an unrecognised stored scope falls back to user, and admin is never reachable', async () => {
+    for (const scope of ['admin', 'owner', 'Creator', ' creator', 'creator,admin', '', null]) {
+      const db = mockD1(mockStmt({ all: { results: [pgrant({ scope })] } }), active(), fresh(), botUser());
+      const body = (await (await app.request('/v1/auth/exchange/oidc', exchange(await signToken(jti(`scope-${String(scope)}`))), makeEnv(db))).json()) as { sessionToken: string };
+      const claims = await verifySession(body.sessionToken, 'test-signing-key');
+      expect(claims!.roles, `scope ${JSON.stringify(scope)}`).toEqual(['user']);
+      expect(claims!.roles).not.toContain('admin');
+    }
+  });
+
+  it('a minted principal session, even creator-scoped, is refused by every admin route', async () => {
+    for (const scope of ['user', 'creator']) {
+      const db = mockD1(mockStmt({ all: { results: [pgrant({ scope })] } }), active(), fresh(), botUser());
+      const { sessionToken } = (await (await app.request('/v1/auth/exchange/oidc', exchange(await signToken(jti(`admin-${scope}`))), makeEnv(db))).json()) as { sessionToken: string };
+      for (const [method, path] of [['GET', '/v1/admin/test-principals'], ['POST', '/v1/admin/test-principals'], ['POST', '/v1/admin/test-principals/tp_1/disable'], ['GET', '/v1/admin/test-principal-events'], ['GET', '/v1/admin/oidc-session-grants'], ['POST', '/v1/admin/oidc-session-grants'], ['DELETE', '/v1/admin/oidc-session-grants/g9']] as const) {
+        const res = await app.request(path, { method, headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}) }, makeEnv(mockD1()));
+        expect([scope, path, res.status]).toEqual([scope, path, 403]);
+      }
+    }
+  });
+
   it('selectGrant skips expired grants and environment mismatches', () => {
     const claims = { repository: REPO, repository_owner: 'proappstore-online', ref: 'refs/heads/main', environment: 'e1', workflow_ref: WORKFLOW_REF } as unknown as OidcClaims;
     expect(selectGrant([pgrant({ expires_at: 5 })], claims, 10)).toBeNull();
