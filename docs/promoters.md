@@ -42,6 +42,9 @@ cards are [Promoter contributions and reporting](./promoter-contributions.md) (#
 - The shareable link is `https://proappstore.online/apps/<appId>?ref=<code>` (`share_url`; `share_path` is the same
   path). The SDK captures `ref` through sign-in and the platform attributes a first-time user: see
   [Referral capture and attribution](./referral-attribution.md).
+- **The QR code is drawn by the client, from `share_url`.** The platform serves no image: `share_url` is the whole payload,
+  and it is stable across replays and renames, distinct per app, and carries no user id, login or email. Scanning it is only
+  a link visit; it is not a contribution (see the attribution doc).
 - A code resolves only while the promoter is `active` **and** the app is public.
 
 ## Eligibility
