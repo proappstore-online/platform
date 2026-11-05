@@ -10,7 +10,7 @@ import { HttpError } from '../auth.js';
  *    a code, a click or a pending capture is not a contribution.
  *  - The percentage is `this promoter's confirmed referrals / ALL promoters' confirmed referrals` for the same app and
  *    period. It is a share among promoters. It is never a share of all users, and it is never combined with any
- *    code (lines-of-code) figure: the Code contribution is reported separately and is not available yet (#547).
+ *    code (lines-of-code) figure: the Code contribution is reported separately and is reported by a separate endpoint (#547).
  *  - Organic users (activations with no referral) are a separate bucket, shown to the owner only.
  *  - Only people PAS recorded activating the app since attribution began are counted. Earlier users are not reconstructed.
  *  - The period is half-open, `from <= t < to`. Confirmed and reversed credits are placed by when they were confirmed;
@@ -18,7 +18,7 @@ import { HttpError } from '../auth.js';
  */
 
 const CONTRIBUTIONS_VERSION = 1;
-const NOT_AVAILABLE = 'Code contribution is not available yet: it needs the verified-repository line-count ledger and API (#545 to #547). No line counts are estimated, and promotion and code are never combined into one figure.';
+const NOT_AVAILABLE = 'Code contribution is not part of this response. It is reported separately, to the app team, by GET /v1/apps/:appId/contributions (#545 to #547). No line counts are estimated here, and promotion and code are never combined into one figure.';
 const SHARE_BASIS = "This promoter's confirmed referrals divided by all promoters' confirmed referrals for this app in this period. It is not a share of all users.";
 const COVERAGE_NOTE = 'Referral attribution is recorded from when it was introduced; users who joined earlier are not reconstructed or inferred.';
 const MAX_RANKED = 5000;

@@ -265,6 +265,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/ownership.ts': live('creator-only transfer/recovery; T07 turns it into account-to-account transfer'),
   'packages/backend/src/routes/pags.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/promoters.ts': live('requireAppOwner for the owner lifecycle routes; enrollment is a person-session relationship that grants no publisher, team or admin right'),
+  'packages/backend/src/routes/contributions.ts': live('requireAppAccess viewer for reads (a private team stays private); requireAppOwner for refresh; code-activity metrics only, no role, ownership or payout effect'),
   'packages/backend/src/routes/referrals.ts': live('requireAppOwner for review and correction; the claim is the referred person own mediated, app-bound session and grants no right'),
   'packages/backend/src/routes/provision.ts': prov('claim check: creator_id vs the provisioning actor'),
   'packages/backend/src/routes/provisioning-plans.ts': live('plan state owner/other from creator_id and team role'),

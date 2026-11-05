@@ -19,10 +19,10 @@ commission, a payout or a revenue rule, and existing usage, code stats and payou
 - **Organic users** (activations with no referral) are a separate bucket, shown to the app owner only. They never go into a
   promoter's number or the denominator.
 - **Zero denominators** give `ratio: 0, percent: 0`, never an error or `NaN`.
-- **Code contribution is not available yet.** Every response carries a `code` section with `available: false` and a reason. No
-  line counts are estimated or fabricated, and promotion and code are **never combined** into one figure, score or percentage.
-  It stays empty until the verified-repository line-count API (#545 to #547) exists, and then appears beside promotion, not merged
-  with it. A person is the same person in both sections only by the same PAS user; nothing is matched by name, email or membership.
+- **Code contribution is not part of these responses.** Every response carries a `code` section with `available: false` and a reason
+  pointing at [Project contributions](./contributions.md) (`GET /v1/apps/:appId/contributions`, app team only). No line counts are
+  estimated or fabricated here, and promotion and code are **never combined** into one figure, score or percentage. Code appears
+  beside promotion, not merged with it. A person is the same person in both sections only by the same PAS user; nothing is matched by name, email or membership.
 - Only people PAS recorded activating the app since attribution began are counted. Earlier users are not reconstructed (`freshness`
   says since when).
 

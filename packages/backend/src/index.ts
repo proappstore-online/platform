@@ -79,6 +79,9 @@ import { internalRoutes } from './routes/internal.js';
 import { teamRoutes } from './routes/teams.js';
 import { promoterRoutes } from './routes/promoters.js';
 import { referralRoutes } from './routes/referrals.js';
+import { contributionRoutes } from './routes/contributions.js';
+import { githubSource } from './lib/contributions/github.js';
+import { runContributionTick } from './lib/contributions/ingest.js';
 import { activationObserver } from './lib/referrals/activation.js';
 import { accountRoutes } from './routes/accounts.js';
 import { inviteRoutes } from './routes/invites.js';
@@ -376,6 +379,7 @@ v1.route('/', internalRoutes);
 v1.route('/', teamRoutes);
 v1.route('/', promoterRoutes);
 v1.route('/', referralRoutes);
+v1.route('/', contributionRoutes);
 v1.route('/', accountRoutes);
 v1.route('/', inviteRoutes);
 v1.route('/', rolesRoutes);
@@ -439,6 +443,8 @@ export default {
     // #509: Stripe's fee on charges that belong to an app purchase, read a few at a time.
     ctx.waitUntil(fillChargeFees(env).catch((e) => console.error(`[billing] fee lookup failed: ${(e as Error).message}`)));
     ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
+    // #546: continue project contribution history reads a few at a time. A failure here never takes the other checks down.
+    ctx.waitUntil(runContributionTick(env.DB, env.GITHUB_TOKEN ? githubSource(env.GITHUB_TOKEN) : null, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[contributions] tick failed: ${(e as Error).message}`)));
     const tickAt = event.scheduledTime ?? Date.now();
     // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled
     // time, over completed intervals only, catching up on late or missed ticks
