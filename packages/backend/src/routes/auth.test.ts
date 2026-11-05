@@ -1242,6 +1242,30 @@ describe('OAuth callback — issues a code, never a token in the query (#87, #11
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it('gives only the platform consent query receiver a first-party credential without elevating API roles', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    const destination = `https://api.proappstore.online/v1/connectors/google-calendar/session?state=${'a'.repeat(43)}`;
+    const res = await callback(destination, 'query', db);
+    expect(res.status).toBe(302);
+    const claims = JSON.parse(db.inserts[0]![1] as string);
+    expect(claims).toMatchObject({ roles: ['user'], cred: { v: 1, kind: 'first_party_session' } });
+    expect(new URL(res.headers.get('Location')!).searchParams.get('code')).toBeTruthy();
+    expect(res.headers.get('Location')).not.toContain('session=');
+  });
+
+  it.each([
+    '/v1/connectors/google-calendar/session',
+    '/v1/connectors/google-calendar/session?state=short',
+    `/v1/connectors/google-calendar/session?state=${'a'.repeat(43)}&state=${'b'.repeat(43)}`,
+    `/v1/connectors/google-calendar/session/other?state=${'a'.repeat(43)}`,
+  ])('does not treat another API return path as first-party: %s', async path => {
+    stubGithub();
+    const db = codeIssuingDb();
+    await callback(`https://api.proappstore.online${path}`, 'query', db);
+    expect(JSON.parse(db.inserts[0]![1] as string).cred).toBeUndefined();
+  });
+
   it('redirects with ?code= and never with ?session=', async () => {
     stubGithub();
     const db = codeIssuingDb();

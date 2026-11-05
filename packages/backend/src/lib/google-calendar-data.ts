@@ -1,5 +1,6 @@
 import type { Env } from '../types.js';
-import { account, accountToken, assertAppAuthorization, type AppGoogleAuthorization } from './google-calendar-accounts.js';
+import { account, accountToken } from './google-calendar-credentials.js';
+import { assertAppAuthorization, type AppGoogleAuthorization } from './google-calendar-accounts.js';
 import type { GoogleCapability } from './google-calendar-policy.js';
 import { calendarId, GoogleCalendarError, googleJson, resourceReceipt, textInput, verifyResourceReceipt } from './google-calendar-common.js';
 

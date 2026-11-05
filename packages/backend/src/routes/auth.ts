@@ -33,6 +33,7 @@ import { traceIdFromTraceparent } from '../lib/log-ingest.js';
 import { recordAuthFailure, recordOperationFailure } from '../lib/operation-log.js';
 import { isReservedId } from './app-directory.js';
 import { APP_ID_RE } from './validation.js';
+import { googleConsentReturnTo } from '../lib/google-calendar-common.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -485,7 +486,11 @@ authRoutes.get('/auth/:provider/callback', async (c) => {
     // the destination (never the caller-supplied `app_id`), never first-party. When no app can be
     // resolved (e.g. an intermediate broker hop) the session asserts no audience, which denies
     // governance by default rather than guessing one.
-    const cred = isFirstPartyHost(dest.hostname)
+    // The connector receiver redeems the query code on the API origin without
+    // returning a JWT to an app. Do not classify arbitrary API paths or modes
+    // as first-party, and keep the platform role decision above unchanged.
+    const consentSignIn = responseMode === 'query' && googleConsentReturnTo(c.env, dest);
+    const cred = isFirstPartyHost(dest.hostname) || consentSignIn
       ? credentialContext('first_party_session')
       : await resolveAppOrigin(c.env, dest.hostname).then((resolved) => resolved ? credentialContext('app_bound', resolved) : undefined);
     const claims: NewSession = { uid: userId, login: profile.login, avatarUrl: profile.avatarUrl, roles, auth_time: Math.floor(Date.now() / 1000), auth_method: provider, ...(cred ? { cred } : {}) };

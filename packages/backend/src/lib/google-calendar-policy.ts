@@ -3,12 +3,15 @@ import { GOOGLE_CALENDAR_SCOPES, GoogleCalendarError, hashState } from './google
 
 const GOOGLE_CAPABILITIES = ['calendar.read', 'meet.read'] as const;
 export type GoogleCapability = typeof GOOGLE_CAPABILITIES[number];
-export const GOOGLE_CONSENT_VERSION = 1;
+export const GOOGLE_CONSENT_VERSION = 2;
+// Disclosure hashing is independent of improvements to authentication proof.
+// An unchanged publisher deployment must preserve its existing contract.
+const GOOGLE_CONTRACT_VERSION = 1;
 export interface GoogleDisclosure {
   purpose: string; audience: string; retention: string; privacy_path: string; deletion_path: string;
 }
 export interface GooglePolicy {
-  name: string; capabilities_json: string; disclosure_json: string | null; contract_hash: string;
+  name: string; capabilities_json: string; disclosure_json: string | null; contract_hash: string; creator_id: string;
 }
 export function googleCapabilities(value: unknown): GoogleCapability[] {
   if (!Array.isArray(value) || !value.length || value.length > 2 || new Set(value).size !== value.length
@@ -36,11 +39,11 @@ export function googleDisclosure(value: unknown): GoogleDisclosure {
 export const googleScopes = (capabilities: GoogleCapability[]) => GOOGLE_CALENDAR_SCOPES.filter(s =>
   s !== 'https://www.googleapis.com/auth/meetings.space.readonly' || capabilities.includes('meet.read'));
 export const googleContractHash = (name: string, capabilities: GoogleCapability[], disclosure: GoogleDisclosure) =>
-  hashState(JSON.stringify({ version: GOOGLE_CONSENT_VERSION, name, capabilities, disclosure }));
+  hashState(JSON.stringify({ version: GOOGLE_CONTRACT_VERSION, name, capabilities, disclosure }));
 
 export async function googlePolicy(env: Env, appId: string, name?: string): Promise<GooglePolicy> {
-  const row = await env.DB.prepare(`SELECT name, capabilities_json, disclosure_json, contract_hash FROM app_connectors
-    WHERE app_id = ? AND kind = 'google_calendar' AND (? IS NULL OR name = ?)`)
+  const row = await env.DB.prepare(`SELECT k.name, k.capabilities_json, k.disclosure_json, k.contract_hash, a.creator_id FROM app_connectors k
+    JOIN apps a ON a.id = k.app_id WHERE k.app_id = ? AND k.kind = 'google_calendar' AND (? IS NULL OR k.name = ?)`)
     .bind(appId, name ?? null, name ?? null).first<GooglePolicy>();
   if (!row) throw new GoogleCalendarError('connector_not_declared', 403);
   return row;

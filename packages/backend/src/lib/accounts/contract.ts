@@ -230,6 +230,8 @@ const OWNER_ONLY = 'requireAppOwner: owner-level publisher action';
 export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/auth.ts': live('the gate itself: creator_id, team_members, platform-admin bypass'),
   'packages/backend/src/lib/app-worker-host.ts': live('disableAppWorker persists the administrator kill switch; callers establish owner/admin authority before invoking it'),
+  'packages/backend/src/lib/google-calendar-policy.ts': live('reads the publisher identity for the consent snapshot; this grants no publisher-management permission'),
+  'packages/backend/src/lib/google-calendar-oauth.ts': live('atomically refuses a pending personal consent request after its publisher changes; this is a lifecycle guard, not an owner-role grant'),
   'packages/backend/src/lib/operation-log.ts': live('owner flag decides who sees an operation'),
   'packages/backend/src/lib/operator-audit-marks.ts': live('wraps requireAppOwner and remembers the owner for the refusal audit'),
   'packages/backend/src/lib/provision-data.ts': hist('INSERT apps.creator_id at provisioning; dev_profiles seed'),

@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 import { workerGoogleCalendar } from '../../../backend/src/lib/google-calendar-worker';
-import { beginGoogleOAuth, completeGoogleOAuth } from '../../../backend/src/lib/google-calendar-accounts';
-import { mintSession } from '@proappstore/build-core';
+import { beginGoogleOAuth, completeGoogleOAuth } from '../../../backend/src/lib/google-calendar-oauth';
+import { credentialContext, mintSession } from '@proappstore/build-core';
 import { GOOGLE_CALENDAR_SCOPES } from '../../../backend/src/lib/google-calendar-common';
 
 const env = providedEnv as unknown as Env;
@@ -142,10 +142,10 @@ describe('per-app account deletion (#379)', () => {
     const googleEnv = { ...env, GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret' };
     for (const appId of ['stash', 'notes']) await env.DB.prepare(`INSERT INTO app_connectors (app_id,name,kind,modes,events,created_at,capabilities_json,disclosure_json) VALUES (?,'calendar','google_calendar','["oauth"]','[]',1,'["calendar.read","meet.read"]',?)`)
       .bind(appId, JSON.stringify({ purpose: 'Read selected meeting records.', audience: 'Authorized members of the app.', retention: 'Retention is described in the app notice.', privacy_path: '/privacy', deletion_path: '/settings/data' })).run();
-    const connect = async (appId: string, capabilities: string[]) => {
+    const prepare = async (appId: string, capabilities: string[]) => {
       const start = await beginGoogleOAuth(googleEnv, appId, USER, '/callback', '/', capabilities);
       const state = new URL(start.authorization_url).searchParams.get('state')!;
-      const loginToken = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+      const loginToken = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
       const login = await SELF.fetch(`${BASE}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: BASE, Authorization: `Bearer ${loginToken}` } });
       expect(login.status).toBe(200);
       const cookie = login.headers.get('Set-Cookie')!.split(';')[0]!;
@@ -153,21 +153,27 @@ describe('per-app account deletion (#379)', () => {
       const csrf = (await page.text()).match(/name="csrf" value="([^"]+)"/)![1]!;
       const body = new FormData(); body.set('csrf', csrf); body.set('decision', 'allow'); for (const capability of capabilities) body.append('capability', capability);
       expect((await SELF.fetch(`${BASE}/v1/connectors/google-calendar/consent?state=${state}`, { method: 'POST', redirect: 'manual', headers: { Origin: BASE, Cookie: cookie }, body })).status).toBe(302);
+      return state;
+    };
+    const complete = async (appId: string, state: string) => {
       fetchMock.get('https://oauth2.googleapis.com').intercept({ path: '/token', method: 'POST' })
         .reply(200, JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600, scope: GOOGLE_CALENDAR_SCOPES.join(' ') }));
       fetchMock.get('https://openidconnect.googleapis.com').intercept({ path: '/v1/userinfo' })
         .reply(200, JSON.stringify({ sub: '123456', email: 'test@example.test', email_verified: true }));
       expect(await completeGoogleOAuth(googleEnv, appId, USER, state, 'test-code')).toMatchObject({ email: 'test@example.test' });
     };
-    await connect('stash', ['calendar.read']);
+    const connect = async (appId: string, capabilities: string[]) => complete(appId, await prepare(appId, capabilities));
+    const firstState = await prepare('stash', ['calendar.read']);
+    const secondState = await prepare('notes', ['calendar.read', 'meet.read']);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM google_calendar_oauth_states WHERE account_status = 'disconnected'").first('n')).toBe(2);
+    await Promise.all([complete('stash', firstState), complete('notes', secondState)]);
     const first = await env.DB.prepare("SELECT * FROM google_calendar_app_authorizations WHERE app_id = 'stash' AND user_id = ?").bind(USER).first();
     await env.DB.prepare("INSERT INTO google_calendar_grants (id,app_id,user_id,account_version,authorization_version,calendar_id,calendar_name,created_at) VALUES ('00000000-0000-4000-8000-000000000001','stash',?,1,1,'primary','Personal',1)").bind(USER).run();
-    await connect('notes', ['calendar.read', 'meet.read']);
     await connect('notes', ['calendar.read']);
     expect(await env.DB.prepare('SELECT version FROM google_calendar_accounts WHERE user_id = ?').bind(USER).first('version')).toBe(1);
     expect(await env.DB.prepare("SELECT * FROM google_calendar_app_authorizations WHERE app_id = 'stash' AND user_id = ?").bind(USER).first()).toEqual(first);
     expect(await workerGoogleCalendar(googleEnv, 'stash', 'calendar', { operation: 'grant_status', grant_id: '00000000-0000-4000-8000-000000000001' }, null)).toMatchObject({ grant_id: '00000000-0000-4000-8000-000000000001' });
-    expect(await env.DB.prepare("SELECT authorization_version,capabilities_json,consent_version FROM google_calendar_app_authorizations WHERE app_id = 'notes' AND user_id = ?").bind(USER).first()).toEqual({ authorization_version: 2, capabilities_json: '["calendar.read"]', consent_version: 1 });
+    expect(await env.DB.prepare("SELECT authorization_version,capabilities_json,consent_version FROM google_calendar_app_authorizations WHERE app_id = 'notes' AND user_id = ?").bind(USER).first()).toEqual({ authorization_version: 2, capabilities_json: '["calendar.read"]', consent_version: 2 });
     expect(await env.DB.prepare('SELECT account_version FROM google_calendar_app_authorizations WHERE app_id = ? AND user_id = ?').bind('stash', USER).first('account_version')).toBe(1);
     await del('stash', USER, USER);
     await expect(beginGoogleOAuth(googleEnv, 'stash', USER, '/callback', '/')).rejects.toThrow('app_account_deleted');

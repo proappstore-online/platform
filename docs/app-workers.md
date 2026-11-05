@@ -315,6 +315,19 @@ account. Credential refresh uses its own revision so an older refresh cannot
 overwrite a newer consent's credential or permissions. Publisher transfer
 invalidates only that app's authorization, grants and pending callbacks.
 
+First-time flows record whether the shared account was disconnected when they
+started. Two apps may start before either is connected and complete against the
+same Google identity without invalidating each other. A later global disconnect
+still cancels every pending flow. Consent persistence makes at most three
+shared-credential save attempts after write conflicts; it never exchanges the one-use Google code
+again or overwrites a newer authorization for the same app. Migration 0127 adds
+the starting-state and browser-proof markers without changing existing grants.
+Older pending flows retain their previous epoch checks. Browser bindings
+without recorded first-party sign-in proof must reauthenticate; already approved
+pending flows without this proof must restart. New receipts use consent version
+2, while existing receipts retain their original version. The publisher contract
+hash stays unchanged when its disclosures and capabilities are unchanged.
+
 Deleting a user's account in an app also revokes that user's calendar grants,
 app authorization and pending consent for that app, removing the platform's
 app/user grant metadata as well. This is enforced by the
@@ -327,7 +340,11 @@ already sent to Google cannot be recalled, and data already delivered to an app
 is subject to that app's retention and deletion controls.
 
 The PAS consent screen first verifies the initiating PAS account using existing
-OAuth or credential sign-in. It uses a host-only HttpOnly browser cookie,
+OAuth or credential sign-in. Only a fresh, personally authenticated first-party
+session may bind consent; app-bound, workload and unproven sessions are refused.
+The exact PAS-owned query-code receiver gets this credential context without
+elevating API session roles or delivering its JWT to an app.
+It uses a host-only HttpOnly browser cookie,
 same-origin POST and CSRF proof. Opening a page never grants access. The user
 sees the app's identity, purpose, audience, retention and deletion links and may
 omit Meet. Only then does PAS request the selected Google scopes. Returned

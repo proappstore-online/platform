@@ -8,7 +8,7 @@ import { googleCalendarRoutes } from '../routes/google-calendar.js';
 import { deleteAppAccountRoutes } from '../routes/delete-app-account.js';
 import { Hono } from 'hono';
 import { replaceAppTools } from '../routes/tools.js';
-import { mintSession } from '@proappstore/build-core';
+import { credentialContext, mintSession } from '@proappstore/build-core';
 
 const KEK = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 const USER = 'gh:1', OTHER = 'gh:2';
@@ -36,7 +36,7 @@ const consentRouter = new Hono<{ Bindings: Env }>().route('/v1', googleCalendarR
 const API = 'https://api.proappstore.online';
 const disclosure = { purpose: 'Show selected meeting records in this app.', audience: 'Authorized organization members can see meeting records.', retention: 'The app operator describes retained records in its privacy notice.', privacy_path: '/privacy', deletion_path: '/settings/data' };
 async function approve(state: string, capabilities = ['calendar.read', 'meet.read'], userId = USER) {
-  const token = await mintSession({ uid: userId, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+  const token = await mintSession({ uid: userId, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
   const session = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: API, Authorization: `Bearer ${token}` } }, env);
   expect(session.status).toBe(200);
   const cookie = session.headers.get('Set-Cookie')!.split(';')[0]!;
@@ -91,6 +91,98 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('PAS Google Calendar connection and grants', () => {
+  it.each(['publisher', 'disclosure'])('does not insert stale consent if the %s changes while starting', async change => {
+    const prepare = db.prepare.bind(db);
+    vi.spyOn(db, 'prepare').mockImplementation(query => {
+      if (query.startsWith('INSERT INTO google_calendar_oauth_states')) {
+        db.sql.exec(change === 'publisher'
+          ? "UPDATE apps SET creator_id='gh:2' WHERE id='hiring'"
+          : "UPDATE app_connectors SET contract_hash='changed' WHERE app_id='hiring'");
+      }
+      return prepare(query);
+    });
+    expect(await call({ operation: 'start', callback_path: '/callback', return_to: '/' })).toMatchObject({ error: 'connection_changed' });
+    expect(db.sql.prepare('SELECT COUNT(*) AS n FROM google_calendar_oauth_states').get()!.n).toBe(0);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('completes both apps when their first consent flows start before either Google connection exists', async () => {
+    const first = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const second = await call({ operation: 'start', callback_path: '/callback', return_to: '/' }, 'other');
+    const stateB = new URL(second.authorization_url as string).searchParams.get('state')!;
+    await approve(stateB);
+    expect(await call({ operation: 'complete', state: first.google_url.searchParams.get('state'), code: 'first' })).toHaveProperty('email');
+    expect(await call({ operation: 'complete', state: stateB, code: 'second' }, 'other')).toHaveProperty('email');
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true, version: 1 });
+    expect(await call({ operation: 'status' }, 'other')).toMatchObject({ connected: true, version: 1 });
+  });
+  it('retries only persistence when another first connection wins the shared credential CAS', async () => {
+    const first = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const second = await call({ operation: 'start', callback_path: '/callback', return_to: '/' }, 'other');
+    const stateB = new URL(second.authorization_url as string).searchParams.get('state')!;
+    await approve(stateB);
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async statements => {
+      expect(await call({ operation: 'complete', state: stateB, code: 'second' }, 'other')).toHaveProperty('email');
+      return batch(statements);
+    });
+    expect(await call({ operation: 'complete', state: first.google_url.searchParams.get('state'), code: 'first' })).toHaveProperty('email');
+    expect(requests.filter(url => url.hostname === 'oauth2.googleapis.com')).toHaveLength(2);
+    expect(await call({ operation: 'status' }, 'other')).toMatchObject({ connected: true, version: 1, authorization_version: 1 });
+    expect(db.sql.prepare('SELECT version,credential_revision FROM google_calendar_accounts').get()).toEqual({ version: 1, credential_revision: 2 });
+  });
+  it('does not mix an old authorization with account metadata changed between status queries', async () => {
+    await connect();
+    const prepare = db.prepare.bind(db);
+    vi.spyOn(db, 'prepare').mockImplementation(query => {
+      if (query === 'SELECT * FROM google_calendar_accounts WHERE user_id = ?') db.sql.exec("UPDATE google_calendar_accounts SET version=version+1,status='disconnected',email=NULL");
+      return prepare(query);
+    });
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true, email: 'organizer@example.test', version: 1 });
+  });
+  it('retries consent after a concurrent refresh without exchanging the one-use code twice', async () => {
+    const first = await connectApp('hiring');
+    vi.setSystemTime(now + 3_600_001);
+    const second = await call({ operation: 'start', callback_path: '/callback', return_to: '/' }, 'other');
+    const state = new URL(second.authorization_url as string).searchParams.get('state')!;
+    await approve(state);
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async statements => {
+      expect(await call({ operation: 'events', grant_id: first.grant_id })).toHaveProperty('items');
+      return batch(statements);
+    });
+    expect(await call({ operation: 'complete', state, code: 'second' }, 'other')).toHaveProperty('email');
+    const exchanges = fetcher.mock.calls.filter(([url, init]) => new URL(url).hostname === 'oauth2.googleapis.com' && (init.body as URLSearchParams).get('grant_type') === 'authorization_code');
+    expect(exchanges).toHaveLength(2); // One initial connection, one new consent.
+    expect(db.sql.prepare('SELECT credential_revision FROM google_calendar_accounts').get()!.credential_revision).toBe(3);
+    expect(await call({ operation: 'events', grant_id: first.grant_id })).toHaveProperty('items');
+  });
+  it('a losing same-app callback cannot replace the winner or delete its new grant', async () => {
+    await connect();
+    const first = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const second = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    let winnerGrant: unknown;
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async statements => {
+      expect(await call({ operation: 'complete', state: second.google_url.searchParams.get('state'), code: 'winner' })).toHaveProperty('email');
+      winnerGrant = (await call({ operation: 'grant', calendar_id: 'team@example.test' })).grant_id;
+      return batch(statements);
+    });
+    expect(await call({ operation: 'complete', state: first.google_url.searchParams.get('state'), code: 'loser' })).toMatchObject({ error: 'connection_changed' });
+    expect(await call({ operation: 'grant_status', grant_id: winnerGrant })).toHaveProperty('grant_id');
+    expect(await call({ operation: 'status' })).toMatchObject({ authorization_version: 2 });
+  });
+  it('global disconnect during a consent CAS retry cannot restore credentials or app access', async () => {
+    await connect();
+    const start = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const batch = db.batch.bind(db);
+    vi.spyOn(db, 'batch').mockImplementationOnce(async statements => {
+      expect(await call({ operation: 'disconnect_account', expected_version: 1 })).toEqual({ disconnected: true });
+      return batch(statements);
+    });
+    expect(await call({ operation: 'complete', state: start.google_url.searchParams.get('state'), code: 'code' })).toMatchObject({ error: 'connection_changed' });
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: false });
+    expect(db.sql.prepare('SELECT status,credential_ct FROM google_calendar_accounts').get()).toEqual({ status: 'disconnected', credential_ct: null });
+  });
   it('keeps parallel app consent cookies independent through both provider callbacks', async () => {
     await connect();
     const first = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
@@ -439,7 +531,7 @@ describe('independent app capabilities and consent (#539)', () => {
     const second = await connectApp('other');
     expect(await call({ operation: 'conferences', grant_id: first.grant_id })).toMatchObject({ error: 'capability_not_granted', status: 403 });
     expect(await call({ operation: 'events', grant_id: first.grant_id })).toHaveProperty('items');
-    expect(await call({ operation: 'status' })).toMatchObject({ capabilities: ['calendar.read'], consent_version: 1, consented_at: now });
+    expect(await call({ operation: 'status' })).toMatchObject({ capabilities: ['calendar.read'], consent_version: 2, consented_at: now });
     expect(await call({ operation: 'grant_status', grant_id: second.grant_id }, 'other')).toHaveProperty('grant_id');
   });
   it('refuses identity substitution and scope reduction without replacing the shared credential', async () => {
@@ -503,10 +595,44 @@ describe('independent app capabilities and consent (#539)', () => {
     expect((await consentRouter.request(`${API}/v1/connectors/google-calendar/callback?${new URLSearchParams({ state, code: 'code' })}`, {}, env)).status).toBe(400);
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it('cannot reuse an approved legacy browser binding as first-party authentication proof', async () => {
+    const start = await approvedStart({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const state = start.google_url.searchParams.get('state')!;
+    db.sql.exec('UPDATE google_calendar_oauth_states SET browser_verified_at=NULL');
+    expect((await consentRouter.request(`${API}${consentUrlForTest(state)}`, { headers: { Cookie: start.cookie } }, env)).status).toBe(400);
+    expect((await consentRouter.request(`${API}/v1/connectors/google-calendar/callback?${new URLSearchParams({ state, code: 'code' })}`, { headers: { Cookie: start.cookie } }, env)).status).toBe(400);
+    expect(await call({ operation: 'complete', state, code: 'code' })).toMatchObject({ error: 'platform_consent_required' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('refuses app-bound, workload and unproven credentials on both consent sign-in paths', async () => {
+    const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
+    const state = new URL(start.authorization_url as string).searchParams.get('state')!;
+    const credentials = [
+      {},
+      { cred: credentialContext('app_bound', 'hiring') },
+      { cred: credentialContext('workload_session') },
+      { cred: { v: 2, kind: 'first_party_session' } },
+      { cred: credentialContext('first_party_session'), via: 'oidc-e2e' },
+    ];
+    for (const [index, context] of credentials.entries()) {
+      const claims = { uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', ...context };
+      const token = await mintSession(claims, env.SESSION_SIGNING_KEY);
+      const post = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: API, Authorization: `Bearer ${token}` } }, env);
+      expect(post.status).toBe(403);
+      expect(post.headers.get('Set-Cookie')).toBeNull();
+      const code = `untrusted-context-${index}`;
+      db.sql.prepare('INSERT INTO auth_exchange_codes (code_hash,claims,expires_at,created_at) VALUES (?,?,?,?)').run(await hashState(code), JSON.stringify(claims), now + 60_000, now);
+      const get = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?${new URLSearchParams({ state, code })}`, {}, env);
+      expect(get.status).toBe(400);
+      expect(get.headers.get('Set-Cookie')).toBeNull();
+    }
+    expect(db.sql.prepare('SELECT browser_hash,consented_at FROM google_calendar_oauth_states').get()).toEqual({ browser_hash: null, consented_at: null });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it('requires the initiating identity, a fresh interactive login, correct origin, browser and CSRF', async () => {
     const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/', capabilities: ['calendar.read'] });
     const state = new URL(start.authorization_url as string).searchParams.get('state')!;
-    const token = (uid: string, authTime = Math.floor(Date.now() / 1000)) => mintSession({ uid, roles: ['user'], auth_time: authTime, auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+    const token = (uid: string, authTime = Math.floor(Date.now() / 1000)) => mintSession({ uid, roles: ['user'], auth_time: authTime, auth_method: 'github', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
     const session = (jwt: string, origin = API) => consentRouter.request(`${API}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: origin, Authorization: `Bearer ${jwt}` } }, env);
     expect((await session(await token(OTHER))).status).toBe(403);
     expect((await session(await token(USER, Math.floor(Date.now() / 1000) - 301))).status).toBe(403);
@@ -530,7 +656,7 @@ describe('independent app capabilities and consent (#539)', () => {
     const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
     const state = new URL(start.authorization_url as string).searchParams.get('state')!;
     const code = 'one-time-pas-login';
-    db.sql.prepare('INSERT INTO auth_exchange_codes (code_hash,claims,expires_at,created_at) VALUES (?,?,?,?)').run(await hashState(code), JSON.stringify({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }), now + 60_000, now);
+    db.sql.prepare('INSERT INTO auth_exchange_codes (code_hash,claims,expires_at,created_at) VALUES (?,?,?,?)').run(await hashState(code), JSON.stringify({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred: credentialContext('first_party_session') }), now + 60_000, now);
     const response = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?${new URLSearchParams({ state, code })}`, {}, env);
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe(consentUrlForTest(state));
@@ -559,7 +685,9 @@ it('registration requires disclosures for new Google apps, defaults to Calendar 
   expect((await replaceAppTools(db, 'hiring', [], env, { connectors: [{ ...bare, disclosure }] })).status).toBe(200);
   const policy = db.sql.prepare("SELECT * FROM app_connectors WHERE app_id='hiring'").get()!;
   expect(policy.capabilities_json).toBe('["calendar.read"]');
-  expect(policy.contract_hash).not.toBe('legacy');
+  // Golden from the version-1 publisher contract; stronger sign-in proof must
+  // not revoke users simply because their publisher deploys unchanged fields.
+  expect(policy.contract_hash).toBe('6qTJswfNioX7rpOgxr-8ed8eMoRmEDQXEn-v34wAjjY');
   const connected = await connectApp('hiring', ['calendar.read']);
   expect((await replaceAppTools(db, 'hiring', [], env, { connectors: [{ ...bare, disclosure }] })).status).toBe(200);
   expect(await call({ operation: 'grant_status', grant_id: connected.grant_id })).toHaveProperty('grant_id');
@@ -575,7 +703,7 @@ it('escapes publisher disclosures and cancellation destroys the pending request 
   db.sql.prepare("UPDATE app_connectors SET disclosure_json=? WHERE app_id='hiring'").run(JSON.stringify(unsafe));
   const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
   const state = new URL(start.authorization_url as string).searchParams.get('state')!;
-  const token = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+  const token = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
   const session = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: API, Authorization: `Bearer ${token}` } }, env);
   const cookie = session.headers.get('Set-Cookie')!.split(';')[0]!;
   const page = await consentRouter.request(`${API}${consentUrlForTest(state)}`, { headers: { Cookie: cookie } }, env), content = await page.text();
@@ -586,7 +714,7 @@ it('escapes publisher disclosures and cancellation destroys the pending request 
   const body = new FormData(); body.set('decision', 'deny'); body.set('csrf', content.match(/name="csrf" value="([^"]+)"/)![1]!);
   const cancelled = await consentRouter.request(`${API}${consentUrlForTest(state)}`, { method: 'POST', headers: { Origin: API, Cookie: cookie }, body }, env);
   expect(cancelled.status).toBe(302);
-  expect(cancelled.headers.get('Location')).toBe('https://hiring.proappstore.online/callback?error=google_cancelled');
+  expect(cancelled.headers.get('Location')).toBe(`https://hiring.proappstore.online/callback?error=google_cancelled&state=${state}`);
   expect(await call({ operation: 'complete', state, code: 'code' })).toMatchObject({ error: 'expired_or_used_callback' });
   expect(fetcher).not.toHaveBeenCalled();
 });
@@ -595,7 +723,7 @@ it('the platform global-disconnect control requires explicit confirmation and ca
   await connectApp('hiring'); await connectApp('other');
   const start = await call({ operation: 'start', callback_path: '/callback', return_to: '/' });
   const state = new URL(start.authorization_url as string).searchParams.get('state')!;
-  const token = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+  const token = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
   const session = await consentRouter.request(`${API}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: API, Authorization: `Bearer ${token}` } }, env);
   const cookie = session.headers.get('Set-Cookie')!.split(';')[0]!;
   const content = await (await consentRouter.request(`${API}${consentUrlForTest(state)}`, { headers: { Cookie: cookie } }, env)).text();

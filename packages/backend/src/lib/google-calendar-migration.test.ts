@@ -30,3 +30,22 @@ it('0126 preserves existing encrypted accounts and grants as legacy consent, but
     expect(db.prepare('SELECT id FROM google_calendar_grants').all()).toEqual([{ id: 'g2' }]);
   } finally { db.close(); }
 });
+
+it('0127 preserves accounts, authorizations and pending flows with their previous epoch semantics', () => {
+  const db = new DatabaseSync(':memory:');
+  const root = fileURLToPath(new URL('../../../../migrations/', import.meta.url));
+  try {
+    for (const name of readdirSync(root).filter(n => n.endsWith('.sql') && n < '0127').sort()) db.exec(readFileSync(`${root}/${name}`, 'utf8'));
+    db.exec(`PRAGMA foreign_keys=ON;
+      INSERT INTO users (id,provider,provider_id,login,created_at,last_login_at) VALUES ('gh:1','github','1','user',1,1);
+      INSERT INTO apps (id,creator_id,created_at) VALUES ('first','gh:1',1);
+      INSERT INTO google_calendar_accounts (user_id,version,status,credential_ct,updated_at) VALUES ('gh:1',7,'connected',X'010203',1);
+      INSERT INTO google_calendar_app_authorizations (app_id,user_id,account_version) VALUES ('first','gh:1',7);
+      INSERT INTO google_calendar_oauth_states (state_hash,app_id,user_id,account_version,callback_url,return_to,expires_at) VALUES ('pending','first','gh:1',7,'https://first.proappstore.online/callback','https://first.proappstore.online/',9999999999999);`);
+    db.exec(readFileSync(`${root}/0127_google_consent_start_epoch.sql`, 'utf8'));
+    expect(db.prepare('SELECT account_status,account_version,browser_verified_at FROM google_calendar_oauth_states').get()).toEqual({ account_status: 'connected', account_version: 7, browser_verified_at: null });
+    expect(db.prepare('SELECT version,hex(credential_ct) AS ciphertext FROM google_calendar_accounts').get()).toEqual({ version: 7, ciphertext: '010203' });
+    expect(db.prepare('SELECT account_version FROM google_calendar_app_authorizations').get()).toEqual({ account_version: 7 });
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { db.close(); }
+});

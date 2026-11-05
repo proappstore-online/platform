@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { chromium, webkit, expect as browserExpect } from '@playwright/test';
 import { Hono } from 'hono';
 import { expect, it } from 'vitest';
-import { mintSession } from '@proappstore/build-core';
+import { credentialContext, mintSession } from '@proappstore/build-core';
 import { sqliteD1 } from '../src/sqlite-d1';
 import { makeEnv } from '../src/test-helpers';
 import type { Env } from '../src/types';
 import { googleCalendarRoutes } from '../src/routes/google-calendar';
-import { beginGoogleOAuth } from '../src/lib/google-calendar-accounts';
+import { beginGoogleOAuth } from '../src/lib/google-calendar-oauth';
 
 for (const [engine, browserType] of Object.entries({ chromium, webkit })) for (const width of [320, 390]) {
   it(`${engine} ${width}px: sign in, read disclosure, select Calendar only, then leave for Google`, async () => {
@@ -27,7 +27,7 @@ for (const [engine, browserType] of Object.entries({ chromium, webkit })) for (c
     router.post('/v1/auth/credentials/login', async c => {
       const body = await c.req.json();
       if (body.login !== 'person@example.test' || body.password !== 'fixture-password') return c.json({ error: 'invalid credentials' }, 401);
-      return c.json({ token: await mintSession({ uid: 'gh:1', roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'password' }, env.SESSION_SIGNING_KEY) });
+      return c.json({ token: await mintSession({ uid: 'gh:1', roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'password', cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY) });
     });
     const temporary = await mkdtemp(join(tmpdir(), 'pas-consent-'));
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(temporary, 'key.pem'), '-out', join(temporary, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'ignore' });
@@ -57,12 +57,17 @@ for (const [engine, browserType] of Object.entries({ chromium, webkit })) for (c
       await context.route('https://accounts.google.com/**', route => route.abort());
       const page = await context.newPage(), errors: string[] = [];
       page.on('pageerror', error => errors.push(error.message));
-      page.on('console', message => { if (message.type() === 'error') console.error(engine, width, message.text()); });
-      page.on('response', response => { if (response.status() >= 400) console.error(engine, width, response.status(), response.url()); });
       await page.goto(start.authorization_url);
       await browserExpect(page.getByRole('heading', { name: 'Connect Google to Meeting Notes' })).toBeVisible();
       await page.getByText('Use email or username', { exact: true }).click();
       await page.getByLabel('Email or username').fill('person@example.test');
+      await page.getByLabel('Password', { exact: true }).fill('fixture-password');
+      // A dropped login request must clear the password and permit a safe retry.
+      await context.route(`${API}/v1/auth/credentials/login`, route => route.abort(), { times: 1 });
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+      await browserExpect(page.getByRole('alert')).toHaveText('Could not sign in. Try again.');
+      await browserExpect(page.getByLabel('Password', { exact: true })).toHaveValue('');
+      await browserExpect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
       await page.getByLabel('Password', { exact: true }).fill('fixture-password');
       await page.getByRole('button', { name: 'Sign in', exact: true }).click();
       await browserExpect(page.getByRole('heading', { name: 'Choose access' })).toBeVisible().catch(async error => { console.error(engine, width, await page.locator('body').innerText(), (await context.cookies()).map(c => c.name)); throw error; });

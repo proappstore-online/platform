@@ -1,6 +1,7 @@
 import type { Env } from '../types.js';
 import type { CallerIdentity } from './app-worker-calls.js';
-import { accountStatus, beginGoogleOAuth, completeGoogleOAuth, disconnectGoogleAccount, disconnectGoogleApp, requireAppAuthorization } from './google-calendar-accounts.js';
+import { accountStatus, disconnectGoogleAccount, disconnectGoogleApp, requireAppAuthorization } from './google-calendar-accounts.js';
+import { beginGoogleOAuth, completeGoogleOAuth } from './google-calendar-oauth.js';
 import { createCalendarGrant, listAccountCalendars, readCalendarGrant, revokeCalendarGrant } from './google-calendar-data.js';
 import { GoogleCalendarError } from './google-calendar-common.js';
 

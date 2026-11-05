@@ -11,7 +11,17 @@ export class GoogleCalendarError extends Error {
   constructor(readonly code: string, readonly status = 400) { super(code); }
 }
 export const googleConfigured = (env: Env) => Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.APP_SECRET_KEK && env.SESSION_SIGNING_KEY);
+export function requireGoogleConfiguration(env: Env) {
+  if (!googleConfigured(env)) throw new GoogleCalendarError('google_not_configured', 503);
+}
 export const callbackUrl = (env: Env) => `${(env.APP_BASE || 'https://api.proappstore.online').replace(/\/$/, '')}/v1/connectors/google-calendar/callback`;
+/** Only this PAS-owned query-code receiver may get a consent sign-in context. */
+export function googleConsentReturnTo(env: Env, url: URL): boolean {
+  return url.origin === new URL(env.APP_BASE || 'https://api.proappstore.online').origin
+    && url.pathname === '/v1/connectors/google-calendar/session' && !url.hash
+    && url.searchParams.getAll('state').length === 1
+    && /^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('state') ?? '');
+}
 const bytes = (s: string) => new TextEncoder().encode(s);
 const encode = (v: Uint8Array) => btoa(String.fromCharCode(...v)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 const decode = (s: string) => Uint8Array.from(atob(s.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
