@@ -24,6 +24,13 @@ pnpm --filter @proappstore/runtime-tests test:host
 pnpm --filter @proappstore/runtime-tests test:admin
 ```
 
+The backend project runs as three sequential batches, each in its own vitest and workerd process
+(`scripts/run-backend-batches.mjs`, #543): two general batches and one holding the Room / WebSocket
+Durable Object files. Every file runs exactly once; a failing batch does not stop the others, there is no
+retry, and a suspected native workerd crash is reported as one. `test:backend:single` is the old
+single-process run, and `node scripts/run-backend-batches.mjs --list` / `--batch <name>` list and run one batch.
+A native macOS workerd crash seen in the single-process run is still open: see `MACOS_CRASH_DIAGNOSIS.md`.
+
 `pretest` builds the data worker and the backend's embedded bundle
 (`packages/backend/scripts/embed-data-worker.mjs`), which the backend imports.
 No request leaves workerd: `fetchMock.disableNetConnect()` is on, and anything
