@@ -737,3 +737,136 @@ it('the platform global-disconnect control requires explicit confirmation and ca
   expect(await call({ operation: 'status' }, 'other')).toMatchObject({ connected: false });
   expect((await submit()).status).toBe(400);
 });
+
+describe('user connection management (#537)', () => {
+  const connections = async (cred: ReturnType<typeof credentialContext> | null = credentialContext('first_party_session'), userId = USER, claims: Record<string, unknown> = {}) => {
+    const token = await mintSession({ uid: userId, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github', ...(cred ? { cred } : {}), ...claims }, env.SESSION_SIGNING_KEY);
+    return (path: string, body?: Record<string, unknown>) => consentRouter.request(`${API}/v1/connectors/google-calendar/connections${path}`, {
+      method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}),
+    }, env);
+  };
+  const authorizations = () => db.sql.prepare('SELECT app_id FROM google_calendar_app_authorizations ORDER BY app_id').all().map(r => r.app_id);
+
+  it('an app is told how many apps share the account, never which', async () => {
+    await connectApp('hiring');
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true, authorized_apps: 1 });
+    await connectApp('other');
+    const status = await call({ operation: 'status' });
+    expect(status).toMatchObject({ authorized_apps: 2 });
+    expect(JSON.stringify(status)).not.toContain('other');
+    expect(await call({ operation: 'status' }, 'hiring', actor(OTHER))).toMatchObject({ connected: false, authorized_apps: 0 });
+  });
+
+  it('lists every app the person connected, with capabilities and consent, and nothing for another person', async () => {
+    await connectApp('hiring', ['calendar.read']); await connectApp('other');
+    const response = await (await connections())('');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      account: { email: 'organizer@example.test', version: 1 }, warning: expect.stringContaining('every app listed here'),
+      apps: [{ app_id: 'hiring', capabilities: ['calendar.read'], authorization_version: 1, consent_version: 2, legacy: false },
+        { app_id: 'other', capabilities: ['calendar.read', 'meet.read'], authorization_version: 1, legacy: false }],
+    });
+    expect(await (await (await connections(credentialContext('first_party_session'), OTHER))('')).json()).toMatchObject({ account: null, apps: [] });
+  });
+
+  it('shows pre-consent access as legacy rather than inventing a consent', async () => {
+    await connectApp('hiring');
+    db.sql.exec('UPDATE google_calendar_app_authorizations SET consent_version = 0, consented_at = NULL');
+    expect(await (await (await connections())('')).json()).toMatchObject({ apps: [{ app_id: 'hiring', legacy: true, consented_at: null }] });
+  });
+
+  it('revokes one app and leaves the other app, the shared account and its grants working', async () => {
+    const first = await connectApp('hiring'); const second = await connectApp('other');
+    const send = await connections();
+    expect((await send('/apps/other/revoke', { expected_authorization_version: 99 })).status).toBe(409);
+    expect(authorizations()).toEqual(['hiring', 'other']);
+    expect(await (await send('/apps/other/revoke', { expected_authorization_version: 1 })).json()).toEqual({ disconnected: true });
+    expect(authorizations()).toEqual(['hiring']);
+    expect(await call({ operation: 'events', grant_id: first.grant_id })).toHaveProperty('items');
+    expect(await call({ operation: 'grant_status', grant_id: second.grant_id }, 'other')).toMatchObject({ error: 'reconnect_required' });
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true, authorized_apps: 1 });
+    expect((await send('/apps/other/revoke', { expected_authorization_version: 1 })).status).toBe(409);
+  });
+
+  it('a reconnect after revocation works and does not disturb the other app', async () => {
+    const first = await connectApp('hiring'); await connectApp('other');
+    await (await connections())('/apps/other/revoke', { expected_authorization_version: 1 });
+    await connectApp('other');
+    expect(authorizations()).toEqual(['hiring', 'other']);
+    expect(await call({ operation: 'events', grant_id: first.grant_id })).toHaveProperty('items');
+  });
+
+  it('only the person themselves can manage: an app-bound, workload or unproven credential cannot', async () => {
+    await connectApp('hiring'); await connectApp('other');
+    for (const cred of [credentialContext('app_session', 'hiring'), credentialContext('workload_session'), null]) {
+      const send = await connections(cred);
+      for (const [path, body] of [['', undefined], ['/apps/other/revoke', { expected_authorization_version: 1 }], ['/disconnect', { expected_version: 1, acknowledged_apps: 2 }]] as const) {
+        const response = await send(path, body);
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: 'personal_sign_in_required' });
+      }
+    }
+    expect((await (await connections(credentialContext('first_party_session'), USER, { via: 'oidc-e2e' }))('')).status).toBe(403);
+    expect(authorizations()).toEqual(['hiring', 'other']);
+  });
+
+  it('a person cannot revoke or disconnect for someone else', async () => {
+    await connectApp('hiring');
+    const send = await connections(credentialContext('first_party_session'), OTHER);
+    expect((await send('/apps/hiring/revoke', { expected_authorization_version: 1 })).status).toBe(409);
+    expect((await send('/disconnect', { expected_version: 1, acknowledged_apps: 0 })).status).toBe(409);
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true });
+  });
+
+  it('shared-account disconnect needs the count of affected apps and a recent sign-in', async () => {
+    await connectApp('hiring'); await connectApp('other');
+    const send = await connections();
+    for (const acknowledged_apps of [undefined, 0, 1, 3, '2']) {
+      const response = await send('/disconnect', { expected_version: 1, acknowledged_apps });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'cross_app_acknowledgement_required' });
+    }
+    expect(await call({ operation: 'status' }, 'other')).toMatchObject({ connected: true, authorized_apps: 2 });
+    const stale = await connections(credentialContext('first_party_session'), USER, { auth_time: Math.floor(Date.now() / 1000) - 86_400 });
+    expect(await (await stale('/disconnect', { expected_version: 1, acknowledged_apps: 2 })).json()).toEqual({ error: 'recent_sign_in_required' });
+    expect(authorizations()).toEqual(['hiring', 'other']);
+    expect((await send('/disconnect', { expected_version: 99, acknowledged_apps: 2 })).status).toBe(409);
+    expect(await (await send('/disconnect', { expected_version: 1, acknowledged_apps: 2 })).json()).toEqual({ disconnected: true });
+    expect(authorizations()).toEqual([]);
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: false });
+    expect(db.sql.prepare('SELECT status, credential_ct FROM google_calendar_accounts').get()).toEqual({ status: 'disconnected', credential_ct: null });
+  });
+
+  it('a person with the account connected but no app authorized can still disconnect it', async () => {
+    await connectApp('hiring');
+    const send = await connections();
+    await send('/apps/hiring/revoke', { expected_authorization_version: 1 });
+    expect(await (await send('/disconnect', { expected_version: 1, acknowledged_apps: 0 })).json()).toEqual({ disconnected: true });
+  });
+
+  it('an app can end the shared account for others only by acknowledging how many apps it affects', async () => {
+    await connectApp('hiring'); await connectApp('other');
+    for (const acknowledged_apps of [undefined, 1, 3, '2']) {
+      expect(await call({ operation: 'disconnect_account', expected_version: 1, acknowledged_apps })).toEqual({ error: 'cross_app_acknowledgement_required', status: 409 });
+    }
+    expect(authorizations()).toEqual(['hiring', 'other']);
+    expect(await call({ operation: 'disconnect_account', expected_version: 1, acknowledged_apps: 2 })).toEqual({ disconnected: true });
+    expect(authorizations()).toEqual([]);
+  });
+
+  it('an app connected after the warning was shown makes the disconnect fail closed', async () => {
+    await connectApp('hiring'); await connectApp('other');
+    const prepare = db.prepare.bind(db);
+    let injected = false;
+    vi.spyOn(db, 'prepare').mockImplementation(query => {
+      if (!injected && query.startsWith('UPDATE google_calendar_accounts SET version')) {
+        injected = true;
+        db.sql.exec("INSERT INTO apps (id,creator_id,created_at) VALUES ('late','gh:2',0); INSERT INTO google_calendar_app_authorizations (app_id,user_id,account_version) VALUES ('late','gh:1',1)");
+      }
+      return prepare(query);
+    });
+    expect(await call({ operation: 'disconnect_account', expected_version: 1, acknowledged_apps: 2 })).toEqual({ error: 'connection_changed', status: 409 });
+    expect(authorizations()).toEqual(['hiring', 'late', 'other']);
+    expect(await call({ operation: 'status' })).toMatchObject({ connected: true });
+  });
+});

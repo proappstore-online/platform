@@ -289,7 +289,7 @@ can read existing app grants but cannot connect accounts or create grants.
 
 | Operation | Required fields / result |
 | --- | --- |
-| `status` | User required; returns `configured`, `connected`, `email`, shared-account `version`, per-app `authorization_version`, personally granted `capabilities`, `consent_version` and `consented_at`. |
+| `status` | User required; returns `configured`, `connected`, `email`, shared-account `version`, per-app `authorization_version`, personally granted `capabilities`, `consent_version` and `consented_at`, plus `authorized_apps`: how many of the person's apps share the account (a count only, never which). |
 | `start` | User required; `callback_path` and `return_to` are relative app paths. Optional `capabilities` selects a subset of the declaration. Returns a **PAS-owned consent URL**, not a direct Google URL. |
 | `complete` | Same user/app required; one-use `code`, `state`. Returns relative `return_to` and account `email`. |
 | `calendars` | Authorized user required; optional `page_token`; returns readable exact IDs in `calendars` and `next_page_token`. |
@@ -300,7 +300,25 @@ can read existing app grants but cannot connect accounts or create grants.
 | `conferences` | `grant_id`, `event_id`, `meeting_code`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Requires the exact live event and a completed meeting in the last 28 days. |
 | `participants`, `sessions` | `grant_id`, `resource`, `receipt` from the preceding list, optional `page_token`. |
 | `disconnect_app` | User required; `expected_version` is the app's `authorization_version`. Removes only this app's authorization, grants and pending consent. |
-| `disconnect_account` | Authorized user required; `expected_version`. Erases the platform account credential and invalidates all its app grants. Use only after explicitly explaining this global effect to the user. |
+| `disconnect_account` | Authorized user required; `expected_version`. Erases the platform account credential and invalidates all its app grants. If any other app is authorized, `acknowledged_apps` must equal `status.authorized_apps`, sent after showing the user that every app loses Google; otherwise `cross_app_acknowledgement_required` (409). An app connected after the warning makes it fail closed with `connection_changed`. |
+
+### Connection management by the person (#537)
+
+An app's own button is not the only control. The signed-in person manages their
+connections directly with the platform, under `/v1/connectors/google-calendar/connections`.
+These routes accept only a first-party person session: an app-bound, workload,
+machine or unproven credential gets `personal_sign_in_required`.
+
+| Route | Effect |
+| --- | --- |
+| `GET /connections` | The shared account (`email`, `version`) and each app that can use it: `app_id`, `name`, `capabilities`, `authorization_version`, `consent_version`, `consented_at` and `legacy` (access that predates platform consent, shown without a consent receipt). Includes the cross-app `warning`. |
+| `POST /connections/apps/:appId/revoke` | `{ expected_authorization_version }`. Revokes that one app's authorization, grants and pending consent. Other apps and the shared account are untouched, and the app can ask to connect again. |
+| `POST /connections/disconnect` | `{ expected_version, acknowledged_apps }`. Disconnects the shared Google account for **every** app. Needs a recent sign-in, and `acknowledged_apps` must equal the number of app authorizations that will end (checked again inside the update, so an app connected after the warning fails closed). |
+
+Neither route deletes records an app already saved, and neither calls Google to
+revoke the provider-side grant: the platform credential is erased, but the person
+can also remove PAS at myaccount.google.com. That provider-side revocation, and
+a hosted screen over these routes, remain open under #537.
 
 The public callback only forwards code/state to the pinned app origin; the app
 posts them to its authenticated worker for `complete`. Remove the code from SPA

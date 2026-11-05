@@ -50,6 +50,8 @@ export type GoogleCalendarRequest = {
   state?: string;
   code?: string;
   expected_version?: number;
+  /** `disconnect_account` ends Google for every app; send the status result's `authorized_apps` after showing the user that warning. */
+  acknowledged_apps?: number;
   calendar_id?: string;
   grant_id?: string;
   event_id?: string;

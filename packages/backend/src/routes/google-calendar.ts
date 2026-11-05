@@ -3,10 +3,10 @@ import { html } from 'hono/html';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
-import { requireUser, stepUpMaxAgeSeconds } from '../lib/auth.js';
+import { requireUser, stepUpMaxAgeSeconds, type FasUser } from '../lib/auth.js';
 import { redeemExchangeCode } from './auth.js';
 import { account } from '../lib/google-calendar-credentials.js';
-import { disconnectGoogleAccount } from '../lib/google-calendar-accounts.js';
+import { disconnectGoogleAccount, disconnectGoogleApp, listGoogleConnections } from '../lib/google-calendar-accounts.js';
 import { googleAuthorizationUrl, oauthState, type OAuthState } from '../lib/google-calendar-oauth.js';
 import { GoogleCalendarError, hashState, randomState } from '../lib/google-calendar-common.js';
 import { googleCapabilities } from '../lib/google-calendar-policy.js';
@@ -139,3 +139,41 @@ googleCalendarRoutes.get('/connectors/google-calendar/callback', async c => {
     return c.redirect(destination.href, 302);
   } catch { return safeError(c); }
 });
+
+/**
+ * User connection management (#537). The signed-in person inspects what each app can use and revokes one
+ * app, or separately disconnects the shared account. Only a first-party person session may do this: an
+ * app-bound, workload or machine credential must never be able to end another app's access, and an
+ * app's own disconnect button is not the only control.
+ */
+async function connectionOwner(c: Ctx, recent = false): Promise<FasUser> {
+  const user = await requireUser(c);
+  if (user.credentialContext?.kind !== 'first_party_session' || user.via) throw new GoogleCalendarError('personal_sign_in_required', 403);
+  if (recent) {
+    const age = Math.floor(Date.now() / 1000) - (user.authTime ?? 0);
+    if (age < -30 || age > stepUpMaxAgeSeconds(c.env) || !['google', 'github', 'password', 'passkey'].includes(user.authMethod ?? '')) throw new GoogleCalendarError('recent_sign_in_required', 403);
+  }
+  return user;
+}
+async function managed(c: Ctx, run: () => Promise<unknown>) {
+  try { return c.json(await run()); } catch (error) {
+    if (error instanceof GoogleCalendarError) return c.json({ error: error.code }, error.status as 400);
+    throw error;
+  }
+}
+const requestBody = async (c: Ctx) => await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+
+googleCalendarRoutes.get('/connectors/google-calendar/connections', c => managed(c, async () => {
+  const user = await connectionOwner(c);
+  const connections = await listGoogleConnections(c.env, user.id);
+  return { ...connections, warning: connections.account && 'Disconnecting the Google account ends Google access for every app listed here. Records an app already saved are not deleted.' };
+}));
+googleCalendarRoutes.post('/connectors/google-calendar/connections/apps/:appId/revoke', c => managed(c, async () => {
+  const user = await connectionOwner(c);
+  return disconnectGoogleApp(c.env, c.req.param('appId'), user.id, (await requestBody(c)).expected_authorization_version);
+}));
+googleCalendarRoutes.post('/connectors/google-calendar/connections/disconnect', c => managed(c, async () => {
+  const user = await connectionOwner(c, true);
+  const body = await requestBody(c);
+  return disconnectGoogleAccount(c.env, user.id, body.expected_version, { acknowledgedApps: body.acknowledged_apps });
+}));
