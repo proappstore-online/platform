@@ -80,8 +80,7 @@ import { teamRoutes } from './routes/teams.js';
 import { promoterRoutes } from './routes/promoters.js';
 import { referralRoutes } from './routes/referrals.js';
 import { contributionRoutes } from './routes/contributions.js';
-import { githubSource } from './lib/contributions/github.js';
-import { runContributionTick } from './lib/contributions/ingest.js';
+import { scheduleContributions } from './lib/contributions/scheduler.js';
 import { activationObserver } from './lib/referrals/activation.js';
 import { accountRoutes } from './routes/accounts.js';
 import { inviteRoutes } from './routes/invites.js';
@@ -444,7 +443,7 @@ export default {
     ctx.waitUntil(fillChargeFees(env).catch((e) => console.error(`[billing] fee lookup failed: ${(e as Error).message}`)));
     ctx.waitUntil(cleanupRemoteAuthRequests(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[broker] cleanup failed: ${(e as Error).message}`)));
     // #546: continue project contribution history reads a few at a time. A failure here never takes the other checks down.
-    ctx.waitUntil(runContributionTick(env.DB, env.GITHUB_TOKEN ? githubSource(env.GITHUB_TOKEN) : null, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[contributions] tick failed: ${(e as Error).message}`)));
+    ctx.waitUntil(scheduleContributions(env, event.scheduledTime ?? Date.now()).catch((e) => console.error(`[contributions] tick failed: ${(e as Error).message}`)));
     const tickAt = event.scheduledTime ?? Date.now();
     // #107/#389: alert evaluation runs on every five-minute tick at the tick's scheduled
     // time, over completed intervals only, catching up on late or missed ticks

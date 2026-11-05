@@ -118,3 +118,50 @@ as a zero.
 - **Live acceptance is not recorded.** The ingestion is tested against deterministic scripted histories, never against
   live GitHub. A real repository's figures, the first scheduled backfill and the production token's behaviour have not
   been observed by this change.
+
+
+## Scheduled ingestion acceptance runbook (#556)
+
+Tracking: [platform #556](https://github.com/proappstore-online/platform/issues/556),
+[parent #544](https://github.com/proappstore-online/platform/issues/544),
+[Console #13](https://github.com/proappstore-online/console/issues/13).
+
+Status: synthetic regression coverage only; live acceptance remains pending. No authenticated
+production app, immutable repository binding, deployed revisions or scheduler observations have
+been collected for this change. Local checkout SHAs are not deployed revision evidence.
+
+1. Through an existing authorized owner connection, select one accessible app. Record its app id,
+   verified repository full name and immutable id from approved read-only status, default branch,
+   current GitHub head, observation time in UTC, and actual backend/Console deployment SHAs and links.
+   Never supply an arbitrary repository or publish private contributor identities.
+2. Inspect existing scheduler configuration/status/logs. The backend runs every five minutes;
+   each tick enrolls at most two apps and refreshes at most three due projects. Each project reads
+   at most 40 commit details per run with 100 commits per list page. Complete projects become due
+   after 15 minutes; incomplete walks after one minute (picked up on a later tick).
+   An `unconfigured` warning means no read token, not successful ingestion. Check secret presence
+   only through approved status, never read or export its value.
+3. Observe at least two real scheduled executions without POSTing refresh. Record `last_attempt_at`,
+   `walk_page`, `walk_head_sha`, `next_refresh_at`, `backfill_complete`, `head_sha`, and
+   `last_success_at` through existing authorized read-only status. A page may repeat while its
+   remaining details are read; verify increasing stored fact counts and the pinned head. Continue
+   until complete, then observe a subsequent scheduled refresh and compare current GitHub head.
+4. Read summary and every needed people page with identical explicit UTC `from` and exclusive `to`.
+   Record state, completeness, policy version, freshness, totals, bot/unlinked buckets and cursors.
+   Compare a small declared sample of default-branch commits/files with authoritative GitHub reads:
+   source/tests count; prose, generated, vendor, lockfiles and binaries do not; merges add no second
+   credit. Verify numeric author identity privately. State sample size and limitations.
+5. Recompute one person's `100 * share.numerator / share.denominator`, rounded to two decimals.
+   Denominator must equal all eligible additions, including bots/unlinked, for the same period.
+   A synthetic illustration is 60 / 100 = 60%; this is not a live observation.
+6. Open the deployed Console as that owner. Compare displayed figures to responses, change bounds,
+   paginate, and record sanitized evidence. Test denial, failures and rewrites with synthetic
+   fixtures only. Do not revoke real permissions or rewrite a real repository.
+7. Attach privacy-safe evidence and CI/deploy links to the tracking tickets. Separate synthetic
+   tests from live observations. If any required authorized connection is unavailable, record the
+   exact missing capability and dependency on #556; leave live acceptance pending. Missing tokens,
+   rate limits, access loss and incomplete walks must never be reported as zero or accepted complete.
+
+Reproduce focused synthetic checks with
+`pnpm exec vitest run packages/backend/src/lib/contributions packages/backend/src/routes/contributions.test.ts`.
+Real D1 integration is covered by `pnpm test:runtime`; run the full release gates in CLAUDE.md
+on the supported Node 22/POSIX runner. Console fixture tests live in its separate repository.

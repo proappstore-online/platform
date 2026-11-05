@@ -1,8 +1,9 @@
-import { SELF, env as providedEnv } from 'cloudflare:test';
+import { SELF, fetchMock, env as providedEnv } from 'cloudflare:test';
 import { credentialContext, mintSession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { commit, FakeGitHub } from '../../../backend/src/lib/contributions/fake-github';
+import { githubSource } from '../../../backend/src/lib/contributions/github';
 import { refreshProject, runContributionTick } from '../../../backend/src/lib/contributions/ingest';
 import { BASE, mockNetwork, resetTables, seedApp, seedUser } from './helpers';
 
@@ -95,9 +96,48 @@ describe('project contributions on D1 (#544)', () => {
     expect(out).toMatchObject({ enrolled: ['shop'], refreshed: [{ appId: 'shop', outcome: 'complete' }] });
   });
 
+  it('continues scheduled backfill across ticks on real D1 and refreshes afterward', async () => {
+    gh.history = Array.from({ length: 45 }, () => commit({ adds: 2 }));
+    const head = gh.history[0]!.sha;
+    expect(await runContributionTick(env.DB, gh, NOW)).toMatchObject({ refreshed: [{ outcome: 'budget_exhausted' }] });
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'partial', complete: false, totals: { additions: 80 } });
+    expect(await env.DB.prepare("SELECT walk_head_sha, backfill_complete FROM project_contribution_sync WHERE app_id = 'shop'").first()).toEqual({ walk_head_sha: head, backfill_complete: 0 });
+    gh.history.unshift(commit({ adds: 7 }));
+    expect(await runContributionTick(env.DB, gh, NOW + 5 * 60_000)).toMatchObject({ refreshed: [{ appId: 'shop', outcome: 'complete' }] });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS total, COUNT(DISTINCT sha) AS distinct_shas FROM project_commits WHERE app_id = 'shop'").first()).toEqual({ total: 45, distinct_shas: 45 });
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ complete: true, totals: { additions: 90 }, freshness: { head_sha: head } });
+    await runContributionTick(env.DB, gh, NOW + 20 * 60_000);
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ complete: true, totals: { additions: 97 }, freshness: { head_sha: gh.history[0]!.sha } });
+    expect(gh.calls.getCommitFiles).toBe(46);
+  });
+
   it('refuses to rewrite the append-only event log', async () => {
     gh.history = [commit()];
     await refreshProject(env.DB, gh, 'shop', { now: NOW });
     await expect(env.DB.prepare("UPDATE project_contribution_events SET detail = 'x'").run()).rejects.toThrow(/append-only/);
+  });
+});
+
+
+describe('real GitHub HTTP adapter (#556)', () => {
+  it('parses a commit page over intercepted HTTP with a synthetic token', async () => {
+    // The adapter uses immutable repository ids, not caller-supplied repo names.
+    fetchMock.get('https://api.github.com').intercept({
+      path: '/repositories/1001/commits?sha=main&per_page=100&page=1',
+      method: 'GET',
+      headers: { authorization: 'Bearer synthetic-contributions-token' },
+    }).reply(200, JSON.stringify([{
+      sha: 'fixture-sha', parents: [{ sha: 'parent' }],
+      author: { id: 501, login: 'fixture-author', type: 'User' },
+      commit: { author: { date: '2026-03-10T00:00:00Z' }, message: 'fixture change' },
+    }]), { headers: { 'content-type': 'application/json' } });
+    const source = githubSource('synthetic-contributions-token');
+    expect(await source.listCommits(1001, 'proappstore-online/shop', 'main', 1, 100)).toEqual({
+      ok: true, hasNext: false, commits: [{
+        sha: 'fixture-sha', parentCount: 1, authorId: 501, authorLogin: 'fixture-author',
+        authorType: 'user', authoredAt: Date.UTC(2026, 2, 10), message: 'fixture change',
+      }],
+    });
+    fetchMock.assertNoPendingInterceptors();
   });
 });

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { sqliteD1 } from '../../sqlite-d1.js';
 import { commit, FakeGitHub } from './fake-github.js';
-import { ensureProject, projectRepository, refreshDueProjects, refreshProject } from './ingest.js';
+import { ensureProject, projectRepository, refreshDueProjects, refreshProject, runContributionTick } from './ingest.js';
 
 const T0 = 1_800_000_000_000;
 let db: ReturnType<typeof sqliteD1>;
@@ -271,5 +271,32 @@ describe('events are append-only', () => {
     gh.history = [commit()];
     await refreshProject(db, gh, 'demo', { now: T0 });
     await expect(db.prepare('UPDATE project_contribution_events SET detail = \'x\'').run()).rejects.toThrow(/append-only/);
+  });
+});
+
+
+describe('scheduled continuation (#556)', () => {
+  it('continues a bounded pinned walk across ticks and later refreshes new commits', async () => {
+    gh.history = Array.from({ length: 125 }, () => commit({ adds: 2 }));
+    const head = gh.history[0]!.sha;
+    expect(await runContributionTick(db, gh, T0)).toMatchObject({ enrolled: ['demo'], refreshed: [{ outcome: 'budget_exhausted' }] });
+    expect(await sync()).toMatchObject({ backfill_complete: 0, walk_head_sha: head, walk_page: 1 });
+    expect(gh.calls.getCommitFiles).toBe(40);
+    expect(await runContributionTick(db, gh, T0 + 30_000)).toMatchObject({ refreshed: [] });
+    gh.history.unshift(commit({ adds: 7 }));
+    await runContributionTick(db, gh, T0 + 5 * 60_000);
+    expect(await sync()).toMatchObject({ backfill_complete: 0, walk_head_sha: head });
+    expect(gh.calls.getCommitFiles).toBe(80);
+    expect(await runContributionTick(db, gh, T0 + 10 * 60_000)).toMatchObject({ refreshed: [{ outcome: 'budget_exhausted' }] });
+    expect(await sync()).toMatchObject({ backfill_complete: 0, walk_head_sha: head, walk_page: 2 });
+    expect(gh.calls.getCommitFiles).toBe(120);
+    expect(await runContributionTick(db, gh, T0 + 15 * 60_000)).toMatchObject({ refreshed: [{ outcome: 'complete' }] });
+    expect(await live()).toMatchObject({ n: 125, a: 250 });
+    expect(await sync()).toMatchObject({ backfill_complete: 1, head_sha: head, walk_id: null });
+    expect(await runContributionTick(db, gh, T0 + 20 * 60_000)).toMatchObject({ refreshed: [] });
+    await runContributionTick(db, gh, T0 + 30 * 60_000);
+    expect(await live()).toMatchObject({ n: 126, a: 257 });
+    expect(gh.calls.getCommitFiles).toBe(126);
+    expect(await sync()).toMatchObject({ head_sha: gh.history[0]!.sha, last_success_at: T0 + 30 * 60_000 });
   });
 });
