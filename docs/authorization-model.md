@@ -349,7 +349,8 @@ on an app with no user behind them. They run with platform identities that are
   `test_principal_events` (`GET /v1/admin/test-principal-events`). **Migration from #146:** grants
   without `principal_id` keep working unchanged; move a consumer by creating a principal and a
   new grant, switching the workflow's `exchange/oidc` call (same endpoint, same audience), then
-  revoking the old grant. Console UI lives in `proappstore-online/console`.
+  revoking the old grant. Console UI: the test-principals panel in the admin view of
+  `proappstore-online/console` (`TestPrincipalsPanel`, `bfc779d`).
 
   **Lifecycle API (#434)**, platform admins only (401 unauthenticated, 403 non-admin, 404 unknown id,
   422 invalid input, 409 state conflict): `GET /v1/admin/test-principals` (`?status=&limit=&cursor=`),

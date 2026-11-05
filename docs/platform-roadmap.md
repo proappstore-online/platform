@@ -19,9 +19,10 @@ check `whoami`, then inspect a target before making changes.
 Keyless GitHub Actions test-session exchange is deployed. Platform admins can
 manage repository/workflow/ref grants through MCP; an existing dedicated GitHub
 or Google smoke account can receive a short-lived non-admin test session. See
-[the keyless setup](publishing-flow.md#keyless-e2e-sessions). The managed
-test-principal API also exists; its complete management and integration
-acceptance remains part of #432 below.
+[the keyless setup](publishing-flow.md#keyless-e2e-sessions). Managed test
+principals are delivered (#432): the model and hardened exchange in `0ae11c55`,
+the lifecycle API, audit and migrations in `ea749539`, and the Console
+management panel in `proappstore-online/console@bfc779d`.
 
 Billing and entitlements have implementations. The product model remains one
 platform subscription, with no per-app purchases or upgrade prompts. The
@@ -45,10 +46,13 @@ smoke test does not prove every role or tenant boundary.
 
 ## 2. Make authenticated testing automatic
 
-Complete managed test principals, administration, audit and CI integration
-([#432](https://github.com/proappstore-online/platform/issues/432)), then provision
-keyless test login by default for every new app
-([#462](https://github.com/proappstore-online/platform/issues/462)).
+Managed test principals, administration, audit and CI integration are delivered
+([#432](https://github.com/proappstore-online/platform/issues/432): `0ae11c55`,
+`ea749539`, Console `bfc779d`), and keyless test login is provisioned by default
+for every new app
+([#462](https://github.com/proappstore-online/platform/issues/462)). What is not
+yet recorded is a production mint through a managed principal on a real workflow
+run; the tests prove that path, a live run has not been observed.
 
 The reference path should need no pasted session, password or personal account:
 create through MCP, deploy, apply schema/register actions, mint a scoped CI test
