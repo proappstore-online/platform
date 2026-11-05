@@ -156,3 +156,35 @@ describe('the SDK starts it', () => {
     }
   });
 });
+
+describe('public contributor reads (#551)', () => {
+  const readsFrom = (respond: (url: string) => Response) => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetcher = (async (input: unknown, init?: RequestInit) => { calls.push({ url: String(input), ...(init ? { init } : {}) }); return respond(String(input)); }) as typeof fetch;
+    const referrals = new Referrals('shop', 'https://api.test', { token: null, authenticatedFetch: async () => reply({}) }, null, Date.now, fetcher);
+    return { referrals, calls };
+  };
+
+  it('loads the public contributor list for this app, without signing in, with the period in the query', async () => {
+    const body = { version: 1, app_id: 'shop', period: { from: 1, to: 2, from_iso: null, to_iso: null }, contributors: [] };
+    const { referrals, calls } = readsFrom(() => reply(body));
+    expect(await referrals.contributors({ from: '2026-10-01', to: 1_800_000_000_000 })).toEqual(body);
+    expect(calls[0]!.url).toBe('https://api.test/v1/storefront/apps/shop/contributors?from=2026-10-01&to=1800000000000');
+    expect(calls[0]!.init).toBeUndefined(); // no credentials, no body
+    await referrals.contributors();
+    expect(calls[1]!.url).toBe('https://api.test/v1/storefront/apps/shop/contributors');
+  });
+
+  it('loads one card by the opaque promoter id, encoded, and treats a 404 as no card', async () => {
+    const { referrals, calls } = readsFrom((url) => (url.includes('/missing/') ? reply('not found', 404) : reply({ display_name: 'Pat', label: null })));
+    expect(await referrals.publicCard('missing')).toBeNull();
+    expect(await referrals.publicCard('a/b c')).toMatchObject({ display_name: 'Pat' });
+    expect(calls[1]!.url).toBe('https://api.test/v1/apps/shop/promoters/a%2Fb%20c/public-card');
+  });
+
+  it('a private or unknown app is null, and any other failure is an error', async () => {
+    expect(await readsFrom(() => reply('not found', 404)).referrals.contributors()).toBeNull();
+    await expect(readsFrom(() => reply('boom', 500)).referrals.contributors()).rejects.toThrow(/500/);
+    await expect(readsFrom(() => reply('boom', 503)).referrals.publicCard('x')).rejects.toThrow(/503/);
+  });
+});

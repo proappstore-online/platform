@@ -39,7 +39,10 @@ export type {
   DelegatedInvitePolicy, GroupAdminGrant,
 } from './invites.js';
 export { Referrals, REFERRAL_CAPTURE_TTL_MS } from './referrals.js';
-export type { ReferralState, ReferralClaimResult, ReferralStorage } from './referrals.js';
+export type {
+  ReferralState, ReferralClaimResult, ReferralStorage, ContributionPeriodQuery, ContributionShare, PublicContributorCard, PublicContributors,
+  PublicContributorCardResponse, PromoterContributions, PromoterStandings,
+} from './referrals.js';
 export { Actions, ActionError } from './actions.js';
 export type { ActionVerifyResult, ActionCallOptions } from './actions.js';
 export { BillingApi } from './billing.js';

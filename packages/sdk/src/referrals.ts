@@ -19,6 +19,56 @@ export interface ReferralStorage {
 export type ReferralState = 'pending' | 'confirmed' | 'not_eligible' | 'invalid_code' | 'already_attributed' | 'unverified_origin';
 export interface ReferralClaimResult { credited: boolean; state: ReferralState }
 
+/** A reporting period: `from <= time < to`. ISO date (`2026-10-01`, UTC), an ISO date-time with a zone, or epoch milliseconds. */
+export interface ContributionPeriodQuery { from?: string | number; to?: string | number }
+
+/** What the platform says a promoter's share is: this promoter's confirmed referrals over all promoters' for the app and period. Not a share of all users. */
+export interface ContributionShare { numerator: number; denominator: number; ratio: number; percent: number; basis: string }
+
+/** One public contributor card: only a name and label the person chose, a confirmed count and a share among promoters. */
+export interface PublicContributorCard {
+  display_name: string;
+  label: string | null;
+  contributions: {
+    promotion: { type: 'promotion_marketing'; label: string; recorded: true; confirmed_referrals: number; share_of_referred_users: ContributionShare };
+    /** Code (lines-of-code) contribution is reported separately and is not available yet; never combined with promotion. */
+    code: { type: 'code'; available: false };
+  };
+}
+export interface PublicContributors { version: number; app_id: string; period: { from: number | null; to: number | null; from_iso: string | null; to_iso: string | null }; contributors: PublicContributorCard[] }
+export type PublicContributorCardResponse = PublicContributorCard & Pick<PublicContributors, 'version' | 'app_id' | 'period'>;
+
+/** What a promoter reads about themselves with a first-party session (`GET /v1/apps/:appId/promoters/me/contributions`). Typed here for platform clients. */
+export interface PromoterContributions {
+  version: number;
+  app_id: string;
+  freshness: { as_of: number; referrals_recorded_since: number | null; note: string };
+  contributions: {
+    promotion: {
+      type: 'promotion_marketing'; label: string; promoter_status: 'active' | 'suspended' | 'withdrawn'; recorded: boolean; first_confirmed_at: number | null;
+      counts: { pending: number; confirmed: number; reversed: number; expired: number };
+      share_of_referred_users: ContributionShare;
+      standing: { rank: number | null; ranked_promoters: number; tied_on_count: boolean };
+    };
+    code: { type: 'code'; label: string; available: false; reason: string };
+  };
+}
+
+/** What an app owner reads with a first-party session (`GET /v1/apps/:appId/promoters/contributions`). Typed here for platform clients. */
+export interface PromoterStandings {
+  version: number;
+  app_id: string;
+  freshness: PromoterContributions['freshness'];
+  totals: { confirmed: number; pending: number; reversed: number; expired: number; promoters: number; ranked_promoters: number };
+  /** Organic users are kept apart from every promoter's number. */
+  acquisition: { activations_recorded: number; referred_confirmed: number; referred_reversed: number; organic: number; note: string };
+  standings: {
+    rank: number | null; tied_on_count: boolean; promoter_id: string; display_name: string | null; status: string;
+    counts: { pending: number; confirmed: number; reversed: number; expired: number }; first_confirmed_at: number | null; share_of_referred_users: ContributionShare;
+  }[];
+  next: { after_id: string } | null;
+}
+
 const STORAGE_KEY = 'pas_referral';
 /** How long a captured code is kept on this device before it is dropped. The platform's own pending window is the same. */
 export const REFERRAL_CAPTURE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -55,7 +105,36 @@ export class Referrals {
     private readonly auth: AuthLike,
     private readonly storage: ReferralStorage | null = defaultStorage(),
     private readonly now: () => number = Date.now,
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
+
+  private periodQuery(period?: ContributionPeriodQuery): string {
+    const query = new URLSearchParams();
+    if (period?.from !== undefined) query.set('from', String(period.from));
+    if (period?.to !== undefined) query.set('to', String(period.to));
+    const text = query.toString();
+    return text ? `?${text}` : '';
+  }
+
+  /**
+   * The public contributor cards of this app: people who chose to show their promotion contribution. Public, no sign-in.
+   * `null` when the app is private or unknown. Own totals and owner standings need a first-party session and are read by the
+   * Console, not from inside an app; see {@link PromoterContributions} and {@link PromoterStandings}.
+   */
+  async contributors(period?: ContributionPeriodQuery): Promise<PublicContributors | null> {
+    const response = await this.fetcher(`${this.apiBase}/v1/storefront/apps/${encodeURIComponent(this.appId)}/contributors${this.periodQuery(period)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Could not load contributors (${response.status}).`);
+    return (await response.json()) as PublicContributors;
+  }
+
+  /** One public contributor card, addressed by the opaque promoter id. `null` unless that person opted in and has a recorded contribution. */
+  async publicCard(promoterId: string, period?: ContributionPeriodQuery): Promise<PublicContributorCardResponse | null> {
+    const response = await this.fetcher(`${this.apiBase}/v1/apps/${encodeURIComponent(this.appId)}/promoters/${encodeURIComponent(promoterId)}/public-card${this.periodQuery(period)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Could not load the contributor card (${response.status}).`);
+    return (await response.json()) as PublicContributorCardResponse;
+  }
 
   /** Keep the `ref` code from `href` (default: this page). Returns the code now held, or null. The URL is not changed. */
   capture(href?: string): string | null {

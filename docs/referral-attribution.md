@@ -6,7 +6,7 @@ description: "Server-owned referral capture across sign-in and first-activation 
 
 A promoter (see [Promoters](./promoters.md)) shares a personal link. When a person who is **new to that app** signs in
 and uses it, the platform credits that promoter **once**. This is the second backend slice of epic #548 (#550). It
-does not compute totals or percentages (#551), build any screen, or create a commission, payout or revenue rule.
+does not compute totals or percentages (those are [Promoter contributions and reporting](./promoter-contributions.md), #551), build any screen, or create a commission, payout or revenue rule.
 
 ## What counts: the activation event
 

@@ -96,7 +96,7 @@ teamRoutes.put('/apps/:appId/team/public/me', wrap(async (c) => {
   const user = await profileOwner(c);
   const input = parseProfileInput(await c.req.json().catch(() => null));
   if (!(await saveOwnProfile(c.env.DB, appId, user.id, input))) throw new HttpError('only a current team member can publish a profile', 403);
-  return c.json({ ok: true, appId, visible: input.visible, display_name: input.display_name, label: input.label });
+  return c.json({ ok: true, appId, visible: input.visible, display_name: input.display_name, label: input.label, show_promotion: input.show_promotion });
 }));
 
 teamRoutes.delete('/apps/:appId/team/public/me', wrap(async (c) => {

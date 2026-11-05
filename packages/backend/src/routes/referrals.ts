@@ -5,6 +5,7 @@ import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { privateNoStore, wrap } from '../lib/route-wrap.js';
 import { person } from './promoters.js';
 import { claim, correct, listEvents, listForOwner, listOwn } from '../lib/referrals/service.js';
+import { getContributionTotals, getPublicContributorCard, getPublicContributors, getStandings, isPublicApp, parsePeriod } from '../lib/referrals/contributions.js';
 
 /**
  * Referral capture and attribution (#550, epic #548). A referred person is credited to a promoter once, by the
@@ -17,6 +18,10 @@ import { claim, correct, listEvents, listForOwner, listOwn } from '../lib/referr
  *   GET  /v1/apps/:appId/referrals/events                owner: the audit trail
  *   POST /v1/apps/:appId/referrals/:id/reverse           owner: { kind: 'fraud_invalid' | 'correction', reason? }
  *   POST /v1/apps/:appId/referrals/:id/restore           owner: undo a reversal
+ *   GET  /v1/apps/:appId/promoters/me/contributions      the promoter: own totals, share among promoters, standing (?from=&to=)
+ *   GET  /v1/apps/:appId/promoters/contributions         owner: standings, totals, organic bucket (?from=&to=&limit=&after_id=)
+ *   GET  /v1/apps/:appId/promoters/:promoterId/public-card   public: one opted-in contributor card (404 otherwise)
+ *   GET  /v1/storefront/apps/:appId/contributors         public: the opted-in contributor cards of a public app
  *
  * No money moves: nothing here is a commission, a payout or a revenue rule.
  */
@@ -46,6 +51,40 @@ referralRoutes.post('/apps/:appId/referrals/claim', wrap(async (c) => {
 referralRoutes.get('/apps/:appId/promoters/me/referrals', wrap(async (c) => {
   const user = await person(c);
   return c.json(await listOwn(c.env.DB, c.req.param('appId')!, user.id, { limit: c.req.query('limit'), before_id: c.req.query('before_id') }));
+}));
+
+const periodOf = (c: { req: { query(name: string): string | undefined } }) => parsePeriod({ from: c.req.query('from'), to: c.req.query('to') });
+
+/** A promoter's own contribution. Whatever their status, they read their own record; nobody else's invitees or analytics. */
+referralRoutes.get('/apps/:appId/promoters/me/contributions', wrap(async (c) => {
+  const user = await person(c);
+  return c.json(await getContributionTotals(c.env.DB, c.req.param('appId')!, user.id, periodOf(c)));
+}));
+
+/** Owner standings: ranked promoters, totals, and the organic bucket kept apart. */
+referralRoutes.get('/apps/:appId/promoters/contributions', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  await requireAppOwner(c, appId);
+  return c.json(await getStandings(c.env.DB, appId, periodOf(c), { limit: c.req.query('limit'), after_id: c.req.query('after_id') }));
+}));
+
+/**
+ * One public contributor card (#541/#542): only for an active promoter who opted in to showing a name and their promotion
+ * contribution, who has a confirmed referral, on a public app. Addressed by the opaque promoter id, never a user id. Any other
+ * case, including a private or missing app, is the same 404.
+ */
+referralRoutes.get('/apps/:appId/promoters/:promoterId/public-card', wrap(async (c) => {
+  const card = await getPublicContributorCard(c.env.DB, c.req.param('appId')!, c.req.param('promoterId')!, periodOf(c));
+  if (!card) return c.text('not found', 404);
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(card);
+}));
+
+referralRoutes.get('/storefront/apps/:appId/contributors', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  if (!(await isPublicApp(c.env.DB, appId))) return c.text('not found', 404);
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json(await getPublicContributors(c.env.DB, appId, periodOf(c)));
 }));
 
 referralRoutes.get('/apps/:appId/referrals/events', wrap(async (c) => {

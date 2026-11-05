@@ -52,6 +52,10 @@ credential, are refused. Only a current member (publisher or team member) may us
 
 A non-member gets `403`. Invalid text gets `400` with the reason.
 
+Two additive points from [Promoter contributions](./promoter-contributions.md) (#551): the body may also carry `show_promotion` (default `false`,
+only with `visible: true`, and only for an active promoter, else `400 not_an_active_promoter`), and an **active promoter who is not on the team**
+may keep a profile too. The public team list above still shows only current team members.
+
 ### Owner moderation
 
 | Route | Effect |

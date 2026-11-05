@@ -17,7 +17,7 @@ const LINKISH = /:\/\/|\bwww\.|\b[a-z0-9-]+\.(com|org|net|io|dev|app|online|co|m
 /** Plain text only (no markup, links, email addresses or control characters), trimmed; null when empty. Shared with promoter display names. */
 export const plainText = (value: unknown, name: string, max: number) => text(value, name, max);
 
-export interface PublicProfileInput { display_name: string | null; label: string | null; visible: boolean }
+export interface PublicProfileInput { display_name: string | null; label: string | null; visible: boolean; show_promotion: boolean }
 
 function text(value: unknown, name: string, max: number): string | null {
   if (value === undefined || value === null) return null;
@@ -36,18 +36,27 @@ export function parseProfileInput(body: unknown): PublicProfileInput {
   const display_name = text(source.display_name, 'display_name', MAX_DISPLAY_NAME);
   const label = text(source.label, 'label', MAX_LABEL);
   if (source.visible && !display_name) throw new HttpError('display_name is required to be visible', 400);
-  return { display_name, label, visible: source.visible };
+  // Showing a promotion contribution (#551) is its own opt-in, off unless asked for, and only alongside a visible profile.
+  if (source.show_promotion !== undefined && typeof source.show_promotion !== 'boolean') throw new HttpError('show_promotion must be true or false', 400);
+  const show_promotion = source.show_promotion === true;
+  if (show_promotion && !source.visible) throw new HttpError('show_promotion needs a visible profile', 400);
+  return { display_name, label, visible: source.visible, show_promotion };
 }
 
-const MEMBER = `(EXISTS (SELECT 1 FROM apps WHERE id = ?1 AND creator_id = ?2) OR EXISTS (SELECT 1 FROM team_members WHERE app_id = ?1 AND user_id = ?2))`;
+const ACTIVE_PROMOTER = `EXISTS (SELECT 1 FROM app_promoters WHERE app_id = ?1 AND user_id = ?2 AND status = 'active')`;
+// A person may keep a public profile as a current team member, or as an active promoter (#551). The public team list
+// still joins current membership, so a promoter who is not on the team appears only on the contributor card.
+const MEMBER = `(EXISTS (SELECT 1 FROM apps WHERE id = ?1 AND creator_id = ?2) OR EXISTS (SELECT 1 FROM team_members WHERE app_id = ?1 AND user_id = ?2) OR ${ACTIVE_PROMOTER})`;
 
 /** Upsert the caller's own row; nothing is written unless they are a current member, decided in the same statement. */
 export async function saveOwnProfile(db: D1Database, appId: string, userId: string, input: PublicProfileInput): Promise<boolean> {
+  if (input.show_promotion && !(await db.prepare(`SELECT 1 AS promoter WHERE ${ACTIVE_PROMOTER}`).bind(appId, userId).first())) throw new HttpError('not_an_active_promoter', 400);
   const res = await db.prepare(
-    `INSERT INTO app_team_public_profiles (app_id, user_id, display_name, label, visible, updated_at)
-     SELECT ?1, ?2, ?3, ?4, ?5, datetime('now') WHERE ${MEMBER}
-     ON CONFLICT(app_id, user_id) DO UPDATE SET display_name = excluded.display_name, label = excluded.label, visible = excluded.visible, updated_at = excluded.updated_at`,
-  ).bind(appId, userId, input.display_name, input.label, input.visible ? 1 : 0).run();
+    `INSERT INTO app_team_public_profiles (app_id, user_id, display_name, label, visible, show_promotion, updated_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, CASE WHEN ?6 = 1 AND ${ACTIVE_PROMOTER} THEN 1 ELSE 0 END, datetime('now') WHERE ${MEMBER}
+     ON CONFLICT(app_id, user_id) DO UPDATE SET display_name = excluded.display_name, label = excluded.label, visible = excluded.visible,
+       show_promotion = excluded.show_promotion, updated_at = excluded.updated_at`,
+  ).bind(appId, userId, input.display_name, input.label, input.visible ? 1 : 0, input.show_promotion ? 1 : 0).run();
   return !!res.meta?.changes;
 }
 
@@ -55,13 +64,13 @@ export async function saveOwnProfile(db: D1Database, appId: string, userId: stri
 export async function withdrawOwnProfile(db: D1Database, appId: string, userId: string): Promise<boolean> {
   const member = await db.prepare(`SELECT 1 AS member WHERE ${MEMBER}`).bind(appId, userId).first();
   if (!member) return false;
-  await db.prepare("UPDATE app_team_public_profiles SET visible = 0, updated_at = datetime('now') WHERE app_id = ? AND user_id = ?").bind(appId, userId).run();
+  await db.prepare("UPDATE app_team_public_profiles SET visible = 0, show_promotion = 0, updated_at = datetime('now') WHERE app_id = ? AND user_id = ?").bind(appId, userId).run();
   return true;
 }
 
 /** Owner moderation: take one person off the public list. They may opt in again; removing them from the team is the stronger tool. */
 export async function hideProfile(db: D1Database, appId: string, userId: string): Promise<boolean> {
-  const res = await db.prepare("UPDATE app_team_public_profiles SET visible = 0, updated_at = datetime('now') WHERE app_id = ? AND user_id = ? AND visible = 1").bind(appId, userId).run();
+  const res = await db.prepare("UPDATE app_team_public_profiles SET visible = 0, show_promotion = 0, updated_at = datetime('now') WHERE app_id = ? AND user_id = ? AND visible = 1").bind(appId, userId).run();
   return !!res.meta?.changes;
 }
 

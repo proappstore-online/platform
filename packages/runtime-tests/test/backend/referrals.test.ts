@@ -147,3 +147,96 @@ describe('referral attribution on D1 (#550)', () => {
     expect(await count("SELECT COUNT(*) AS n FROM app_referral_events WHERE action = 'confirmed'")).toBe(1);
   });
 });
+
+
+// ── #551: promoter contribution read models and public recognition ─────────────────────────────
+
+describe('promoter contributions on D1 (#551)', () => {
+  const T = Date.UTC(2026, 9, 1), DAY = 86_400_000;
+  const idOf = async (code: string) => (await first<{ id: string }>('SELECT id FROM app_promoters WHERE code = ?', code))!.id;
+  let seq = 0;
+  const credit = async (promoterId: string, status: string, at: number) => {
+    const settled = status === 'confirmed' || status === 'reversed';
+    const id = `cr${++seq}`;
+    await env.DB.prepare(`INSERT INTO app_referral_attributions (id, app_id, referred_user_id, promoter_id, code, status, captured_at, expires_at, activated_at, confirmed_at, created_at, updated_at)
+      VALUES (?, 'shop', ?, ?, 'CODE2222', ?, ?, ?, ?, ?, ?, ?)`).bind(id, `gh:${5000 + seq}`, promoterId, status, at, at + 1e10, settled ? at : null, settled ? at : null, at, at).run();
+    return id;
+  };
+  const mine = async (uid: string, query = '') => (await owner('GET', `/apps/shop/promoters/me/contributions${query}`, uid)).json<any>();
+  const standings = async (query = '', uid = OWNER) => (await owner('GET', `/apps/shop/promoters/contributions${query}`, uid)).json<any>();
+
+  it('computes exact totals, a share among promoters and ranks on D1, with a half-open period', async () => {
+    const pat = await idOf(patCode), pru = await idOf(pruCode);
+    await credit(pat, 'confirmed', T - 1); await credit(pat, 'confirmed', T); await credit(pat, 'confirmed', T + DAY - 1); await credit(pat, 'confirmed', T + DAY);
+    await credit(pru, 'confirmed', T + 5); await credit(pat, 'pending', T + 6); await credit(pru, 'reversed', T + 7);
+    const all = await mine(PAT);
+    expect(all.contributions.promotion).toMatchObject({ counts: { confirmed: 4, pending: 1 }, share_of_referred_users: { numerator: 4, denominator: 5, percent: 80 } });
+    const window = await mine(PAT, `?from=${T}&to=${T + DAY}`);
+    expect(window.contributions.promotion).toMatchObject({ counts: { confirmed: 2 }, share_of_referred_users: { numerator: 2, denominator: 3 }, standing: { rank: 1, ranked_promoters: 2 } });
+    expect(window.contributions.code).toMatchObject({ available: false });
+    const owned = await standings(`?from=${T}&to=${T + DAY}`);
+    expect(owned.totals).toMatchObject({ confirmed: 3, reversed: 1, promoters: 2 });
+    expect(owned.standings.map((s: { promoter_id: string }) => s.promoter_id)).toEqual([pat, pru]);
+    expect(JSON.stringify(owned)).not.toMatch(/gh:\d/);
+  });
+
+  it('handles zero denominators and an all-organic app without errors', async () => {
+    const out = await mine(PAT);
+    expect(out.contributions.promotion).toMatchObject({ recorded: false, share_of_referred_users: { ratio: 0, percent: 0, denominator: 0 }, standing: { rank: null } });
+    await env.DB.prepare("INSERT INTO app_user_activations (app_id, user_id, first_activated_at) VALUES ('shop','gh:10',?), ('shop','gh:11',?)").bind(T, T + 1).run();
+    const owned = await standings();
+    expect(owned.acquisition).toMatchObject({ activations_recorded: 2, organic: 2, referred_confirmed: 0 });
+    expect(JSON.stringify(owned)).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('a reversal refreshes every view, once, and a restore returns it', async () => {
+    const pat = await idOf(patCode);
+    await credit(pat, 'confirmed', T);
+    const second = await credit(pat, 'confirmed', T + 1);
+    expect((await mine(PAT)).contributions.promotion.counts.confirmed).toBe(2);
+    expect((await owner('POST', `/apps/shop/referrals/${second}/reverse`, OWNER, { kind: 'correction' })).status).toBe(200);
+    expect((await owner('POST', `/apps/shop/referrals/${second}/reverse`, OWNER, { kind: 'correction' })).status).toBe(200);
+    expect((await mine(PAT)).contributions.promotion.counts).toMatchObject({ confirmed: 1, reversed: 1 });
+    expect((await standings()).totals).toMatchObject({ confirmed: 1, reversed: 1 });
+    expect(await count("SELECT COUNT(*) AS n FROM app_referral_events WHERE action LIKE 'reversed:%'")).toBe(1);
+    await owner('POST', `/apps/shop/referrals/${second}/restore`, OWNER, {});
+    expect((await mine(PAT)).contributions.promotion.counts).toMatchObject({ confirmed: 2, reversed: 0 });
+  });
+
+  it('keeps reads narrow: a promoter cannot read standings, a non-promoter has no record, an app-bound session and a bad period are refused', async () => {
+    expect((await owner('GET', '/apps/shop/promoters/contributions', PAT)).status).toBe(403);
+    expect((await owner('GET', '/apps/shop/promoters/me/contributions', NEW1)).status).toBe(404);
+    expect((await host('GET', '/apps/shop/promoters/me/contributions', PAT)).status).toBeGreaterThanOrEqual(400);
+    expect((await owner('GET', '/apps/shop/promoters/contributions?from=yesterday', OWNER)).status).toBe(400);
+  });
+
+  it('shows a public card only after the promoter opts in, hides it when suspended, withdrawn or private, and never revives it', async () => {
+    const pat = await idOf(patCode);
+    await credit(pat, 'confirmed', T); await credit(pat, 'pending', T + 1);
+    const card = () => SELF.fetch(`${BASE}/v1/apps/shop/promoters/${pat}/public-card`);
+    expect((await card()).status).toBe(404); // not opted in
+    expect((await owner('PUT', '/apps/shop/team/public/me', PAT, { display_name: 'Pat P.', visible: true, show_promotion: true })).status).toBe(200);
+    const res = await card();
+    expect(res.status).toBe(200);
+    const body = await res.json<any>();
+    expect(body).toMatchObject({ display_name: 'Pat P.', contributions: { promotion: { confirmed_referrals: 1 }, code: { available: false } } });
+    expect(JSON.stringify(body)).not.toMatch(/gh:|"user_id"|promoter_id|pending|referred_user_id/);
+    expect(((await (await SELF.fetch(`${BASE}/v1/storefront/apps/shop/contributors`)).json<any>()).contributors as unknown[]).length).toBe(1);
+
+    await env.DB.prepare("UPDATE app_promoters SET status = 'suspended' WHERE id = ?").bind(pat).run();
+    expect((await card()).status).toBe(404);
+    await env.DB.prepare("UPDATE app_promoters SET status = 'active' WHERE id = ?").bind(pat).run();
+    expect((await card()).status).toBe(200);
+    expect((await owner('POST', '/apps/shop/promoters/me/withdraw', PAT, {})).status).toBe(200);
+    expect(await first("SELECT show_promotion FROM app_team_public_profiles WHERE user_id = 'gh:2'")).toEqual({ show_promotion: 0 });
+    expect((await card()).status).toBe(404);
+    expect((await owner('POST', '/apps/shop/promoters/enroll', PAT, { consent: true })).status).toBe(200);
+    expect((await card()).status).toBe(404); // re-enrolling does not bring it back
+    await owner('PUT', '/apps/shop/team/public/me', PAT, { display_name: 'Pat P.', visible: true, show_promotion: true });
+    expect((await card()).status).toBe(200);
+    await env.DB.prepare("INSERT INTO app_visibility (app_id, mode, roles, created_at) VALUES ('shop','private','[]',1)").run();
+    const priv = await card(), missing = await SELF.fetch(`${BASE}/v1/apps/nope/promoters/${pat}/public-card`);
+    expect([priv.status, await priv.text()]).toEqual([missing.status, await missing.text()]);
+    expect((await SELF.fetch(`${BASE}/v1/storefront/apps/shop/contributors`)).status).toBe(404);
+  });
+});

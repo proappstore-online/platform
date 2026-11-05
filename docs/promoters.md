@@ -6,8 +6,8 @@ description: "App-scoped promoter enrollment: who can promote an app, public ref
 
 A **promoter** is an existing PAS user who has chosen to help grow one app. This is the first backend slice of
 epic #548 (#549). It covers enrollment, the public referral code, narrow own-promoter access and the owner's
-controls. Counting the users a promoter brings is [Referral capture and attribution](./referral-attribution.md) (#550). This page does **not** cover totals or shares (#551) or
-any screen (Console #14, Storefront #13). No cash, commission or payout is created or implied.
+controls. Counting the users a promoter brings is [Referral capture and attribution](./referral-attribution.md) (#550); totals, shares, standings and public
+cards are [Promoter contributions and reporting](./promoter-contributions.md) (#551). This page does not cover any screen (Console #14, Storefront #13). No cash, commission or payout is created or implied.
 
 ## What enrolling does and does not do
 
