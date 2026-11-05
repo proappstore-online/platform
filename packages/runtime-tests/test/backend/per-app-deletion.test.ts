@@ -4,6 +4,7 @@ import type { Env } from '../../../backend/src/types';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 import { workerGoogleCalendar } from '../../../backend/src/lib/google-calendar-worker';
 import { beginGoogleOAuth, completeGoogleOAuth } from '../../../backend/src/lib/google-calendar-accounts';
+import { mintSession } from '@proappstore/build-core';
 import { GOOGLE_CALENDAR_SCOPES } from '../../../backend/src/lib/google-calendar-common';
 
 const env = providedEnv as unknown as Env;
@@ -15,7 +16,7 @@ const env = providedEnv as unknown as Env;
 //   gh:1 owns both apps   gh:2 the user deleting   gh:3 another user of stash   gh:4 a stranger
 
 const USER = 'gh:2';
-const OTHER_TABLES = ['kv', 'per_app_deleted_users', 'push_subscriptions'];
+const OTHER_TABLES = ['kv', 'per_app_deleted_users', 'push_subscriptions', 'google_calendar_grants', 'google_calendar_oauth_states', 'google_calendar_app_authorizations', 'google_calendar_accounts', 'app_connectors'];
 
 async function seedUserData(appId: string, uid: string): Promise<void> {
   await env.DB.prepare('INSERT INTO kv (app_id, user_id, key, value, value_size_bytes, updated_at) VALUES (?, ?, ?, ?, 1, 1)')
@@ -115,9 +116,9 @@ describe('per-app account deletion (#379)', () => {
     const grants: string[] = [];
     for (const [appId, uid] of [['stash', USER], ['notes', USER], ['stash', 'gh:3']]) {
       const grantId = crypto.randomUUID(); grants.push(grantId);
-      await env.DB.prepare('INSERT OR IGNORE INTO app_connectors (app_id, name, kind, modes, events, created_at) VALUES (?, ?, ?, ?, ?, 1)')
+      await env.DB.prepare(`INSERT OR IGNORE INTO app_connectors (app_id, name, kind, modes, events, created_at, capabilities_json) VALUES (?, ?, ?, ?, ?, 1, '["calendar.read","meet.read"]')`)
         .bind(appId, 'calendar', 'google_calendar', '["oauth"]', '[]').run();
-      await env.DB.prepare('INSERT INTO google_calendar_app_authorizations VALUES (?, ?, 1)').bind(appId, uid).run();
+      await env.DB.prepare('INSERT INTO google_calendar_app_authorizations (app_id, user_id, account_version) VALUES (?, ?, 1)').bind(appId, uid).run();
       await env.DB.prepare('INSERT INTO google_calendar_grants (id, app_id, user_id, account_version, calendar_id, calendar_name, created_at) VALUES (?, ?, ?, 1, ?, ?, 1)')
         .bind(grantId, appId, uid, 'team@example.test', 'Team').run();
       await env.DB.prepare('INSERT INTO google_calendar_oauth_states (state_hash, app_id, user_id, account_version, callback_url, return_to, expires_at) VALUES (?, ?, ?, 1, ?, ?, ?)')
@@ -137,15 +138,36 @@ describe('per-app account deletion (#379)', () => {
     expect((await del('stash', USER, USER)).status).toBe(200);
   });
 
-  it('commits OAuth credentials and app authorization together on real D1', async () => {
+  it('preserves independent app consent and grants when reconnecting the same Google account on real D1', async () => {
     const googleEnv = { ...env, GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret' };
-    const start = await beginGoogleOAuth(googleEnv, 'stash', USER, '/callback', '/');
-    const state = new URL(start.authorization_url).searchParams.get('state')!;
-    fetchMock.get('https://oauth2.googleapis.com').intercept({ path: '/token', method: 'POST' })
-      .reply(200, JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600, scope: GOOGLE_CALENDAR_SCOPES.join(' ') }));
-    fetchMock.get('https://openidconnect.googleapis.com').intercept({ path: '/v1/userinfo' })
-      .reply(200, JSON.stringify({ sub: '123456', email: 'test@example.test', email_verified: true }));
-    expect(await completeGoogleOAuth(googleEnv, 'stash', USER, state, 'test-code')).toMatchObject({ email: 'test@example.test' });
+    for (const appId of ['stash', 'notes']) await env.DB.prepare(`INSERT INTO app_connectors (app_id,name,kind,modes,events,created_at,capabilities_json,disclosure_json) VALUES (?,'calendar','google_calendar','["oauth"]','[]',1,'["calendar.read","meet.read"]',?)`)
+      .bind(appId, JSON.stringify({ purpose: 'Read selected meeting records.', audience: 'Authorized members of the app.', retention: 'Retention is described in the app notice.', privacy_path: '/privacy', deletion_path: '/settings/data' })).run();
+    const connect = async (appId: string, capabilities: string[]) => {
+      const start = await beginGoogleOAuth(googleEnv, appId, USER, '/callback', '/', capabilities);
+      const state = new URL(start.authorization_url).searchParams.get('state')!;
+      const loginToken = await mintSession({ uid: USER, roles: ['user'], auth_time: Math.floor(Date.now() / 1000), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+      const login = await SELF.fetch(`${BASE}/v1/connectors/google-calendar/session?state=${state}`, { method: 'POST', headers: { Origin: BASE, Authorization: `Bearer ${loginToken}` } });
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get('Set-Cookie')!.split(';')[0]!;
+      const page = await SELF.fetch(`${BASE}/v1/connectors/google-calendar/consent?state=${state}`, { headers: { Cookie: cookie } });
+      const csrf = (await page.text()).match(/name="csrf" value="([^"]+)"/)![1]!;
+      const body = new FormData(); body.set('csrf', csrf); body.set('decision', 'allow'); for (const capability of capabilities) body.append('capability', capability);
+      expect((await SELF.fetch(`${BASE}/v1/connectors/google-calendar/consent?state=${state}`, { method: 'POST', redirect: 'manual', headers: { Origin: BASE, Cookie: cookie }, body })).status).toBe(302);
+      fetchMock.get('https://oauth2.googleapis.com').intercept({ path: '/token', method: 'POST' })
+        .reply(200, JSON.stringify({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600, scope: GOOGLE_CALENDAR_SCOPES.join(' ') }));
+      fetchMock.get('https://openidconnect.googleapis.com').intercept({ path: '/v1/userinfo' })
+        .reply(200, JSON.stringify({ sub: '123456', email: 'test@example.test', email_verified: true }));
+      expect(await completeGoogleOAuth(googleEnv, appId, USER, state, 'test-code')).toMatchObject({ email: 'test@example.test' });
+    };
+    await connect('stash', ['calendar.read']);
+    const first = await env.DB.prepare("SELECT * FROM google_calendar_app_authorizations WHERE app_id = 'stash' AND user_id = ?").bind(USER).first();
+    await env.DB.prepare("INSERT INTO google_calendar_grants (id,app_id,user_id,account_version,authorization_version,calendar_id,calendar_name,created_at) VALUES ('00000000-0000-4000-8000-000000000001','stash',?,1,1,'primary','Personal',1)").bind(USER).run();
+    await connect('notes', ['calendar.read', 'meet.read']);
+    await connect('notes', ['calendar.read']);
+    expect(await env.DB.prepare('SELECT version FROM google_calendar_accounts WHERE user_id = ?').bind(USER).first('version')).toBe(1);
+    expect(await env.DB.prepare("SELECT * FROM google_calendar_app_authorizations WHERE app_id = 'stash' AND user_id = ?").bind(USER).first()).toEqual(first);
+    expect(await workerGoogleCalendar(googleEnv, 'stash', 'calendar', { operation: 'grant_status', grant_id: '00000000-0000-4000-8000-000000000001' }, null)).toMatchObject({ grant_id: '00000000-0000-4000-8000-000000000001' });
+    expect(await env.DB.prepare("SELECT authorization_version,capabilities_json,consent_version FROM google_calendar_app_authorizations WHERE app_id = 'notes' AND user_id = ?").bind(USER).first()).toEqual({ authorization_version: 2, capabilities_json: '["calendar.read"]', consent_version: 1 });
     expect(await env.DB.prepare('SELECT account_version FROM google_calendar_app_authorizations WHERE app_id = ? AND user_id = ?').bind('stash', USER).first('account_version')).toBe(1);
     await del('stash', USER, USER);
     await expect(beginGoogleOAuth(googleEnv, 'stash', USER, '/callback', '/')).rejects.toThrow('app_account_deleted');

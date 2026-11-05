@@ -28,6 +28,7 @@ import { validateVisibility } from '../lib/manifest/visibility.js';
 import { validateWorkerManifest } from '../lib/manifest/worker.js';
 import { validateHooks } from '../lib/manifest/hooks.js';
 import { validateConnectors } from '../lib/manifest/connectors.js';
+import { googleContractHash } from '../lib/google-calendar-policy.js';
 import { validateRooms } from '../lib/manifest/rooms.js';
 import { validateEmbed } from '../lib/manifest/embed.js';
 import { validateIsolation } from '../lib/manifest/isolation.js';
@@ -200,6 +201,19 @@ export async function replaceAppTools(
   if ('error' in hooksResult) return { status: 400, payload: { error: hooksResult.error } };
   const connectorsResult = validateConnectors(site.connectors, hooksResult.hooks);
   if ('error' in connectorsResult) return { status: 400, payload: { error: connectorsResult.error } };
+  const connectorPolicies = new Map<string, { capabilities: string; disclosure: string | null; hash: string }>();
+  for (const connector of connectorsResult.connectors.filter(k => k.kind === 'google_calendar')) {
+    const previous = await db.prepare("SELECT capabilities_json, disclosure_json, contract_hash FROM app_connectors WHERE app_id = ? AND name = ? AND kind = 'google_calendar'")
+      .bind(appId, connector.name).first<{ capabilities_json: string; disclosure_json: string | null; contract_hash: string }>();
+    // Unchanged legacy manifests keep working; fresh consent still requires disclosures.
+    if (!connector.capabilities && !connector.disclosure && previous) {
+      connectorPolicies.set(connector.name, { capabilities: previous.capabilities_json, disclosure: previous.disclosure_json, hash: previous.contract_hash });
+      continue;
+    }
+    if (!connector.disclosure) return { status: 400, payload: { error: 'Google connector requires purpose, audience, retention, privacy_path and deletion_path in disclosure' } };
+    const capabilities = connector.capabilities ?? ['calendar.read'];
+    connectorPolicies.set(connector.name, { capabilities: JSON.stringify(capabilities), disclosure: JSON.stringify(connector.disclosure), hash: await googleContractHash(connector.name, capabilities, connector.disclosure) });
+  }
   const roomsResult = validateRooms(site.rooms, tools as ToolManifest[]);
   if ('error' in roomsResult) return { status: 400, payload: { error: roomsResult.error } };
   const permissionsResult = validatePermissions(site.permissions);
@@ -307,11 +321,21 @@ export async function replaceAppTools(
       return db.prepare('INSERT INTO app_hooks (app_id, name, verify_kind, secret_name, verify_opts, target, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind(appId, h.name, kind, secret ?? null, Object.keys(opts).length ? JSON.stringify(opts) : null, JSON.stringify(h.to), now);
     }),
-    // Connector declarations (#258) are replaced with the manifest; bound installations are not.
-    db.prepare('DELETE FROM app_connectors WHERE app_id = ?').bind(appId),
+    // Upsert unchanged declarations so their consent survives. Removal/contract
+    // changes invalidate Google consent via the migration's lifecycle triggers.
+    db.prepare(`DELETE FROM app_connectors WHERE app_id = ? AND name NOT IN (${connectorsResult.connectors.map(() => '?').join(',') || "''"})`)
+      .bind(appId, ...connectorsResult.connectors.map(k => k.name)),
     ...connectorsResult.connectors.map((k) =>
-      db.prepare('INSERT INTO app_connectors (app_id, name, kind, modes, pat_secret, events, hook, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(appId, k.name, k.kind, JSON.stringify(k.modes), k.pat_secret, JSON.stringify(k.events), k.hook, now)),
+      db.prepare(`INSERT INTO app_connectors (app_id, name, kind, modes, pat_secret, events, hook, created_at, capabilities_json, disclosure_json, contract_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(app_id, name) DO UPDATE SET kind = excluded.kind, modes = excluded.modes, pat_secret = excluded.pat_secret, events = excluded.events, hook = excluded.hook,
+        capabilities_json = CASE WHEN ? THEN app_connectors.capabilities_json ELSE excluded.capabilities_json END,
+        disclosure_json = CASE WHEN ? THEN app_connectors.disclosure_json ELSE excluded.disclosure_json END,
+        contract_hash = CASE WHEN ? THEN app_connectors.contract_hash ELSE excluded.contract_hash END`)
+        .bind(appId, k.name, k.kind, JSON.stringify(k.modes), k.pat_secret, JSON.stringify(k.events), k.hook, now,
+          connectorPolicies.get(k.name)?.capabilities ?? '[]', connectorPolicies.get(k.name)?.disclosure ?? null, connectorPolicies.get(k.name)?.hash ?? 'legacy',
+          k.kind === 'google_calendar' && !k.capabilities && !k.disclosure ? 1 : 0,
+          k.kind === 'google_calendar' && !k.capabilities && !k.disclosure ? 1 : 0,
+          k.kind === 'google_calendar' && !k.capabilities && !k.disclosure ? 1 : 0)),
     // Room rules (#351), replaced with the manifest: a manifest without `rooms` leaves every room open again.
     db.prepare('DELETE FROM app_room_rules WHERE app_id = ?').bind(appId),
     ...roomsResult.rules.map((r) =>

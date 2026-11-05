@@ -11,7 +11,7 @@
       "project": ["src/**/*.{ts,tsx}"]
     },
     "packages/backend": {
-      "entry": ["src/**/*.test.ts", "src/app-worker-shim/entry.ts"],
+      "entry": ["src/**/*.test.ts", "src/app-worker-shim/entry.ts", "test/**/*.browser.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/mcp-registry": {
@@ -25,7 +25,7 @@
     }
   },
   "ignoreDependencies": ["cloudflare"],
-  "ignoreBinaries": ["pags"],
+  "ignoreBinaries": ["pags", "openssl"],
   "ignoreIssues": {
     "packages/sdk/src/hooks.ts": ["duplicates"],
     "packages/sdk/src/shell.tsx": ["duplicates"],

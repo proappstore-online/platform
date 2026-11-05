@@ -32,7 +32,8 @@
     "docs:preview": "vitepress preview docs",
     "test:runtime": "pnpm --filter @proappstore/runtime-tests test",
     "test:offline-browser": "node scripts/test-offline-browser.mjs",
-    "test:coverage": "vitest run --coverage && node scripts/coverage-gaps.mjs"
+    "test:coverage": "vitest run --coverage && node scripts/coverage-gaps.mjs",
+    "test:google-consent-browser": "vitest run --config vitest.google-consent.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

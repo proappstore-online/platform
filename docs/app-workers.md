@@ -250,8 +250,33 @@ the PAT. Until the platform's GitHub App is configured, the connect routes answe
 
 ### Google Calendar and Meet
 
-Declare `{"name":"calendar","kind":"google_calendar","modes":["oauth"]}` in
-`connectors`. This connector uses the PAS Google client and envelope encryption;
+Declare the connector in `mcp.json`. New declarations default to Calendar-only
+access; request Meet explicitly only for an eligible, implemented feature.
+
+```json
+{
+  "name": "calendar",
+  "kind": "google_calendar",
+  "modes": ["oauth"],
+  "capabilities": ["calendar.read", "meet.read"],
+  "disclosure": {
+    "purpose": "Show selected meetings and their related participant records.",
+    "audience": "Organization members authorized to view the meeting records.",
+    "retention": "Describe the app's actual retention and deletion behavior here.",
+    "privacy_path": "/privacy",
+    "deletion_path": "/settings/data"
+  }
+}
+```
+
+These are publisher disclosures, not a Google eligibility approval. Replace the
+example with the app's actual behavior and implement the linked pages. Paths
+must be relative to the app's own origin. Meet requires Calendar because its
+records are constrained to an exact selected-calendar event. Meet data must not
+be collected for performance tracking or user evaluation; see Google's
+[Meet guidance](https://developers.google.com/workspace/meet/api/guides/overview).
+
+The connector uses the PAS Google client and envelope encryption;
 apps do not receive Google credentials or need app secrets. The platform operator
 must enable Calendar and Meet REST APIs and register
 `https://api.proappstore.online/v1/connectors/google-calendar/callback` on the
@@ -264,8 +289,8 @@ can read existing app grants but cannot connect accounts or create grants.
 
 | Operation | Required fields / result |
 | --- | --- |
-| `status` | User required; returns `configured`, `connected`, `email`, `version` for this app's authorization. |
-| `start` | User required; `callback_path` and `return_to` must be relative paths on this app. Returns `authorization_url` for personal Google consent. |
+| `status` | User required; returns `configured`, `connected`, `email`, shared-account `version`, per-app `authorization_version`, personally granted `capabilities`, `consent_version` and `consented_at`. |
+| `start` | User required; `callback_path` and `return_to` are relative app paths. Optional `capabilities` selects a subset of the declaration. Returns a **PAS-owned consent URL**, not a direct Google URL. |
 | `complete` | Same user/app required; one-use `code`, `state`. Returns relative `return_to` and account `email`. |
 | `calendars` | Authorized user required; optional `page_token`; returns readable exact IDs in `calendars` and `next_page_token`. |
 | `grant` | Authorized user required; exact `calendar_id` (not `primary`). Returns `grant_id`, `user_id`, calendar metadata and account email. |
@@ -274,15 +299,21 @@ can read existing app grants but cannot connect accounts or create grants.
 | `instances` | `grant_id`, recurring `event_id`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Lists one exact series, including cancelled exceptions. Range is at most 31 days, within the past 28 / next 30 days. Returns `items` and `nextPageToken`. |
 | `conferences` | `grant_id`, `event_id`, `meeting_code`, `starts_at`, `ends_at` (epoch ms), optional `page_token`. Requires the exact live event and a completed meeting in the last 28 days. |
 | `participants`, `sessions` | `grant_id`, `resource`, `receipt` from the preceding list, optional `page_token`. |
+| `disconnect_app` | User required; `expected_version` is the app's `authorization_version`. Removes only this app's authorization, grants and pending consent. |
 | `disconnect_account` | Authorized user required; `expected_version`. Erases the platform account credential and invalidates all its app grants. Use only after explicitly explaining this global effect to the user. |
 
 The public callback only forwards code/state to the pinned app origin; the app
 posts them to its authenticated worker for `complete`. Remove the code from SPA
 history. State expires after ten minutes and cannot be replayed or completed by
 another user. Connecting in one app does not authorize another app. Reconnection
-replaces the account version, invalidating old app authorizations and calendar
-grants; users must explicitly connect/grant again. Publisher transfer invalidates
-that app's authorization, grants and pending callbacks.
+preserves the shared account version when the Google identity is unchanged and
+increments only this app's authorization revision, invalidating only its old
+calendar grants. Other apps and their pending requests survive. A different
+Google identity returns `google_account_mismatch` without replacing credentials;
+use an explicitly explained global disconnect before changing the shared Google
+account. Credential refresh uses its own revision so an older refresh cannot
+overwrite a newer consent's credential or permissions. Publisher transfer
+invalidates only that app's authorization, grants and pending callbacks.
 
 Deleting a user's account in an app also revokes that user's calendar grants,
 app authorization and pending consent for that app, removing the platform's
@@ -294,6 +325,30 @@ are preserved. Reads recheck authorization before provider calls and before
 returning data, so a response arriving after revocation is discarded. Requests
 already sent to Google cannot be recalled, and data already delivered to an app
 is subject to that app's retention and deletion controls.
+
+The PAS consent screen first verifies the initiating PAS account using existing
+OAuth or credential sign-in. It uses a host-only HttpOnly browser cookie,
+same-origin POST and CSRF proof. Opening a page never grants access. The user
+sees the app's identity, purpose, audience, retention and deletion links and may
+omit Meet. Only then does PAS request the selected Google scopes. Returned
+Google scopes must also preserve the shared account's existing permissions;
+those wider provider scopes never authorize another app to use a capability it
+has not personally received. Direct callback/completion cannot bypass platform
+consent. The app authorization retains the accepted disclosure snapshot,
+capabilities, contract hash, consent version and timestamp; per-app deletion
+removes that receipt too.
+
+An unchanged deployment preserves its connector contract. Removing the connector,
+changing its capabilities/disclosures, or transferring the publisher revokes
+that app's grants and pending consent. Returning to an earlier declaration does
+not restore old consent. Apps must reconnect after a contract change.
+
+Migration 0126 preserves existing connections as legacy authorizations with
+`consent_version: 0`, rather than inventing consent evidence. It expires old
+pending OAuth flows, which must restart. Unchanged legacy declarations continue
+to serve existing grants; fresh consent requires complete disclosures. New
+Google declarations without disclosures are refused at registration. There is
+no automatic new grant or scope expansion during migration.
 
 An app must enforce its own tenant/role checks before granting or using calendar
 access. Store only the opaque grant ID and metadata, verify its `user_id` and

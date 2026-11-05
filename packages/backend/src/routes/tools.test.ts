@@ -1986,14 +1986,14 @@ describe('connectors (#258)', () => {
     expect(res.status, body.error).toBe(200);
     expect(body.connectors).toEqual([{ name: 'github', kind: 'github', modes: ['app', 'pat'] }]);
     const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
-    expect(sqls).toContain('DELETE FROM app_connectors WHERE app_id = ?');
+    expect(sqls.some(q => q.startsWith('DELETE FROM app_connectors WHERE app_id = ? AND name NOT IN'))).toBe(true);
     expect(sqls.filter((q) => q.startsWith('INSERT INTO app_connectors'))).toHaveLength(1);
   });
 
   it('a manifest with no connectors section clears the declaration but never the installations', async () => {
     const { db } = await put(undefined);
     const sqls = db.prepare.mock.calls.map((c) => String(c[0]));
-    expect(sqls).toContain('DELETE FROM app_connectors WHERE app_id = ?');
+    expect(sqls.some(q => q.startsWith('DELETE FROM app_connectors WHERE app_id = ? AND name NOT IN'))).toBe(true);
     expect(sqls.some((q) => q.includes('app_connector_installations'))).toBe(false);
   });
 

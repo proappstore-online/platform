@@ -74,6 +74,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:offline-browser
+      - run: pnpm --filter @proappstore/build-core build
+      - run: pnpm test:google-consent-browser
+      - name: Google consent browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-consent-browser
+          path: artifacts/google-consent/
+          if-no-files-found: warn
       - name: Offline browser evidence
         if: always()
         uses: actions/upload-artifact@v4

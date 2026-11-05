@@ -6,6 +6,18 @@ const ghHook = { name: 'gh', verify: { kind: 'github-app' }, to: 'worker' } as u
 const otherHook = { name: 'other', verify: { kind: 'hmac' }, to: 'worker' } as unknown as HookDef;
 
 describe('validateConnectors', () => {
+  it('validates Google capability and publisher disclosure boundaries', () => {
+    const disclosure = { purpose: 'Read selected meeting records.', audience: 'Only authorized app members.', retention: 'Until you delete your saved records.', privacy_path: '/privacy', deletion_path: '/settings/data' };
+    const connector = { name: 'calendar', kind: 'google_calendar', modes: ['oauth'], capabilities: ['calendar.read'], disclosure };
+    expect(validateConnectors([connector], [])).toHaveProperty('connectors');
+    for (const capabilities of [[], ['meet.read'], ['calendar.write'], ['calendar.read', 'calendar.read']]) {
+      expect(validateConnectors([{ ...connector, capabilities }], [])).toHaveProperty('error');
+    }
+    for (const invalid of [{ ...disclosure, privacy_path: '//outside.test/privacy' }, { ...disclosure, deletion_path: 'https://outside.test/delete' }, { ...disclosure, audience: 'short' }, { ...disclosure, unexpected: 'field' }, { ...disclosure, retention: 'Newline\ninside disclosure' }]) {
+      expect(validateConnectors([{ ...connector, disclosure: invalid }], [])).toHaveProperty('error');
+    }
+    expect(validateConnectors([{ name: 'github', kind: 'github', modes: ['app'], capabilities: ['calendar.read'] }], [])).toHaveProperty('error');
+  });
   it('accepts one read-only Google OAuth connector alongside GitHub, with no PAT or hooks', () => {
     const google = { name: 'calendar', kind: 'google_calendar', modes: ['oauth'] };
     expect(validateConnectors([google, { name: 'github', kind: 'github', modes: ['pat'], pat_secret: 'GH_PAT' }], []))

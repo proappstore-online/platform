@@ -66,6 +66,8 @@ export default defineWorkersConfig(async () => ({
             APP_WORKER_COMPATIBILITY_DATE: COMPATIBILITY_DATE,
             ADMIN_GITHUB_IDS: 'gh:admin',
             SESSION_SIGNING_KEY,
+            GOOGLE_CLIENT_ID: 'test-client',
+            GOOGLE_CLIENT_SECRET: 'test-secret',
             INTERNAL_TOKEN,
             STRIPE_SECRET_KEY: 'sk_test_runtime',
             STRIPE_WEBHOOK_SECRET: 'whsec_runtime',

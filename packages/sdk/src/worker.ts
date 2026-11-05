@@ -42,7 +42,9 @@ export function hookBody(payload: { body?: unknown; body_encoding?: unknown }): 
 }
 
 export type GoogleCalendarRequest = {
-  operation: 'status' | 'start' | 'complete' | 'calendars' | 'grant' | 'disconnect_account' | 'revoke_grant' | 'grant_status' | 'events' | 'instances' | 'event' | 'conferences' | 'participants' | 'sessions';
+  operation: 'status' | 'start' | 'complete' | 'calendars' | 'grant' | 'disconnect_account' | 'disconnect_app' | 'revoke_grant' | 'grant_status' | 'events' | 'instances' | 'event' | 'conferences' | 'participants' | 'sessions';
+  /** Subset of the app's declared capabilities; start opens PAS-owned consent first. */
+  capabilities?: ('calendar.read' | 'meet.read')[];
   callback_path?: string;
   return_to?: string;
   state?: string;

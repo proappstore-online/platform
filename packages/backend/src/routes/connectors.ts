@@ -39,15 +39,18 @@ async function githubConnector(db: D1Database, appId: string): Promise<Connector
 connectorRoutes.get('/apps/:appId/connectors', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
-  const connectors = await c.env.DB.prepare('SELECT name, kind, modes, pat_secret, events, hook FROM app_connectors WHERE app_id = ? ORDER BY name').bind(appId)
-    .all<{ name: string; kind: string; modes: string; pat_secret: string | null; events: string; hook: string | null }>();
+  const connectors = await c.env.DB.prepare('SELECT name, kind, modes, pat_secret, events, hook, capabilities_json, disclosure_json, contract_hash FROM app_connectors WHERE app_id = ? ORDER BY name').bind(appId)
+    .all<{ name: string; kind: string; modes: string; pat_secret: string | null; events: string; hook: string | null; capabilities_json: string; disclosure_json: string | null; contract_hash: string }>();
   const installations = await c.env.DB.prepare(
     'SELECT connector, installation_id, account_login, account_type, created_at FROM app_connector_installations WHERE app_id = ? ORDER BY created_at',
   ).bind(appId).all();
   c.header('Cache-Control', 'private, no-store');
   return c.json({
     configured: connectorConfigured(c.env),
-    connectors: (connectors.results ?? []).map((r) => ({ ...r, modes: JSON.parse(r.modes) as string[], events: JSON.parse(r.events) as string[] })),
+    connectors: (connectors.results ?? []).map(({ capabilities_json, disclosure_json, contract_hash, ...r }) => ({ ...r,
+      modes: JSON.parse(r.modes) as string[], events: JSON.parse(r.events) as string[],
+      ...(r.kind === 'google_calendar' ? { capabilities: JSON.parse(capabilities_json), disclosure: disclosure_json ? JSON.parse(disclosure_json) : null, contract_hash } : {}),
+    })),
     installations: installations.results ?? [],
   });
 });
