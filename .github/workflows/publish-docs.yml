@@ -14,6 +14,7 @@ on:
       - 'scripts/build-compliance-map.mjs'
       - 'scripts/build-skills-manifest.mjs'
       - 'scripts/verify-docs-metadata.py'
+      - 'scripts/test-docs-metadata.py'
       - 'packages/compliance/src/clause-map.ts'
       - 'marketplace.json'
       - '.claude-plugin/plugin.json'
@@ -51,6 +52,7 @@ jobs:
       - name: Build Zensical site
         run: |
           python -m pip install --quiet zensical
+          python scripts/test-docs-metadata.py
           rm -rf zensical-src site public
           mkdir -p zensical-src/assets zensical-src/stylesheets
           cp -r docs/. zensical-src/

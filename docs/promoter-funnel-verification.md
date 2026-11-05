@@ -1,3 +1,7 @@
+---
+description: "Reproduce the promoter funnel workerd integration tests for enrollment, referral attribution and reporting, and track remaining browser acceptance checks."
+---
+
 # Promoter funnel verification
 
 ## Delivery scope

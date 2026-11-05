@@ -1,3 +1,7 @@
+---
+description: "Run platform verification from Windows, interpret pending POSIX gates, and complete release checks on a supported Linux runner."
+---
+
 # Verification from a Windows host
 
 Use Node 22 and pnpm 10.30.3 (the CI toolchain). Run from the platform root:

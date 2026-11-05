@@ -25,7 +25,7 @@ def verify(site):
             if el.tag.endswith("}loc")]
     assert urls, "Documentation sitemap is empty"
     descriptions = {}
-    pages = {"https://docs.proappstore.online/" + str(page.relative_to(site)).removesuffix("index.html"): page
+    pages = {"https://docs.proappstore.online/" + page.relative_to(site).as_posix().removesuffix("index.html"): page
              for page in site.rglob("index.html")}
     assert set(urls) <= pages.keys(), "A sitemap URL has no generated page"
     for url, page in pages.items():
