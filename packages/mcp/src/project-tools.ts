@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+import { isTemplateDefaultIcon, renderLettermarkPng } from '@proappstore/compliance/icons';
 /**
  * Project-building MCP tools — scaffold, edit, and deploy PAS apps.
  *
@@ -283,7 +285,7 @@ export function registerProjectTools(
       if ('content' in auth) return auth;
       const preview = await dry("scaffold_app",
         dry_run,
-        `- create GitHub repo ${org}/${app_id} from template-app\n- provision R2 route + D1 database + data worker (data-${app_id})`,
+        `- create GitHub repo ${org}/${app_id} from template-app\n- personalize default app and marketing icons, preserving custom assets\n- provision R2 route + D1 database + data worker (data-${app_id})`,
         { app_id, name });
       if (preview) return text(preview);
       if (confirm !== true)
@@ -328,7 +330,7 @@ export function registerProjectTools(
         await new Promise((r) => setTimeout(r, 4000));
         if (scaffoldHead?.tree && (await copiedTree(app_id)) === scaffoldHead.tree) scaffoldRev = scaffoldHead.sha;
         else steps.push(`~ Template revision: the copy is not provably ${scaffoldTemplate.id}@${scaffoldHead?.sha.slice(0, 12) ?? "(unresolved)"} — recorded as unknown`);
-        const configured = await patchTemplatePlaceholders(app_id);
+        const configured = await patchTemplatePlaceholders(app_id, name);
         steps.push(...configured.lines);
         if (!configured.ok) return errText([
           `Template configuration failed for ${app_id}. The repository was created; PAS infrastructure was not provisioned. Inspect and repair the scaffold before retrying.`,
@@ -701,7 +703,14 @@ export function registerProjectTools(
         const content = (blob.data as { content?: string } | null)?.content?.replace(/\n/g, "");
         if (!blob.ok || content === undefined) return errText(`Could not read ${s.path} from ${template.repo} (HTTP ${blob.status}). Nothing was written.`);
         const ext = s.path.slice(s.path.lastIndexOf(".")).toLowerCase();
-        if (!MARKETING_TEXT_EXTENSIONS.has(ext)) { files.push({ path: s.path, content, encoding: "base64" }); continue; }
+        if (!MARKETING_TEXT_EXTENSIONS.has(ext)) {
+          const match = s.path.match(/^marketing\/public\/icon-(192|512)\.png$/);
+          const size = match ? Number(match[1]) as 192 | 512 : null;
+          const bytes = Buffer.from(content, 'base64');
+          files.push({ path: s.path, content: size && isTemplateDefaultIcon(size, bytes)
+            ? renderLettermarkPng(app_id, size).toString('base64') : content, encoding: "base64" });
+          continue;
+        }
         let body = b64decode(content).split("APPNAME").join(app_id);
         if (s.path === "marketing/src/site.ts") ({ text: body, prefilled } = prefillSite(body, app_id, listing));
         files.push({ path: s.path, content: body });

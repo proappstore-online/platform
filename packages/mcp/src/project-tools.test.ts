@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { renderLettermarkPng } from '@proappstore/compliance/icons';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 /**
@@ -131,6 +133,8 @@ beforeEach(() => {
   userCtx = { userId: 'u1', login: 'alice', token: 'tok-1' };
   mockOwnership.mockResolvedValue(true);
   mockGh.pullText.mockResolvedValue({ ok: true, sha: 'head', files: {} });
+  mockGh.pushFiles.mockResolvedValue({ ok: true, commitSha: 'abcdef1234567890' });
+  mockGh.api.mockResolvedValue({ ok: false, status: 404, data: {} });
   // Production constructs a fresh server per request. Keep ownership caches
   // isolated between scenarios, including a provision followed by a transfer.
   tools.clear();
@@ -231,7 +235,7 @@ describe('provision_pas_app — template selection contract (#178)', () => {
   it('never invents a revision: an unresolved head is reported as unknown and omitted from the payload', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: {} });
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
-    mockGh.api.mockResolvedValue({ ok: false, status: 500, data: {} });
+    mockGh.api.mockImplementation(async (path: string) => ({ ok: false, status: path.includes('/contents/') ? 404 : 500, data: {} }));
     okProvision();
     const out = getText(await run());
     expect(out).toContain('~ Template revision: could not resolve');
@@ -312,7 +316,7 @@ describe('provision_pas_app', () => {
 
   it('creates a private template repo, patches placeholders, provisions infra, and reports links', async () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: true, status: 200, data: { id: 1 } });
-    const repo = fakeRepo({ 'package.json': '{"name":"APPNAME"}', 'web/src/App.tsx': "initPro({ appId: 'APPNAME' })" });
+    const repo = fakeRepo({ 'package.json': '{"name":"APPNAME"}', 'web/src/App.tsx': "initPro({ appId: 'APPNAME' })", 'web/index.html': '<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">', 'web/vite.config.ts': "icons: [{ src: '/icon-192.png' }, { src: '/icon-512.png' }]" });
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -335,13 +339,21 @@ describe('provision_pas_app', () => {
       description: 'Coordinate school clubs.',
       private: true,
     });
+    const icons = mockGh.pushFiles.mock.calls[0]![1].filter((f: { encoding?: string }) => f.encoding === 'base64');
+    expect(icons.map((f: { path: string }) => f.path)).toContain('web/public/icon-192.png');
+    expect(repo['web/index.html']).toContain('href="/icon-192.png"');
+    expect(repo['web/index.html']).toContain('href="/apple-touch-icon.png"');
+    expect(repo['web/vite.config.ts']).toContain("src: '/icon-512.png'");
+    for (const icon of icons) {
+      expect(Buffer.from(icon.content, 'base64').subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    }
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
     expect(mockGh.pushFiles).toHaveBeenCalledWith(
       'school-clubs',
-      [
+      expect.arrayContaining([
         { path: 'package.json', content: '{"name":"school-clubs"}' },
         { path: 'web/src/App.tsx', content: "initPro({ appId: 'school-clubs' })" },
-      ],
+      ]),
       'chore: configure school-clubs template',
       { initIfEmpty: false },
     );
@@ -502,7 +514,9 @@ describe('provision_pas_app', () => {
     mockGh.createRepoFromTemplate.mockResolvedValue({ ok: false, status: 422, data: { message: 'exists' } });
     mockGh.repoExists.mockResolvedValue(true);
     mockOwnership.mockResolvedValue(false);
-    mockGh.api.mockResolvedValue({ ok: true, status: 200, data: [{ sha: '0572725' }] }); // one commit
+    mockGh.api.mockImplementation(async (path: string) => path.includes('/contents/')
+      ? { ok: false, status: 404, data: {} }
+      : { ok: true, status: 200, data: [{ sha: '0572725' }] }); // one commit
     mockGh.getFile.mockResolvedValue({ ok: false, status: 404 });
     mockFetch.mockImplementation((url: string) => {
       if (String(url).includes('/record-state')) return Promise.resolve(recordState('none'));
@@ -1398,6 +1412,21 @@ describe('add_marketing_site (#421)', () => {
         : new Response('{}', { status: 404 }));
   const pushed = () => mockGh.pushFiles.mock.calls[0]![1] as { path: string; content: string; encoding?: string }[];
   const run = (args: Record<string, unknown> = {}) => tools.get('add_marketing_site')!({ app_id: 'shop', ...args });
+
+  it('personalizes recognized marketing defaults rather than copying the F (#558)', async () => {
+    const original = TEMPLATE['marketing/public/icon-192.png'];
+    try {
+      TEMPLATE['marketing/public/icon-192.png'] = readFileSync(new URL('../../compliance/src/__fixtures__/template-icons/f-192.png', import.meta.url)).toString('base64');
+      github();
+      listing(null);
+      await run();
+      const icon = pushed().find(f => f.path === 'marketing/public/icon-192.png')!;
+      const bytes = Buffer.from(icon.content, 'base64');
+      expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      expect(bytes).toEqual(renderLettermarkPng('shop', 192));
+      expect(icon.content).not.toBe(TEMPLATE['marketing/public/icon-192.png']);
+    } finally { TEMPLATE['marketing/public/icon-192.png'] = original!; }
+  });
 
   it('adds every template file in one commit: APPNAME replaced, site.ts pre-filled, the icon as base64, root scripts added', async () => {
     github();

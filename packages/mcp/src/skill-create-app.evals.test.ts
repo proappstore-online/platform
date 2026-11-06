@@ -63,6 +63,7 @@ function applyMocks(m: Case['mocks']) {
   // The template head (sha + tree) and, #369, a new repo's initial commit carrying the copied tree.
   const headSha = m.templateHeadSha ?? 'd8c2e08f32b8e30847b27c7092fd4b0e64341d2f';
   mockGh.api.mockImplementation(async (path: string) => {
+    if (path.includes('/contents/')) return { ok: false, status: 404, data: {} };
     if (m.templateHeadSha === null) return { ok: false, status: 500, data: {} };
     if (/\/commits\?per_page=2$/.test(path)) return { ok: true, status: 200, data: [{ sha: 'copy-initial', commit: { tree: { sha: `tree-of-${headSha}` } } }] };
     return { ok: true, status: 200, data: { sha: headSha, commit: { tree: { sha: `tree-of-${headSha}` } } } };

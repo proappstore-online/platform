@@ -1,7 +1,7 @@
 {
   "name": "@proappstore/compliance",
   "version": "0.2.33",
-  "description": "Compliance checks for apps published on proappstore.online — used by the CLI for local feedback and by CI for gating.",
+  "description": "Compliance checks for apps published on proappstore.online \u00e2\u20ac\u201d used by the CLI for local feedback and by CI for gating.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,6 +14,10 @@
     "./lettermark": {
       "types": "./dist/lettermark.d.ts",
       "import": "./dist/lettermark.js"
+    },
+    "./icons": {
+      "types": "./dist/icon-renderer.d.ts",
+      "import": "./dist/icon-renderer.js"
     }
   },
   "homepage": "https://github.com/proappstore-online/platform#readme",

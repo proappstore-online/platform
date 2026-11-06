@@ -19,6 +19,8 @@
  * reused repo is never credited with today's template head.
  */
 
+import { scaffoldIcons } from './scaffold-icons.js';
+
 import {
   makeGitHub,
   selectTemplate,
@@ -483,15 +485,17 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
    * re-read the repo and fail if any survived (#205). A hard-coded file list went
    * stale the moment the template grew a placeholder elsewhere (compliance.yml).
    */
-  async function patchTemplatePlaceholders(appId: string): Promise<{ ok: boolean; lines: string[]; commitSha?: string }> {
+  async function patchTemplatePlaceholders(appId: string, displayName?: string): Promise<{ ok: boolean; lines: string[]; commitSha?: string }> {
     const found = await filesWithPlaceholder(appId);
     if (found.error) return { ok: false, lines: [`! Template placeholders: ${found.error}`] };
-    const files = Object.entries(found.files).map(([path, content]) => ({ path, content: content.replaceAll("APPNAME", appId) }));
+    const files: { path: string; content: string; encoding?: 'base64' }[] = Object.entries(found.files).map(([path, content]) => ({ path, content: content.replaceAll("APPNAME", appId) }));
+    const placeholderCount = files.length;
+    if (displayName) files.push(...await scaffoldIcons(gh, org, appId, displayName));
     if (files.length === 0) return { ok: true, lines: ["~ Template placeholders: no APPNAME placeholders found"] };
 
     const res = await gh.pushFiles(appId, files, `chore: configure ${appId} template`, { initIfEmpty: false });
     if (!res.ok) return { ok: false, lines: [`! Template placeholders: ${res.error ?? "failed to commit replacements"}`] };
-    const lines = [`+ Template placeholders: replaced APPNAME in ${files.length} file(s)${res.commitSha ? ` (${res.commitSha.slice(0, 7)})` : ""}`];
+    const lines = [`+ Template placeholders: replaced APPNAME in ${placeholderCount} file(s)${res.commitSha ? ` (${res.commitSha.slice(0, 7)})` : ""}`];
 
     const after = await filesWithPlaceholder(appId);
     const remaining = Object.keys(after.files);
@@ -743,6 +747,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     }
     if (plan.action === "create" || plan.action === "adopt_untouched") changes.push("commit the APPNAME placeholder replacements to main");
     else changes.push("commit APPNAME placeholder replacements to main, if any remain");
+    if (plan.action === "create" || plan.action === "adopt_untouched") changes.push("personalize default install, favicon, Apple-touch and marketing icons, preserving custom assets");
     changes.push(plan.compliance.required
       ? "run the required compliance checks; a failure stops before any infrastructure"
       : "skip compliance (platform admin request)");
@@ -873,7 +878,7 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
 
     let placeholders: Awaited<ReturnType<typeof patchTemplatePlaceholders>>;
     try {
-      placeholders = await patchTemplatePlaceholders(appId);
+      placeholders = await patchTemplatePlaceholders(appId, repoAction === "reused" ? undefined : plan.name);
     } catch (e) {
       const detail = `template configuration failed: ${e instanceof Error ? e.message : "unknown error"}`;
       return fail(detail, `Error configuring repo: ${detail}`);

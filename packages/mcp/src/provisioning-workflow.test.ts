@@ -46,6 +46,8 @@ let nextReceipt = 1;
 const gh = {
   api: vi.fn(async (path: string, opts?: { method?: string }) => {
     calls.push({ kind: `gh ${opts?.method ?? 'GET'}`, detail: path });
+    const asset = path.match(/\/contents\/(.+)\?ref=main$/);
+    if (asset && repoFiles[asset[1]!] !== undefined) return { ok: true, status: 200, data: { encoding: 'base64', content: repoFiles[asset[1]!] } };
     if (path === `/repos/${ORG}/${APP}`) {
       return world.repo.status === 200
         ? { ok: true, status: 200, data: { id: 7, private: world.repo.private } }

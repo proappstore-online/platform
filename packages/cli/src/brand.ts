@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { planIcons, renderLettermarkPng } from './lettermark.js';
@@ -28,13 +28,13 @@ export interface BrandIconsResult {
  * template's icon. Only icons byte-identical to the ones the template shipped are rewritten;
  * custom and absent icons are never touched. icon-192 also serves as the favicon and
  * apple-touch icon, and the template's default og-image is artwork, not the old F, so the
- * set stays consistent. Dry-run unless `write`.
+ * set stays consistent. Matching marketing/public defaults are also replaced. Dry-run unless `write`.
  */
 export async function brandIcons(opts: { dir: string; write: boolean; name?: string | undefined }): Promise<BrandIconsResult> {
   const dir = resolve(opts.dir);
   const appName = opts.name ?? (await appNameFor(dir));
   const result: BrandIconsResult = { appName, write: opts.write, rewritten: [], skipped: [] };
-  for (const { path, size, state } of await planIcons(dir)) {
+  for (const { path, size, state } of [...await planIcons(dir), ...await planIcons(dir, 'marketing')]) {
     if (state !== 'template-default') {
       result.skipped.push({ path, reason: state === 'custom' ? 'custom icon, left as is' : 'not present, left as is' });
       continue;
@@ -62,3 +62,15 @@ brandCommand
     if (!r.rewritten.length) out.write('No template-default icons to replace.\n');
     else if (!r.write) out.write('\nDry run. Re-run with --write to apply.\n');
   });
+
+/** Create missing marketing icons or replace known defaults, preserving custom bytes. */
+export async function writeMarketingIcons(dir: string, appName: string): Promise<string[]> {
+  await mkdir(join(dir, 'marketing', 'public'), { recursive: true });
+  const written: string[] = [];
+  for (const { path, size, state } of await planIcons(dir, 'marketing')) {
+    if (state === 'custom') continue;
+    await writeFile(path, renderLettermarkPng(appName, size));
+    written.push(path);
+  }
+  return written;
+}

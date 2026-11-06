@@ -235,6 +235,9 @@ importers:
       '@proappstore/build-core':
         specifier: workspace:*
         version: link:../build-core
+      '@proappstore/compliance':
+        specifier: workspace:*
+        version: link:../compliance
       zod:
         specifier: ^3.25.76
         version: 3.25.76

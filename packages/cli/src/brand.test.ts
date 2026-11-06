@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { brandIcons } from './brand.js';
+import { brandIcons, writeMarketingIcons } from './brand.js';
 import { renderLettermarkPng } from './lettermark.js';
 
 // #505: `pas brand icons` rewrites only template-default icons, and only with --write.
@@ -40,7 +40,7 @@ describe('pas brand icons (#505)', () => {
     const dir = await app({ 'icon-192.png': custom });
     const r = await brandIcons({ dir, write: true });
     expect(r.rewritten).toEqual([]);
-    expect(r.skipped.map((s) => s.reason)).toEqual(['custom icon, left as is', 'not present, left as is']);
+    expect(r.skipped.map((s) => s.reason)).toEqual(['custom icon, left as is', 'not present, left as is', 'not present, left as is', 'not present, left as is']);
     expect((await png(dir, 'icon-192.png')).equals(custom)).toBe(true);
     await expect(png(dir, 'icon-512.png')).rejects.toThrow();
   });
@@ -54,5 +54,32 @@ describe('pas brand icons (#505)', () => {
   it('takes the name from --name over the manifest', async () => {
     const dir = await app({ 'icon-192.png': await readFile(join(FIXTURES, 'f-192.png')) });
     expect((await brandIcons({ dir, write: false, name: 'Hiring' })).appName).toBe('Hiring');
+  });
+});
+
+describe('marketing icons (#558)', () => {
+  it('previews and replaces default marketing PNGs with personalized bytes', async () => {
+    const dir = await app({});
+    await mkdir(join(dir, 'marketing', 'public'), { recursive: true });
+    const original = await readFile(join(FIXTURES, 'f-192.png'));
+    await writeFile(join(dir, 'marketing', 'public', 'icon-192.png'), original);
+    const path = join(dir, 'marketing', 'public', 'icon-192.png');
+    expect((await brandIcons({ dir, write: false })).rewritten).toContain(path);
+    expect(await readFile(path)).toEqual(original);
+    await brandIcons({ dir, write: true });
+    const bytes = await readFile(path);
+    expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(bytes).not.toEqual(original);
+    expect(bytes).toEqual(renderLettermarkPng('Door Drop', 192));
+  });
+  it('preserves custom marketing artwork, including when filling missing variants', async () => {
+    const dir = await app({});
+    await mkdir(join(dir, 'marketing', 'public'), { recursive: true });
+    const path = join(dir, 'marketing', 'public', 'icon-192.png');
+    await writeFile(path, 'custom artwork');
+    await brandIcons({ dir, write: true });
+    await writeMarketingIcons(dir, 'Door Drop');
+    expect(await readFile(path, 'utf8')).toBe('custom artwork');
+    expect(await readFile(join(dir, 'marketing', 'public', 'icon-512.png'))).toEqual(renderLettermarkPng('Door Drop', 512));
   });
 });

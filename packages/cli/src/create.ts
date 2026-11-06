@@ -7,6 +7,7 @@ import { resolveToken } from './lib/config.js';
 import { toTitleCase } from './lib/title-case.js';
 import { writeOgImage } from './og-image.js';
 import { writeDefaultIcons } from './lettermark.js';
+import { writeMarketingIcons } from './brand.js';
 
 const TEMPLATE_REPO = 'proappstore-online/template-app';
 /** #178: the public approved-template catalogue (published by the docs build). */
@@ -111,6 +112,7 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
   const substitutionCount = await substituteAppName(targetDir, appId, appName);
   await writeOgImage(join(targetDir, 'web', 'public', 'og-image.png'), appName);
   await writeDefaultIcons(targetDir, appName);
+  if (await access(join(targetDir, 'marketing')).then(() => true, () => false)) await writeMarketingIcons(targetDir, appName);
 
   // Step 3: Install
   if (!opts.skipInstall) {

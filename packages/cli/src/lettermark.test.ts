@@ -26,7 +26,7 @@ describe('writeDefaultIcons', () => {
 
   it('replaces missing icons', async () => {
     const dir = await appDir();
-    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(2);
+    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(4);
     const png = await readFile(join(dir, 'web', 'public', 'icon-512.png'));
     expect(png.equals(renderLettermarkPng('Hiring', 512))).toBe(true);
   });
@@ -35,7 +35,7 @@ describe('writeDefaultIcons', () => {
     const dir = await appDir();
     await writeFile(join(dir, 'web', 'public', 'icon-192.png'), await readFile(join(FIXTURES, 'f-192.png')));
     await writeFile(join(dir, 'web', 'public', 'icon-512.png'), await readFile(join(FIXTURES, 'placeholder-512.png')));
-    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(2);
+    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(4);
     expect((await readFile(join(dir, 'web', 'public', 'icon-192.png'))).equals(renderLettermarkPng('Hiring', 192))).toBe(true);
   });
 
@@ -44,7 +44,7 @@ describe('writeDefaultIcons', () => {
     const custom = Buffer.from('custom-logo');
     await writeFile(join(dir, 'web', 'public', 'icon-192.png'), custom);
     await writeFile(join(dir, 'web', 'public', 'icon-512.png'), custom);
-    expect(await writeDefaultIcons(dir, 'Hiring')).toEqual([]);
+    expect(await writeDefaultIcons(dir, 'Hiring')).toHaveLength(2);
     expect((await readFile(join(dir, 'web', 'public', 'icon-192.png'))).equals(custom)).toBe(true);
   });
 });
@@ -59,4 +59,15 @@ describe('planIcons', () => {
     await writeFile(join(dir, 'web', 'public', 'icon-512.png'), 'mine');
     expect((await planIcons(dir)).map((p) => p.state)).toEqual(['template-default', 'custom']);
   });
+});
+
+it('writes real PNG install, favicon and 180px Apple-touch outputs (#558)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'icons-558-'));
+  await writeDefaultIcons(dir, 'Hiring');
+  for (const [file, size] of [['icon-192.png', 192], ['icon-512.png', 512], ['favicon.ico', 192], ['apple-touch-icon.png', 180]] as const) {
+    const bytes = await readFile(join(dir, 'web', 'public', file));
+    expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(bytes.readUInt32BE(16)).toBe(size);
+    expect(bytes.readUInt32BE(20)).toBe(size);
+  }
 });
