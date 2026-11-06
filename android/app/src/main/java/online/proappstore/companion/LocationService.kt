@@ -7,16 +7,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationListenerCompat
 import kotlinx.coroutines.*
 import java.util.UUID
 
-class LocationService : Service(), LocationListener {
+class LocationService : Service(), LocationListenerCompat {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val graph get() = application as PasApplication
     private val manager by lazy { getSystemService(LocationManager::class.java) }
