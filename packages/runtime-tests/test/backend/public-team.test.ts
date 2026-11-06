@@ -117,3 +117,32 @@ describe('team_join enquiries on D1 (#542)', () => {
     expect((await env.DB.prepare("SELECT type FROM app_enquiries WHERE id LIKE '%0000'").first<{ type: string }>())!.type).toBe('general');
   });
 });
+
+describe('own saved preferences on real D1 (#552)', () => {
+  const own = async (uid: string, appId = 'shop') => {
+    const { mintSession, credentialContext } = await import('@proappstore/build-core');
+    const token = await mintSession({ uid, roles: ['user'], cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
+    return SELF.fetch(`${BASE}/v1/apps/${appId}/team/public/me`, { headers: { Authorization: `Bearer ${token}` } });
+  };
+  it('reads publisher, member and promoter-only preferences without writes; enforces app and lifecycle eligibility', async () => {
+    await env.DB.prepare("INSERT INTO app_promoters (id,app_id,user_id,code,status,consent_version,consented_at,created_at,updated_at) VALUES ('own-profile','shop','gh:3','ABCDEFGH','active',1,1,1,1)").run();
+    for (const uid of ['gh:1', 'gh:2', 'gh:3']) {
+      expect(await (await own(uid)).json()).toEqual({ appId: 'shop', profile: null });
+      await setProfile(uid, { display_name: 'Chosen', visible: true, show_promotion: uid === 'gh:3' });
+      const before = await env.DB.prepare('SELECT * FROM app_team_public_profiles ORDER BY user_id').all();
+      const res = await own(uid);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toContain('no-store');
+      expect(await res.json()).toEqual({ appId: 'shop', profile: { display_name: 'Chosen', label: null, visible: true, show_promotion: uid === 'gh:3', updated_at: expect.any(String) } });
+      expect(await env.DB.prepare('SELECT * FROM app_team_public_profiles ORDER BY user_id').all()).toMatchObject({ results: before.results });
+    }
+    expect((await own('gh:2', 'other')).status).toBe(403);
+    expect((await own('gh:2', 'missing')).status).toBe(403);
+    await env.DB.prepare("DELETE FROM team_members WHERE app_id='shop' AND user_id='gh:2'").run();
+    expect((await own('gh:2')).status).toBe(403);
+    for (const status of ['suspended', 'withdrawn']) {
+      await env.DB.prepare("UPDATE app_promoters SET status=? WHERE id='own-profile'").bind(status).run();
+      expect((await own('gh:3')).status).toBe(403);
+    }
+  });
+});

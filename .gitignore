@@ -17,3 +17,5 @@ docs/.vitepress/dist/
 artifacts/offline-browser/
 artifacts/google-consent/
 artifacts/verification/
+
+artifacts/referral-browser/

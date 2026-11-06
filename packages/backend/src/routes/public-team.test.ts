@@ -344,3 +344,46 @@ describe('team_join enquiries (#542)', () => {
     expect(() => db.sql.exec("INSERT INTO app_enquiries (id, app_id, name, email, message, status, ip_hash, created_at, type) VALUES ('x','shop','n','e','m','new','h',1,'invite')")).toThrow();
   });
 });
+
+describe('own saved preferences (#552)', () => {
+  const own = (uid: string, appId = 'shop') => get(`/apps/${appId}/team/public/me`, uid);
+  beforeEach(async () => {
+    const { credentialContext } = await import('@proappstore/build-core');
+    for (const uid of [OWNER, ADA, BOB, STRANGER]) tokens[uid] = await mintSession({ uid, roles: ['user'], cred: credentialContext('first_party_session') }, env.SESSION_SIGNING_KEY);
+    db.sql.exec("INSERT INTO app_promoters (id,app_id,user_id,code,status,consent_version,consented_at,created_at,updated_at) VALUES ('p','shop','gh:3','ABCDEFGH','active',1,1,1,1)");
+  });
+  it.each([OWNER, ADA, BOB])('reads only %s saved fields without creating or changing a row', async uid => {
+    expect(await (await own(uid)).json()).toEqual({ appId: 'shop', profile: null });
+    expect(rows('SELECT * FROM app_team_public_profiles')).toEqual([]);
+    await profile(uid, { display_name: 'Chosen name', label: 'Contributor', visible: true, show_promotion: uid === BOB });
+    const before = rows('SELECT * FROM app_team_public_profiles');
+    const response = await own(uid);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toContain('no-store');
+    expect(await response.json()).toEqual({ appId: 'shop', profile: { display_name: 'Chosen name', label: 'Contributor', visible: true, show_promotion: uid === BOB, updated_at: expect.any(String) } });
+    expect(rows('SELECT * FROM app_team_public_profiles')).toEqual(before);
+    await del('/apps/shop/team/public/me', uid);
+    expect(await (await own(uid)).json()).toMatchObject({ profile: { display_name: 'Chosen name', visible: false, show_promotion: false } });
+  });
+  it('denies removed, suspended, withdrawn, wrong-app and unknown identities without disclosing another profile', async () => {
+    await profile(ADA, { display_name: 'Private name', visible: false });
+    expect(await (await own(OWNER)).json()).toEqual({ appId: 'shop', profile: null });
+    db.sql.exec("DELETE FROM team_members WHERE app_id='shop' AND user_id='gh:2'");
+    expect((await own(ADA)).status).toBe(403);
+    for (const status of ['suspended', 'withdrawn']) {
+      db.sql.prepare('UPDATE app_promoters SET status=? WHERE id=?').run(status, 'p');
+      expect((await own(BOB)).status).toBe(403);
+    }
+    for (const appId of ['shop', 'other', 'missing']) {
+      expect((await own(STRANGER, appId)).status).toBe(403);
+    }
+    expect((await get('/apps/shop/team/public/me')).status).toBe(401);
+  });
+  it('denies app-bound, workload and unspecified credentials even for the owner', async () => {
+    const { credentialContext } = await import('@proappstore/build-core');
+    for (const cred of [undefined, credentialContext('app_bound', 'shop'), credentialContext('workload')]) {
+      tokens[OWNER] = await mintSession({ uid: OWNER, roles: ['user'], ...(cred ? { cred } : {}) }, env.SESSION_SIGNING_KEY);
+      expect((await own(OWNER)).status).toBe(403);
+    }
+  });
+});

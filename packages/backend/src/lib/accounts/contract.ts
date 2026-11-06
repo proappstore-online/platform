@@ -235,7 +235,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/native-companion.ts': live('invalidates personal native grants when the recipient app changes publisher; grants no publisher-management authority'),
   'packages/backend/src/lib/operation-log.ts': live('owner flag decides who sees an operation'),
   'packages/backend/src/lib/operator-audit-marks.ts': live('wraps requireAppOwner and remembers the owner for the refusal audit'),
-  'packages/backend/src/lib/public-team.ts': proj('public team projection: current members who opted in, joined to creator_id and team_members; owner moderation is gated by requireAppOwner in the route'),
+  'packages/backend/src/lib/public-team.ts': live('own saved preferences require publisher, current member or active promoter; public projection separately requires opt-in and current membership; owner moderation uses requireAppOwner'),
   'packages/backend/src/lib/provision-data.ts': hist('INSERT apps.creator_id at provisioning; dev_profiles seed'),
   'packages/backend/src/lib/provision-operation.ts': prov('creator_id on the provisioning receipt'),
   'packages/backend/src/lib/visibility.ts': live('private-app visibility keyed on creator_id'),

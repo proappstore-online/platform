@@ -119,3 +119,19 @@ enrollment refusal. Storefront must retain `data/promoter-destination.json`
 Existing relationships, codes, history and confirmed credits are retained. A
 readiness loss prevents recruitment/re-enrollment; it does not withdraw an
 existing promoter, erase a credit, or backfill historical attribution.
+
+## Exact-build browser check
+
+`scripts/test-referral-browser.mjs` takes an absolute `PAS_REFERRAL_DIST` and
+`PAS_REFERRAL_APP` (Dating by default). It serves those unchanged build bytes,
+uses real host cookie handlers and HostApi with the backend in workerd and real
+D1 migrations, and writes hashes and engine results under
+`artifacts/referral-browser/`. The synthetic provider and identities exist only
+inside this runner; the test worker has no production deployment configuration.
+Browser traffic is restricted to loopback transport, with known platform URLs
+proxied into the local components. Worker outbound traffic is denied.
+
+Pass both `PAS_CONSOLE_DIST` and `PAS_STOREFRONT_DIST` for joint acceptance using
+real client builds. The storefront fixture must enable the promoter destination;
+never deploy that fixture. Without those inputs the runner verifies only the app
+build's referral behavior, suitable for each app deployment's readiness check.

@@ -48,6 +48,19 @@ const ACTIVE_PROMOTER = `EXISTS (SELECT 1 FROM app_promoters WHERE app_id = ?1 A
 // still joins current membership, so a promoter who is not on the team appears only on the contributor card.
 const MEMBER = `(EXISTS (SELECT 1 FROM apps WHERE id = ?1 AND creator_id = ?2) OR EXISTS (SELECT 1 FROM team_members WHERE app_id = ?1 AND user_id = ?2) OR ${ACTIVE_PROMOTER})`;
 
+/** Read saved preferences only, including a hidden profile. Never infer consent from the public projection. */
+export async function readOwnProfile(db: D1Database, appId: string, userId: string) {
+  const row = await db.prepare(`SELECT p.display_name, p.label, p.visible, p.show_promotion, p.updated_at
+    FROM (SELECT 1 WHERE ${MEMBER}) eligible
+    LEFT JOIN app_team_public_profiles p ON p.app_id = ?1 AND p.user_id = ?2`)
+    .bind(appId, userId).first<{ display_name: string | null; label: string | null; visible: number | null; show_promotion: number | null; updated_at: string | null }>();
+  if (!row) throw new HttpError('not eligible to read public preferences', 403);
+  return row.updated_at === null ? null : {
+    display_name: row.display_name, label: row.label, visible: row.visible === 1,
+    show_promotion: row.show_promotion === 1, updated_at: row.updated_at,
+  };
+}
+
 /** Upsert the caller's own row; nothing is written unless they are a current member, decided in the same statement. */
 export async function saveOwnProfile(db: D1Database, appId: string, userId: string, input: PublicProfileInput): Promise<boolean> {
   if (input.show_promotion && !(await db.prepare(`SELECT 1 AS promoter WHERE ${ACTIVE_PROMOTER}`).bind(appId, userId).first())) throw new HttpError('not_an_active_promoter', 400);

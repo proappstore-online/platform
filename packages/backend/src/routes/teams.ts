@@ -3,7 +3,7 @@ import type { Env } from '../types.js';
 import { HttpError, isAdminId, requireUser, requireAppAccess, requireAppOwner, TEAM_ROLES, type TeamRole } from '../lib/auth.js';
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import { sendEmail, type EmailConfig } from '../lib/email.js';
-import { hideProfile, moderationView, parseProfileInput, saveOwnProfile, withdrawOwnProfile } from '../lib/public-team.js';
+import { hideProfile, moderationView, parseProfileInput, readOwnProfile, saveOwnProfile, withdrawOwnProfile } from '../lib/public-team.js';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
 // #378: owner-only reads are never cached.
@@ -90,6 +90,13 @@ async function profileOwner(c: Parameters<typeof requireUser>[0]) {
   if (user.via) throw new HttpError('sign in as yourself to manage your public profile', 403);
   return user;
 }
+
+teamRoutes.get('/apps/:appId/team/public/me', wrap(async (c) => {
+  const user = await profileOwner(c);
+  if (user.credentialContext?.kind !== 'first_party_session') throw new HttpError('sign in as yourself to read public preferences', 403);
+  const appId = c.req.param('appId')!;
+  return c.json({ appId, profile: await readOwnProfile(c.env.DB, appId, user.id) });
+}));
 
 teamRoutes.put('/apps/:appId/team/public/me', wrap(async (c) => {
   const appId = c.req.param('appId')!;

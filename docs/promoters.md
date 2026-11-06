@@ -127,3 +127,9 @@ consumer settles the shape.
 - **Code revocation** is by status (suspend or withdraw). Rotating a code for a live promoter is not offered; it would
   need a decision on old links, which belongs with #550.
 - **Discovery** returns only fields the storefront already publishes.
+
+Saved public preferences can be read privately with
+`GET /v1/apps/:appId/team/public/me`. The caller must be a first-party person and
+currently eligible as publisher, member or active promoter. This returns the
+stored choices, including hidden ones; `profile: null` means no saved row.
+See [the exact contract](public-team-projection.md#reading-your-saved-preferences).

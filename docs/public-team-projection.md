@@ -112,3 +112,15 @@ Reviewing a team-join enquiry changes nothing by itself. If the owner wants the 
 existing, authorized invitation flow for the app (`POST /v1/apps/:appId/team/invite`, requiring admin on the app)
 and contact the person themselves. Marking the enquiry handled (`PATCH`) records that it was reviewed. Account
 governance flags are not involved, and no invitation is created automatically.
+
+## Reading your saved preferences
+
+`GET /v1/apps/:appId/team/public/me` requires a first-party person session and
+current eligibility as publisher, team member or active promoter. It returns
+`{ appId, profile: null }` when no preferences were saved, or `profile` containing
+only `display_name`, `label`, boolean `visible`, boolean `show_promotion` and the
+stored `updated_at` string. Hidden preferences remain readable by their owner.
+The response is private/no-store and reading never changes consent or timestamps.
+Missing authentication returns 401; app-bound/workload credentials and ineligible
+people return 403. Missing apps and apps the caller cannot access are indistinguishable.
+PUT/DELETE behavior and public projections are unchanged.

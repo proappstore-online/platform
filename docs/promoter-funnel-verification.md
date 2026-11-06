@@ -113,3 +113,37 @@ Before production recruitment is enabled through Storefront#13:
 - Attach that evidence to #548 and Storefront#13. Their earlier pending checklists
   are not replaced by the API fallback, and the epic must not be represented as
   a fully observed live signup flow.
+
+## Dating pilot browser acceptance (2026-11-06)
+
+The newer `scripts/test-referral-browser.mjs` runs the actual Dating build, Console
+and storefront against an isolated workerd backend/D1 ledger and real host cookie
+handlers. Both Chromium and WebKit passed the connected flow at 390px, with
+Console and contributor layouts also checked at 320px. It verifies keyboard entry,
+service-issued enrollment/link/visible QR, referral capture across reload/sign-in,
+one confirmed credit after repeated reloads, saved visibility choices, the actual
+app-detail contributor card appearing after consent and disappearing after hiding,
+and no additional credit from direct legacy claims or a private app.
+
+The Console candidate includes `e17cdec168141e4f3020b45451b22a762bd5a672`, fixing
+credentialed CORS failures in the promoter and own-profile consumers. The backend
+candidate adds #552's own saved-preferences GET. This check uses a fixture-enabled
+storefront and an updated Dating SDK; it is not a live-provider login or a real
+production referral. External fonts, avatar images and agent-service requests are
+blocked; WebKit also surfaces the existing optional SDK usage-ping credentialed
+CORS failure. Attribution and reporting use the real backend responses.
+
+Reproduce with the three build paths:
+
+```sh
+PAS_REFERRAL_DIST=/absolute/dating/web/dist \
+PAS_CONSOLE_DIST=/absolute/console/web/dist \
+PAS_STOREFRONT_DIST=/absolute/storefront-fixture \
+node scripts/test-referral-browser.mjs
+```
+
+`artifacts/referral-browser/results.json` records exact hashes for all three
+builds, each engine's checks and blocked external destinations. The check refuses
+an app build that changes while running. Recruitment still requires the deployed
+Dating attestation and all normal release gates; this local receipt alone does
+not enable it. The earlier API-only results above remain historical receipts.
