@@ -90,7 +90,7 @@ An Android intent can bring PAS forward but cannot grant access. The initial cus
 3. Add an app-worker native capability declaration, authenticated native event/RPC delivery, revocation-aware retries, quotas and downstream deletion. Reuse ADR-009; never permit an arbitrary app worker to enumerate users or read another app's stream.
 4. Review and register additional recipient apps such as Rideshare, with real disclosures and lifecycle tests.
 5. Add lock-screen activity summaries/timers once app-specific session state is available. A native location service alone cannot infer a ski ride's timer semantics.
-6. Prepare privacy policy, Data Safety declaration, Play background-location/FGS demonstration, release signing, store assets and a closed testing release. No Play submission or approval has occurred.
+6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
 
 ## Future capability families
 

@@ -1,8 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val releaseVersion = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val buildNumber = (System.getenv("ANDROID_BUILD_NUMBER") ?: releaseVersion.getProperty("versionCode")).toInt()
+require(buildNumber in 1..2_100_000_000) { "Android versionCode is out of range" }
+val uploadStore = System.getenv("ANDROID_UPLOAD_KEYSTORE_PATH")
 android {
     namespace = "online.proappstore.companion"
     compileSdk = 36
@@ -10,12 +18,21 @@ android {
         applicationId = "online.proappstore.companion"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildNumber
+        versionName = releaseVersion.getProperty("versionName")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        if (!uploadStore.isNullOrBlank()) create("upload") {
+            storeFile = file(uploadStore)
+            storePassword = System.getenv("ANDROID_UPLOAD_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_UPLOAD_KEY_ALIAS")
+            keyPassword = System.getenv("ANDROID_UPLOAD_KEY_PASSWORD")
+        }
     }
     buildTypes {
         release {
+            if (!uploadStore.isNullOrBlank()) signingConfig = signingConfigs.getByName("upload")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -26,6 +43,14 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+}
+// A release task must never quietly produce an unsigned artifact or use a debug key.
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.project == project && it.name in listOf("assembleRelease", "bundleRelease", "packageRelease", "signReleaseBundle") }) {
+        require(!uploadStore.isNullOrBlank() && listOf("ANDROID_UPLOAD_KEYSTORE_PASSWORD", "ANDROID_UPLOAD_KEY_ALIAS", "ANDROID_UPLOAD_KEY_PASSWORD").all { !System.getenv(it).isNullOrBlank() }) {
+            "Release signing is required. Use scripts/build-android-release.sh with PAS upload credentials."
+        }
+    }
 }
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.10.00")

@@ -14,7 +14,13 @@ Prerequisites: JDK 17, Android SDK platform 36 and platform tools. Set `ANDROID_
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. Package ID: `online.proappstore.companion`. Android 10/API 29 minimum; compile/target API 36. Release builds require separately provisioned signing; there are no signing credentials in this repository. Dependency versions are pinned to a compatible stable SDK-36 toolchain.
+Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. Package ID: `online.proappstore.companion`. Android 10/API 29 minimum; compile/target API 36. Dependency versions are pinned to a compatible stable SDK-36 toolchain.
+
+## Android deployment
+
+The [release runbook](../docs/native-android-release.md) follows HeartFull's signed AAB → Play upload → fresh track verification model. GitHub Actions builds signed APK/AAB artifacts on Android changes to `main`; Google Play publishing activates after the one-time app setup. Release credentials belong to `ops` project `pas` and repository-level GitHub secrets. Only the public upload certificate is committed.
+
+`version.properties` owns the human version and minimum version code. CI chooses a code above uploaded bundles and every Play track before publishing. Release tasks fail without the upload signing credentials; there is no debug-signing fallback. Backend deployments run independently.
 
 ## Initial capabilities
 

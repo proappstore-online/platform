@@ -45,6 +45,7 @@ const mainSidebar = [
       { text: "Recipes", link: "/recipes" },
       { text: "Offline Apps", link: "/offline-apps" },
       { text: "Native Companion", link: "/native-companion" },
+      { text: "Android Releases", link: "/native-android-release" },
     ],
   },
   {

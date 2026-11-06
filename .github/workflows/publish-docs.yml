@@ -166,6 +166,7 @@ jobs:
             - Native Companion:
                 - Android user guide: native-companion-users.md
                 - Architecture and API: native-companion.md
+                - Android releases: native-android-release.md
                 - Store review research: native-companion-review.md
             - UI Components: ui.md
             - Recipes: recipes.md
