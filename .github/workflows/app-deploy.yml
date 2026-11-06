@@ -406,12 +406,14 @@ jobs:
           [ -n "$PAS_DEPLOY_ID" ] || { echo "::error::no deployment audit ID"; exit 1; }
           pnpm run test:referral-readiness
           node --input-type=module <<'JS'
-          import { createRequire } from 'node:module';
           import { existsSync, readFileSync } from 'node:fs';
           import { dirname, resolve } from 'node:path';
           const root = existsSync('web/package.json') ? resolve('web/package.json') : resolve('package.json');
-          const require = createRequire(root);
-          const sdk = JSON.parse(readFileSync(resolve(dirname(require.resolve('@proappstore/sdk')), '../package.json'), 'utf8'));
+          // Read installed metadata without resolving the SDK's import-only ESM entry through CommonJS.
+          // Restrict lookup to this app's web/root install; never pick up an unrelated global SDK.
+          const sdkPath = [dirname(root), process.cwd()].map(base => resolve(base, 'node_modules/@proappstore/sdk/package.json')).find(existsSync);
+          if (!sdkPath) throw new Error('installed SDK metadata not found');
+          const sdk = JSON.parse(readFileSync(sdkPath, 'utf8'));
           if (sdk.name !== '@proappstore/sdk') throw new Error('could not resolve installed SDK');
           const { APP_ID, PAS_DEPLOY_ID, ACTIONS_ID_TOKEN_REQUEST_URL: url, ACTIONS_ID_TOKEN_REQUEST_TOKEN: auth } = process.env;
           const tokenResponse = await fetch(url + '&audience=https://api.proappstore.online', { headers: { Authorization: 'bearer ' + auth } });
