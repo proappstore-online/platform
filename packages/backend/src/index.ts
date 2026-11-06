@@ -70,6 +70,9 @@ import { actionRoutes } from './routes/actions.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { keysRoutes } from './routes/keys.js';
 import { authRoutes } from './routes/auth.js';
+import { nativeAuthRoutes } from './routes/native-auth.js';
+import { nativeRoutes } from './routes/native.js';
+import { pruneNativeData } from './lib/native-companion.js';
 import { cleanupRemoteAuthRequests, mcpBrokerRoutes } from './routes/mcp-broker.js';
 import { mcpGrantRoutes } from './routes/mcp-grants.js';
 import { passkeyRoutes } from './routes/passkeys.js';
@@ -327,6 +330,8 @@ const v1 = new Hono<{ Bindings: Env }>();
 // #550: records a person's first authenticated activation of an app, from the request itself (never from a client claim).
 v1.use('*', activationObserver);
 v1.route('/', authRoutes);
+v1.route('/', nativeAuthRoutes);
+v1.route('/', nativeRoutes);
 v1.route('/', mcpBrokerRoutes);
 v1.route('/', mcpGrantRoutes);
 v1.route('/', passkeyRoutes);
@@ -431,6 +436,7 @@ export default {
   // #257: pas-app-events (deliver to the app worker, retry) and pas-app-events-dlq (fail the row). ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254).
   queue: (batch: MessageBatch<AppEventMessage>, env: Env, ctx: ExecutionContext) => handleAppEventBatch(batch, env, ctx as AppWorkerExports),
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(pruneNativeData(env.DB, event.scheduledTime ?? Date.now()).catch(() => console.error('[native] retention cleanup failed')));
     // #123 runs on the five-minute platform tick. It is durable and has no
     // backfill behaviour; a delayed/missed tick never turns into a burst.
     // Worker schedules are only claimed and queued here; the queue() consumer below runs them (#257).

@@ -44,6 +44,7 @@ const mainSidebar = [
       { text: "UI Components", link: "/ui" },
       { text: "Recipes", link: "/recipes" },
       { text: "Offline Apps", link: "/offline-apps" },
+      { text: "Native Companion", link: "/native-companion" },
     ],
   },
   {

@@ -34,8 +34,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  router:
+    uses: ProAgentStore/runner-router/.github/workflows/router.yml@v1
+    secrets:
+      billing-token: ${{ secrets.RUNNER_BILLING_TOKEN }}
   publish:
-    runs-on: ubuntu-latest
+    needs: router
+    runs-on: ${{ fromJSON(needs.router.outputs.runner) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -158,6 +163,10 @@ jobs:
                 - Changelog: standard/changelog.md
             - SDK: sdk-overview.md
             - Offline apps: offline-apps.md
+            - Native Companion:
+                - Android user guide: native-companion-users.md
+                - Architecture and API: native-companion.md
+                - Store review research: native-companion-review.md
             - UI Components: ui.md
             - Recipes: recipes.md
             - CLI: cli-overview.md
@@ -188,6 +197,7 @@ jobs:
                 - Error Observability: adr/008-error-observability.md
                 - App Workers: adr/009-app-workers.md
                 - Offline content: adr/012-offline-content.md
+                - Native companion: adr/015-native-companion.md
           YAML
           python -m zensical build
           python scripts/verify-docs-metadata.py site
@@ -197,6 +207,8 @@ jobs:
           test -f site/mcp-operations/index.html
           test -f site/offline-apps/index.html
           test -f site/adr/012-offline-content/index.html
+          test -f site/native-companion-users/index.html
+          test -f site/native-companion/index.html
           python -m json.tool site/templates/catalogue.json >/dev/null
       - name: Publish to kb-host
         run: |
