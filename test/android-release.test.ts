@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PlayRelease } from '../scripts/android-play-release.mjs';
@@ -27,6 +28,14 @@ function fixture({ uploaded = 12, verified = true, failUpload = false, staged = 
 }
 
 describe('PAS Android release pipeline', () => {
+  it('parses every multiline workflow shell step before CI runs it', () => {
+    const workflow = readFileSync('.github/workflows/android.yml', 'utf8');
+    const scripts = [...workflow.matchAll(/^        run: \|\n((?:          .*\n?)+)/gm)];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const [, script] of scripts) {
+      expect(() => execFileSync('bash', ['-n'], { input: script, stdio: ['pipe', 'pipe', 'pipe'] })).not.toThrow();
+    }
+  });
   it('chooses above all tracks and uploaded bundles, and preserves a higher local floor', async () => {
     expect(await fixture().client.nextCode(2)).toBe(12);
     expect(await fixture().client.nextCode(20)).toBe(20);

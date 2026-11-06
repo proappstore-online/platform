@@ -137,3 +137,4 @@ jobs:
             echo "Google Play track verified: $PLAY_TRACK ($PLAY_STATUS). Store review/availability is separate." >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Google Play upload was not requested. Signed artifacts are available for initial Play Console setup.' >> "$GITHUB_STEP_SUMMARY"
+          fi
