@@ -31,6 +31,12 @@ describe('binding', () => {
     expect(params[0]).not.toEqual(params[1]);
   });
 
+  it('binds :__call_uuid to one value for the whole call (#562)', () => {
+    const { params } = bindAction('INSERT INTO t VALUES (:__call_uuid, :__call_uuid)', {});
+    expect(params[0]).toBe(params[1]);
+    expect(bindAction('SELECT :__call_uuid', {}, 'u', 1, false, 'fixed').params).toEqual(['fixed']);
+  });
+
   it('resolves :__user_is_child (#513): 0 for the sample user, 1 when told the caller is a child, never from the params', () => {
     expect(bindAction('SELECT :__user_is_child', {}).params).toEqual([0]);
     expect(bindAction('SELECT :__user_is_child', {}, 'cred:kid', 1, true).params).toEqual([1]);

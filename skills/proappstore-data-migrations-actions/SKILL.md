@@ -48,7 +48,7 @@ plan and prescribe; you never run SQL, provision or deploy.
    ([PAS-DATA-007](https://docs.proappstore.online/standard/data/#pas-data-007),
    [PAS-DATA-004](https://docs.proappstore.online/standard/data/#pas-data-004)).
 3. **The server owns identity, time and ids.** Actions take `:__user_id`,
-   `:__now` and `:__uuid` from the executor; they never accept a caller id,
+   `:__now`, `:__uuid` (fresh per occurrence) and `:__call_uuid` (one per call) from the executor; they never accept a caller id,
    timestamp, role or grant as a parameter, and privileges are derived from a
    server row inside the statement
    ([PAS-DATA-006](https://docs.proappstore.online/standard/data/#pas-data-006),

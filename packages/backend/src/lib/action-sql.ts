@@ -127,7 +127,7 @@ export function prepareActionQuery(
   if (typeof manifest.sql !== 'string') {
     throw new Error(`tool ${manifest.name} has no sql`);
   }
-  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId, Date.now(), {}, isChild);
+  return bindStatement(manifest.sql, resolveToolParams(manifest, input), userId, Date.now(), { __call_uuid: crypto.randomUUID() }, isChild);
 }
 
 /**
@@ -141,8 +141,8 @@ export function referencesChildFlag(manifest: ToolManifest): boolean {
 /**
  * Prepare a batch tool: every statement binds against the SAME resolved param
  * pool, so a shared :param (or :__user_id / :__user_is_child / :__now) is identical across all
- * statements. :__uuid stays per-occurrence — ids that must correlate across
- * statements are client-supplied params.
+ * statements. :__uuid stays per-occurrence; :__call_uuid is one UUID for the whole call, identical
+ * in every statement, for ids that must correlate across statements (#562).
  */
 export function prepareActionBatch(
   manifest: ToolManifest,
@@ -158,7 +158,8 @@ export function prepareActionBatch(
   // timestamp an earlier one wrote (`WHERE updated_at = :__now`), which must not
   // depend on the millisecond ticking over between two occurrences.
   const now = Date.now();
-  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, {}, isChild));
+  const call = { __call_uuid: crypto.randomUUID() };
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, call, isChild));
 }
 
 /**
@@ -191,7 +192,8 @@ export function prepareVerifyWrites(
   const resolved = resolveToolParams(manifest, input);
   const verdict = Object.fromEntries(Object.entries(output).map(([k, v]) => [`${VERIFY_PARAM_PREFIX}${k}`, v]));
   const now = Date.now();
-  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, verdict, isChild));
+  const magic = { ...verdict, __call_uuid: crypto.randomUUID() };
+  return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, magic, isChild));
 }
 
 function bindStatement(

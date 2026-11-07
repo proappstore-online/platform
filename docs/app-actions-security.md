@@ -55,13 +55,13 @@ Browser SDK or MCP client
   -> validates PAS session
   -> refuses a staged action unless the caller is the app's owner/team (#428)
   -> enforces manifest platform/app role metadata
-  -> injects :__user_id, :__user_is_child, :__now, :__uuid server-side
+  -> injects :__user_id, :__user_is_child, :__now, :__uuid, :__call_uuid server-side
   -> forwards prepared SQL to data-{app}.proappstore.online
   -> app D1
 ```
 
 The caller can pass normal declared params. The caller cannot override magic
-params; values such as `__user_id`, `__user_is_child`, `__now`, and `__uuid` are
+params; values such as `__user_id`, `__user_is_child`, `__now`, `__uuid`, and `__call_uuid` are
 owned by the platform executor. `:__user_is_child` is `1` for a child account
 and `0` otherwise, read from the account record (never the request), so an app
 can state "children may not do this" in the SQL that enforces it:

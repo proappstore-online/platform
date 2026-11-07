@@ -137,7 +137,7 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
 
   // All :paramName in SQL must be declared in params (except magic params). A
   // verify tool's writes may also bind the verifier's declared outputs.
-  const magicParams = new Set(['__user_id', '__user_is_child', '__now', '__uuid']);
+  const magicParams = new Set(['__user_id', '__user_is_child', '__now', '__uuid', '__call_uuid']);
   if (tool.operation === 'verify') {
     for (const key of Object.keys(getVerifier(tool.verifier)!.outputs)) magicParams.add(`${VERIFY_PARAM_PREFIX}${key}`);
   }

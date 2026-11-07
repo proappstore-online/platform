@@ -484,8 +484,8 @@
         "schema_status"
       ],
       "mutating": false,
-      "bytes": 64655,
-      "digest": "c03801b695a94f6f29fbfe90a48779f4c52165f83c044d7714334da8e3a02e3f",
+      "bytes": 64749,
+      "digest": "7d623086fff9dc5ba9058a5c0de2a8dbd9e02f520168dc39e6da68058d229a8d",
       "files": [
         {
           "path": "evals/cases.json",
@@ -519,8 +519,8 @@
         },
         {
           "path": "references/decision-tables.md",
-          "bytes": 13419,
-          "sha256": "3dbcd90ad3510f626b30674ab5cc8e1acbaf0c39081236627e511d7aa31f0368"
+          "bytes": 13459,
+          "sha256": "b2f0ac57a7358c892abab73810f888d89d241f903cf3fb2e4daaf94966c1f0dd"
         },
         {
           "path": "references/negative-cases.md",
@@ -544,8 +544,8 @@
         },
         {
           "path": "SKILL.md",
-          "bytes": 10428,
-          "sha256": "d9a5107908d7b2bf469fafbe09450848abbbf896ad6af4eda9b532f7ffbd9747"
+          "bytes": 10482,
+          "sha256": "002ac9d1305b690e35947b998e8db740c0f6a910e552418f8de3b104419eb300"
         }
       ],
       "evaluations": {
@@ -565,9 +565,9 @@
           "bundle_bytes": 69632
         },
         "actual": {
-          "skill_md_bytes": 10428,
-          "references_bytes": 42915,
-          "bundle_bytes": 64655
+          "skill_md_bytes": 10482,
+          "references_bytes": 42955,
+          "bundle_bytes": 64749
         },
         "properties": {
           "triggering": "test/skills-harness.test.ts",

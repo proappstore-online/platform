@@ -150,6 +150,29 @@ describe('prepareActionBatch', () => {
     expect(prepared[0].sql).not.toContain(':');
   });
 
+  it(':__call_uuid is one value across every statement and occurrence of a call, while :__uuid stays per occurrence (#562)', () => {
+    let n = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `uuid-${++n}` });
+    const manifest: ToolManifest = {
+      ...batchManifest,
+      statements: [
+        'INSERT INTO things (id, owner_id, ref) VALUES (:__call_uuid, :__user_id, :__uuid)',
+        'INSERT INTO notes (thing_id, id, again) VALUES (:__call_uuid, :__uuid, :__call_uuid)',
+      ],
+      params: {},
+    };
+    const [a, b] = prepareActionBatch(manifest, { __call_uuid: 'attacker' }, 'gh:9');
+    const call = a!.params[0];
+    expect(call).not.toBe('attacker');
+    expect([a!.params[0], b!.params[0], b!.params[2]]).toEqual([call, call, call]);
+    expect(new Set([a!.params[2], b!.params[1], call]).size).toBe(3);
+    // a different call gets a different id
+    expect(prepareActionBatch(manifest, {}, 'gh:9')[0]!.params[0]).not.toBe(call);
+    // a single-statement action binds it too
+    const q = prepareActionQuery({ ...manifest, operation: 'execute', sql: 'SELECT :__call_uuid, :__call_uuid', statements: undefined }, {}, 'gh:9');
+    expect(q.params[0]).toBe(q.params[1]);
+  });
+
   it('reads the clock once per batch, so :__now is identical across statements and occurrences', () => {
     const manifest: ToolManifest = {
       ...batchManifest,

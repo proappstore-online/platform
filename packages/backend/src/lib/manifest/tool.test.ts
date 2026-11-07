@@ -31,6 +31,10 @@ describe('validateManifest', () => {
     expect(validateManifest(query({ sql: 'SELECT * FROM items WHERE id = :id' }))).toBe('SQL references :id but it is not declared in params');
   });
 
+  it('accepts :__call_uuid as a server-owned param (#562)', () => {
+    expect(validateManifest(query({ sql: 'SELECT :__call_uuid AS call_id FROM items WHERE user_id = :__user_id' }))).toBeNull();
+  });
+
   it('accepts :__user_is_child as a server-owned param, and refuses it in a public query (#513)', () => {
     expect(validateManifest(query({ sql: 'SELECT * FROM items WHERE user_id = :__user_id AND :__user_is_child = 0' }))).toBeNull();
     const err = validateManifest(query({ requires_auth: false, sql: 'SELECT * FROM items WHERE :__user_is_child = 0 LIMIT 10' }));

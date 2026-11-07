@@ -366,7 +366,7 @@ INSERT INTO org_members (org_id, user_id, role) VALUES (:org_id, :__user_id, :ro
 
 **Rationale.** A network drop between two client calls leaves the parent without its owner or the delete without its audit row. The batch executes in one transaction; a mid-sequence failure rolls everything back.
 
-**Recommended implementation.** Declare `statements` sharing one `params` pool. `:__user_id`/`:__now` resolve identically across statements; `:__uuid` is per occurrence, so pass a client-generated uuid as a param when ids must correlate.
+**Recommended implementation.** Declare `statements` sharing one `params` pool. `:__user_id`/`:__now` resolve identically across statements; `:__uuid` is per occurrence, so use `:__call_uuid` (one value per call, in every statement) or a client-generated uuid param when ids must correlate.
 
 **Conforming example.**
 

@@ -268,7 +268,8 @@ These are injected by the platform — **do not** declare them in `params`:
 | `:__user_id` | the calling user's id (forces `requires_auth: true`). Scope per-user rows with `WHERE user_id = :__user_id`. |
 | `:__user_is_child` | `1` when the calling account is a child account, else `0`; next to `:__user_id`, for an authenticated action only. Read from the account record, never from the request (a client-supplied `__user_is_child` is ignored). Refuse a child in the SQL that enforces it: `INSERT … SELECT … WHERE :__user_is_child = 0`. The SDK shows the same fact as `useAuth().user.isChild`; gate the UI on it, enforce here. A public (`requires_auth: false`) query cannot reference it. |
 | `:__now` | current time, ms since epoch. |
-| `:__uuid` | a fresh UUID (use for inserting primary keys). |
+| `:__uuid` | a fresh UUID at every occurrence (use for inserting primary keys that need not match anything else). |
+| `:__call_uuid` | one UUID per action call, the same value at every occurrence and in every statement of a batch. Use it for an id that must correlate rows written by one call (a row and its linked notification). |
 | `:__verify_<output>` | on a `verify` tool's `statements` only: an output of the verifier (`:__verify_over`, `:__verify_result`, …). Never accepted from the client. |
 
 ## Validation rules (enforced at register time)
@@ -455,8 +456,8 @@ additive-only lint checks keywords in code, never inside string literals.
 that updates or deletes is refused by the deploy lint (an `AFTER UPDATE` event
 included), because the automated path is additive-only. Write the row and its
 index entry in the same atomic batch, scoped like any other statement. A
-correlated id must be a client-supplied param, because `:__uuid` is generated
-separately for each statement.
+correlated id is `:__call_uuid` (or a client-supplied param), because `:__uuid`
+is generated separately for each occurrence.
 
 ```json
 [
