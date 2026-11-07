@@ -239,6 +239,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/provision-data.ts': hist('INSERT apps.creator_id at provisioning; dev_profiles seed'),
   'packages/backend/src/lib/provision-operation.ts': prov('creator_id on the provisioning receipt'),
   'packages/backend/src/lib/visibility.ts': live('private-app visibility keyed on creator_id'),
+  'packages/backend/src/index.ts': live('error handler: the app owner (requireAppOwner) also sees a tenant fault database error text; display only, grants nothing (#561)'),
   'packages/backend/src/routes/actions.ts': live('callerIsAppTeam: team access to staged actions'),
   'packages/backend/src/routes/alerts.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/analytics-stats-routes.ts': live(OWNER_ONLY),
