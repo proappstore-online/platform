@@ -441,7 +441,7 @@ describe("canonical deploy workflow — single source of truth", () => {
       expect(job).toContain('["results.json","test-results/results.json"]');
       // The job is still skipped without a suite, and still fails the run when the suite fails.
       expect(job).toContain("if: needs.deploy.outputs.has_e2e == 'true'");
-      expect(job).toContain("if: steps.e2e.outcome != 'success'");
+      expect(job).toContain("if: steps.mint.outputs.skip != 'true' && steps.e2e.outcome != 'success'");
       expect(job).not.toMatch(/working-directory: e2e\n/);
     });
   });

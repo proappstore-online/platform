@@ -53,8 +53,9 @@ no real data, no billing, never `admin`; the `E2E_TEST_PRINCIPAL` setting on the
 Worker names it). The deploy pipeline's e2e job has `id-token: write`, mints the
 session in its **Mint the e2e session** step and passes it to Playwright as
 `E2E_SESSION_TOKEN` — no secret to store, no manual admin step. If the repo has no
-grant, that step **fails the job** with "this repo has no oidc-session grant"; signed-in
-specs are never silently skipped in CI. The provisioning step is non-fatal but red
+grant, that step **skips the E2E run** with a `::notice::` ("E2E skipped: this repo has no
+oidc-session grant") so the pipeline is not permanently red (#564); the signed-in specs do not
+run until a grant exists. Any other exchange failure still fails the job. The provisioning step is non-fatal but red
 (`OIDC test login`) when the test account does not exist or is disabled: there is no
 fallback account, and no grant is created. Apps provisioned before #462 have no automatic
 grant; an admin creates one as below. `PAS_E2E_SESSION_TOKEN` stays only as a documented

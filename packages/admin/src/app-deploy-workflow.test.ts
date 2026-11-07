@@ -177,17 +177,19 @@ esac
       writeFileSync(join(dir, 'step.sh'), script());
       const githubEnv = join(dir, 'github_env');
       writeFileSync(githubEnv, '');
+      const githubOutput = join(dir, 'github_output');
+      writeFileSync(githubOutput, '');
       const r = spawnSync('bash', [join(dir, 'step.sh')], {
         encoding: 'utf8',
         env: {
-          PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ENV: githubEnv,
+          PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_ENV: githubEnv, GITHUB_OUTPUT: githubOutput,
           ACTIONS_ID_TOKEN_REQUEST_URL: 'https://token.invalid/?x=1', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request-token',
           FAKE_OIDC: '{"value":"oidc-jwt"}', FAKE_CODE: '200', FAKE_BODY: '{"sessionToken":"sess-123"}',
           ...env,
         },
       });
       const calls = (() => { try { return readFileSync(join(dir, 'curl.log'), 'utf8'); } catch { return ''; } })();
-      return { code: r.status, out: r.stdout + r.stderr, githubEnv: readFileSync(githubEnv, 'utf8'), calls };
+      return { code: r.status, out: r.stdout + r.stderr, githubEnv: readFileSync(githubEnv, 'utf8'), githubOutput: readFileSync(githubOutput, 'utf8'), calls };
     }
 
     it('exports E2E_SESSION_TOKEN (masked first) when the exchange succeeds', () => {
@@ -200,12 +202,19 @@ esac
       expect(r.calls).toContain('Authorization: Bearer oidc-jwt');
     });
 
-    it('fails loudly, saying the repo has no oidc-session grant, on a 403', () => {
+    it('skips cleanly with a notice, saying the repo has no oidc-session grant, on a 403 (#564)', () => {
       const r = run({ FAKE_CODE: '403', FAKE_BODY: '{"error":"no e2e session grant for proappstore-online/x"}' });
-      expect(r.code).toBe(1);
-      expect(r.out).toContain('::error::this repo has no oidc-session grant (HTTP 403: no e2e session grant for proappstore-online/x)');
+      expect(r.code).toBe(0);
+      expect(r.out).toContain('::notice::E2E skipped: this repo has no oidc-session grant (HTTP 403: no e2e session grant for proappstore-online/x)');
       expect(r.out).toContain('PAS_E2E_SESSION_TOKEN');
+      expect(r.githubOutput).toBe('skip=true\n');
       expect(r.githubEnv).toBe('');
+    });
+
+    it('every step after the mint that runs or judges E2E is skipped when the mint skipped (#564)', () => {
+      for (const name of ['Run E2E', 'Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)', 'Fail the run if E2E failed (bounces the ticket to Dev)']) {
+        expect(step(name), name).toContain("steps.mint.outputs.skip != 'true'");
+      }
     });
 
     it('fails loudly on any other exchange failure, with the status', () => {

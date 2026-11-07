@@ -593,8 +593,9 @@ jobs:
   # e2e session" step exchanges this job's OIDC token (id-token: write, no stored
   # credential) for a session of the platform's e2e test account and hands it to
   # Playwright as E2E_SESSION_TOKEN. Provisioning creates the grant it needs (#462);
-  # a repo without one FAILS the job loudly rather than skipping its signed-in
-  # specs. PAS_E2E_SESSION_TOKEN remains a documented fallback: when that secret is
+  # a repo without one skips the E2E run with a notice (#564), so a missing grant does not
+  # leave the pipeline permanently red; any other exchange failure still fails the job.
+  # PAS_E2E_SESSION_TOKEN remains a documented fallback: when that secret is
   # set it is used as-is and no exchange is made.
   e2e:
     needs: [router, deploy]
@@ -617,6 +618,7 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - name: Mint the e2e session (keyless — GitHub OIDC → platform session grant)
+        id: mint
         env:
           PAS_E2E_SESSION_TOKEN: ${{ secrets.PAS_E2E_SESSION_TOKEN }}
         run: |
@@ -647,19 +649,21 @@ jobs:
           fi
           REASON=$(field error < "$BODY")
           if [ "$CODE" = "403" ]; then
-            echo "::error::this repo has no oidc-session grant (HTTP 403: ${REASON:-refused}). New apps get one when they are provisioned; for an older app ask a platform admin to create one, or set the PAS_E2E_SESSION_TOKEN secret as a fallback. See docs/publishing-flow.md#keyless-e2e-sessions."
-          else
-            echo "::error::the e2e session exchange failed (HTTP $CODE): ${REASON:-no error body}"
+            echo "::notice::E2E skipped: this repo has no oidc-session grant (HTTP 403: ${REASON:-refused}). New apps get one when they are provisioned; for an older app ask a platform admin to create one, or set the PAS_E2E_SESSION_TOKEN secret as a fallback. See docs/publishing-flow.md#keyless-e2e-sessions."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "::error::the e2e session exchange failed (HTTP $CODE): ${REASON:-no error body}"
           exit 1
       - name: Run E2E
         id: e2e
+        if: steps.mint.outputs.skip != 'true'
         continue-on-error: true
         env:
           E2E_BASE_URL: https://${{ github.event.repository.name }}.proappstore.online
         run: npx playwright test
       - name: Publish test results (kb.proappstore.online/<app>/.e2e/summary.json)
-        if: always()
+        if: always() && steps.mint.outputs.skip != 'true'
         env:
           APP: ${{ github.event.repository.name }}
         run: |
@@ -685,5 +689,5 @@ jobs:
             echo "skipped results upload (ingest rejected the write)"
           fi
       - name: Fail the run if E2E failed (bounces the ticket to Dev)
-        if: steps.e2e.outcome != 'success'
+        if: steps.mint.outputs.skip != 'true' && steps.e2e.outcome != 'success'
         run: echo "::error::E2E tests failed — see the results above" && exit 1
