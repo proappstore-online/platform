@@ -52,6 +52,20 @@ describe('personalDataExposure (#426)', () => {
     expect(personalDataExposure('INSERT INTO t (email) VALUES (:email)').columns).toEqual([]);
   });
 
+  it('allows the non-personal location_type and work_mode, including inside an expression (#560)', () => {
+    expect(personalDataExposure('SELECT l.location_type, COUNT(*) AS n FROM leads l GROUP BY l.location_type').columns).toEqual([]);
+    expect(personalDataExposure("SELECT CASE l.location_type WHEN 'remote' THEN 'remote' ELSE 'onsite' END AS work_mode FROM leads l").columns).toEqual([]);
+    expect(personalDataExposure('SELECT work_mode, COUNT(*) AS n FROM leads GROUP BY work_mode').columns).toEqual([]);
+  });
+
+  it('still flags real places and contact details, also next to an allowed name or in an expression (#560)', () => {
+    expect(personalDataExposure('SELECT l.location FROM leads l').columns).toEqual(['location']);
+    expect(personalDataExposure('SELECT location_label, suburb_location FROM leads').columns).toEqual(['location_label', 'suburb_location']);
+    expect(personalDataExposure('SELECT location_type, email FROM leads').columns).toEqual(['email']);
+    expect(personalDataExposure("SELECT CASE l.location_type WHEN 'remote' THEN l.address END AS work_mode FROM leads l").columns).toEqual(['address']);
+    expect(personalDataExposure('SELECT lower(email) AS e FROM users').columns).toEqual(['email']);
+  });
+
   it('a sub-select is checked as its own output list', () => {
     expect(personalDataExposure('SELECT id, (SELECT email FROM users WHERE users.id = t.owner) AS who FROM t').columns).toEqual(['email']);
   });
