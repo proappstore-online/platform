@@ -119,14 +119,16 @@ string, a comment, a quoted name or a clause is not a statement.
 | `INSERT [OR IGNORE\|ABORT\|FAIL\|ROLLBACK] INTO … VALUES / SELECT`, `WITH … INSERT`, `ON CONFLICT DO NOTHING` | allowed |
 | `ON DELETE …`, `ON UPDATE …` in foreign keys; `BEFORE/AFTER UPDATE [OF]` and `DELETE` trigger events | allowed (clauses, not statements) |
 | `INSERT/UPDATE/DELETE` in a trigger body | allowed with a **warning** (it runs only on future writes); platform guidance still discourages triggers |
-| `DROP`, `DELETE`, `UPDATE`, `REPLACE`, `INSERT OR REPLACE`, `ON CONFLICT DO UPDATE`, `ALTER … RENAME`, `ALTER … DROP COLUMN`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, anything else | refused |
+| `UPDATE t SET new_col = … WHERE new_col IS NULL`, for columns that an `ALTER TABLE t ADD COLUMN` earlier in the **same migration** added (#563) | allowed: a backfill that rewrites no existing data and is a no-op when re-run |
+| `DROP`, `DELETE`, any other `UPDATE`, `REPLACE`, `INSERT OR REPLACE`, `ON CONFLICT DO UPDATE`, `ALTER … RENAME`, `ALTER … DROP COLUMN`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, anything else | refused |
 | SQL that does not tokenize or balance | refused, naming the line and column |
 
 A refusal names the rule (`no-drop`, `no-update`, `not-null-needs-default`,
 `syntax`, …) and quotes the whole statement. A trigger ends at the `END;` that
 follows a `;`, as `sqlite3_complete` decides, so a `CASE … END` inside its body
-is no longer taken for the end of the trigger. A data backfill (`UPDATE … SET`)
-is still refused; do it from the app's own batch action or as an owner repair.
+is no longer taken for the end of the trigger. A backfill of a column the same
+migration adds is allowed (`UPDATE t SET c = … WHERE c IS NULL`). Any other `UPDATE` is
+still refused; do it from the app's own batch action or as an owner repair.
 
 ## Do Not
 

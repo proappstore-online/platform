@@ -85,6 +85,30 @@ describe('warns on DML inside a trigger body, naming the trigger', () => {
   });
 });
 
+describe('backfill of a column added in the same migration (#563)', () => {
+  const add = 'ALTER TABLE leads ADD COLUMN work_mode TEXT;\n';
+  it('allows UPDATE t SET new_col = … WHERE new_col IS NULL', () => {
+    ok(add + "UPDATE leads SET work_mode = CASE location_type WHEN 'remote' THEN 'remote' ELSE 'onsite' END WHERE work_mode IS NULL;");
+    ok('ALTER TABLE leads ADD a TEXT; ALTER TABLE leads ADD b TEXT;\nUPDATE leads SET a = lower(x), b = (SELECT 1) WHERE a IS NULL AND b IS NULL AND x IS NOT NULL;');
+    ok('ALTER TABLE "Leads" ADD COLUMN "Mode" TEXT; UPDATE leads SET mode = 1 WHERE leads.mode IS NULL');
+  });
+
+  it('refuses it on an existing column, another table, an unguarded or unsafe form', () => {
+    refused(add + "UPDATE leads SET title = 'x' WHERE title IS NULL", 'no-update');
+    refused(add + "UPDATE other SET work_mode = 'x' WHERE work_mode IS NULL", 'no-update');
+    refused(add + "UPDATE leads SET work_mode = 'x'", 'no-update');
+    refused(add + "UPDATE leads SET work_mode = 'x' WHERE id = 1", 'no-update');
+    refused(add + "UPDATE leads SET work_mode = 'x', title = 'y' WHERE work_mode IS NULL", 'no-update');
+    refused(add + "UPDATE OR REPLACE leads SET work_mode = 'x' WHERE work_mode IS NULL", 'no-update');
+    refused(add + "UPDATE leads SET work_mode = 'x' FROM t WHERE work_mode IS NULL", 'no-update');
+  });
+
+  it('does not carry over from an earlier migration, nor from after the UPDATE', () => {
+    refused("UPDATE leads SET work_mode = 'x' WHERE work_mode IS NULL", 'no-update');
+    refused("UPDATE leads SET work_mode = 'x' WHERE work_mode IS NULL; ALTER TABLE leads ADD COLUMN work_mode TEXT", 'no-update');
+  });
+});
+
 describe('rejects, naming the rule and quoting the whole statement (#455)', () => {
   it.each<[string, string]>([
     ['DROP TABLE x', 'no-drop'],

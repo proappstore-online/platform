@@ -219,8 +219,66 @@ function checkTrigger(stmt: SqlStatement, warnings: string[]): MigrationLintErro
   return null;
 }
 
+/** An identifier token's name, unquoted and lower-cased (SQLite names are case-insensitive). */
+function nameOf(tok: SqlToken | undefined): string {
+  return (tok?.text ?? '').replace(/^["`[]|["`\]]$/g, '').toLowerCase();
+}
+
+/** Columns added so far by this migration's ALTER TABLE … ADD [COLUMN], by lower-cased table. */
+type AddedColumns = Map<string, Set<string>>;
+
+/** Remember the table and column of an already-validated `ALTER TABLE [schema.]t ADD [COLUMN] c …`. */
+function recordAdded(stmt: SqlStatement, added: AddedColumns): void {
+  const t = stmt.tokens;
+  const qualified = t[3]?.text === '.';
+  let j = qualified ? 5 : 3;
+  if (w(t[j]) !== 'ADD') return;
+  j++;
+  if (w(t[j]) === 'COLUMN') j++;
+  if (qualified) return; // a backfill names the bare table, so a schema-qualified add is never matched
+  const table = nameOf(t[2]);
+  added.set(table, (added.get(table) ?? new Set()).add(nameOf(t[j])));
+}
+
+/**
+ * The one UPDATE the deploy path allows (#563): a backfill of a column this same migration added,
+ * `UPDATE t SET c = expr [, c2 = expr] WHERE c IS NULL [AND …]`. It rewrites no existing data (the column is new)
+ * and re-running it is a no-op. Every SET column must be newly added to `t` and guarded by `c IS NULL`.
+ */
+function checkBackfill(stmt: SqlStatement, added: AddedColumns): MigrationLintError | null {
+  const t = stmt.tokens;
+  const deny = (why: string) => refuse(stmt, 'no-update', `UPDATE rewrites rows; the deploy path is additive. A backfill is allowed only as UPDATE <table> SET <new_col> = … WHERE <new_col> IS NULL, for columns added by ALTER TABLE in this same migration (${why}).`);
+  if (t[2]?.text === '.') return deny('schema-qualified table');
+  const table = nameOf(t[1]);
+  const fresh = added.get(table);
+  if (!fresh) return deny(`no column was added to ${t[1]?.text ?? 'the table'} earlier in this migration`);
+  if (w(t[2]) !== 'SET') return deny('expected SET after the table name');
+  const where = atDepth0(t, 3, (x) => x.kind === 'word' && x.upper === 'WHERE');
+  if (where < 0) return deny('missing WHERE');
+  if (atDepth0(t, 3, (x) => x.kind === 'word' && (x.upper === 'FROM' || x.upper === 'RETURNING')) >= 0) return deny('FROM and RETURNING are not allowed');
+  // SET assignments: `col = expr` separated by depth-0 commas.
+  const cols: string[] = [];
+  let i = 3;
+  while (i < where) {
+    if (w(t[i]) === 'OR' || t[i]?.text === '(') return deny('a column list or conflict clause is not allowed');
+    cols.push(nameOf(t[i]));
+    if (t[i + 1]?.text !== '=') return deny('expected col = expr');
+    const comma = atDepth0(t, i + 2, (x) => x.kind === 'punct' && x.text === ',');
+    i = comma < 0 || comma > where ? where : comma + 1;
+  }
+  for (const c of cols) {
+    if (!fresh.has(c)) return deny(`${c} was not added in this migration`);
+    let guarded = false;
+    for (let k = where + 1; k + 2 < t.length; k++) {
+      if (nameOf(t[k]) === c && w(t[k + 1]) === 'IS' && w(t[k + 2]) === 'NULL') guarded = true;
+    }
+    if (!guarded) return deny(`WHERE must include ${c} IS NULL`);
+  }
+  return null;
+}
+
 /** Classify one statement. */
-function lintStatement(stmt: SqlStatement, warnings: string[]): MigrationLintError | null {
+function lintStatement(stmt: SqlStatement, warnings: string[], added: AddedColumns): MigrationLintError | null {
   const t = stmt.tokens;
   if (!t.length) return null; // a comment-only fragment runs nothing
   const bad = structure(stmt);
@@ -240,8 +298,13 @@ function lintStatement(stmt: SqlStatement, warnings: string[]): MigrationLintErr
       if (kind === 'VIRTUAL' && j === 1 && w(t[2]) === 'TABLE') return checkVirtualTable(stmt);
       return refuse(stmt, 'not-additive', `CREATE ${t[j]?.text ?? ''} is not allowed; the deploy path adds TABLE, INDEX, VIEW, TRIGGER and fts5 virtual tables.`);
     }
-    case 'ALTER':
-      return checkAlter(stmt);
+    case 'ALTER': {
+      const error = checkAlter(stmt);
+      if (!error) recordAdded(stmt, added);
+      return error;
+    }
+    case 'UPDATE':
+      return checkBackfill(stmt, added);
     case 'INSERT':
       return checkInsert(stmt, 0);
     case 'WITH': {
@@ -261,8 +324,9 @@ function lintStatement(stmt: SqlStatement, warnings: string[]): MigrationLintErr
 /** The first refused statement (full text, named rule) and the warnings for what is allowed. */
 export function lintMigration(sql: string): MigrationLint {
   const warnings: string[] = [];
+  const added: AddedColumns = new Map();
   for (const stmt of parseStatements(sql)) {
-    const error = lintStatement(stmt, warnings);
+    const error = lintStatement(stmt, warnings, added);
     if (error) return { error, warnings };
   }
   return { error: null, warnings };
