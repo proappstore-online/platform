@@ -57,7 +57,7 @@ export const PERSONAL_DATA_COLUMN_PARTS: readonly string[] = [
  * (onsite / hybrid / remote), not a place (#560). Whole names only; `location`, `location_label` and the
  * like stay flagged. Add a name here only when its values are a closed non-personal set.
  */
-export const NOT_PERSONAL_COLUMNS: readonly string[] = ['location_type', 'work_mode'];
+const NOT_PERSONAL_COLUMNS: readonly string[] = ['location_type', 'work_mode'];
 const NOT_PERSONAL_SUFFIXES = ['_id', '_ids', '_count', '_verified', '_at'];
 
 /** The statements an action runs, as the platform executes them. */
