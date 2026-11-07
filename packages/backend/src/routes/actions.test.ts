@@ -581,6 +581,32 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
     expect(noFetch).not.toHaveBeenCalled();
   });
 
+  it('a tenant fault shows the database error text to the app owner only, never to a non-owner or an anonymous caller (#561)', async () => {
+    const detail = 'LIKE or GLOB pattern too complex: SQLITE_ERROR';
+    const upstream = () => new Response('{}', { status: 500, headers: { 'X-PAS-Fault': 'tenant', 'X-PAS-Fault-Detail': detail } });
+    const dbFor = () => {
+      const prepare = vi.fn((sql: string) => stmt({
+        first: sql.includes('manifest') ? { manifest: claim() } : sql.includes('creator_id') ? { creator_id: 'gh:1' } : null,
+      }));
+      return { prepare } as unknown as D1Database;
+    };
+    const run = (token: string | null) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(upstream()));
+      return app.request(
+        '/v1/apps/chess/actions/claim_game_over',
+        { method: 'POST', headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' }, body: JSON.stringify({ params: { game_id: 'g1' } }) },
+        env(dbFor()),
+      );
+    };
+    const owner = await run(TOK);
+    expect(owner.status).toBe(500);
+    expect(await owner.json()).toMatchObject({ error: 'data worker returned 500 (tenant fault)', detail });
+    const other = await run(MANAGER_TOK);
+    expect(await other.json()).not.toHaveProperty('detail');
+    const anon = await run(null);
+    expect(JSON.stringify(await anon.json())).not.toContain('LIKE');
+  });
+
   it('a stored manifest naming a verifier that no longer exists is a 500, before any upstream call', async () => {
     const noFetch = vi.fn();
     vi.stubGlobal('fetch', noFetch);

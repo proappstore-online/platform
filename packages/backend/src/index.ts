@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
-import { HttpError, optionalUser } from './lib/auth.js';
+import { HttpError, optionalUser, requireAppOwner } from './lib/auth.js';
 import { checkSessionKeyDrift } from './lib/session-key-drift.js';
 import { recordServerError } from './lib/error-telemetry.js';
 import { requestTrace, safeErrorCode, TRACE_ID_HEADER } from './lib/log-ingest.js';
@@ -230,6 +230,14 @@ app.onError(async (err, c) => {
     : { error: 'Internal server error', errorCode, traceId };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
+
+  // #561: the app owner (and only a signed-in owner or team admin) gets the database's own error text for a tenant fault, so an
+  // author is not left bisecting. Anyone else, anonymous callers included, still gets the generic body. The text is bounded SQLite
+  // wording from the data worker (no row data, no param values).
+  const faultAppId = c.req.param('appId');
+  if (dataFailure?.detail && faultAppId && (await requireAppOwner(c, faultAppId).then(() => true, () => false))) {
+    (body as Record<string, unknown>).detail = dataFailure.detail;
+  }
 
   // Make server failures countable, not just greppable (ADR-008 §1). Only 5xx:
   // a 4xx is an expected outcome, and indexing those would bury real faults.
