@@ -268,7 +268,7 @@ import { ProProfilePage } from '@proappstore/sdk/ui'
 | `app` | `ProAppStore` | - | SDK instance |
 | `showThemeToggle` | `boolean` | `true` | Show theme selector |
 
-Shows: avatar + username with PRO badge, subscription status (active/free with upgrade CTA), billing management button, theme preference (system/light/dark), sign out, danger zone with account deletion.
+Shows: avatar + username with PRO badge, subscription status (active or free; no upgrade prompt, apps never sell the subscription in-app), billing management button, theme preference (system/light/dark), sign out, danger zone with account deletion.
 
 <a id="proshell"></a>
 

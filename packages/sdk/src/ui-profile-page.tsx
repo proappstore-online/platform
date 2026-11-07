@@ -20,7 +20,7 @@ export interface ProProfilePageProps {
 /** Full-page profile/settings with subscription info, billing, theme, danger zone. */
 export function ProProfilePage({ app, showThemeToggle = true, providers }: ProProfilePageProps) {
   const { user, loading, signOut, deleteAccount } = useAuth(app);
-  const { subscription, isPro, loading: subLoading, upgrade } = useSubscription(app);
+  const { subscription, isPro, loading: subLoading } = useSubscription(app);
   const { preference, setPreference } = useTheme();
 
   if (loading) {
@@ -87,19 +87,7 @@ export function ProProfilePage({ app, showThemeToggle = true, providers }: ProPr
           </div>
         ) : (
           <div>
-            <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
-              You're on the free plan. Upgrade to unlock all premium features.
-            </p>
-            <button
-              onClick={() => upgrade()}
-              style={{
-                background: 'var(--accent)', color: '#fff', border: 'none',
-                padding: '0.6rem 1.25rem', borderRadius: 'var(--radius, 0.75rem)',
-                fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              Upgrade to Pro — $5/mo
-            </button>
+            <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>You're on the free plan.</p>
           </div>
         )}
       </Section>
