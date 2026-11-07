@@ -49,7 +49,7 @@ const RECIPES = new Set(
 const MANIFEST_SRC = ['routes/tools.ts', 'lib/manifest/tool.ts', 'routes/actions.ts'].map((f) => readFileSync(join(ROOT, 'packages/backend/src', f), 'utf8')).join('');
 /** Manifest keys the skill may name (top-level, `auth.*`, and per-param). */
 const MANIFEST_KEY_RE = /`(?:auth\.)?(requires_auth|app_roles|platform_roles|caller_unscoped|required|statements|operation|params|optional|default|max|type|description|name|sql|reason)`/g;
-const MAGIC = new Set([...MANIFEST_SRC.matchAll(/__(?:user_id|now|uuid)\b/g)].map((m) => `:${m[0]}`));
+const MAGIC = new Set([...MANIFEST_SRC.matchAll(/__(?:user_id|now|call_uuid|uuid)\b/g)].map((m) => `:${m[0]}`));
 const standard = JSON.parse(readFileSync(join(ROOT, 'docs/standard/standard.json'), 'utf8')) as { clauses: Array<{ id: string; chapter: string; status: string; url: string }> };
 const CLAUSES = new Map(standard.clauses.map((c) => [c.id, c]));
 
