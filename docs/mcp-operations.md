@@ -38,8 +38,7 @@ generic `constraint_violation`. Document the codes your app uses for your own UI
 For a 500 tenant fault (the app's own SQL or trigger failing, for example `no such column`), the response is still the
 generic safe 500 with a trace id. The SQLite text (one line, printable ASCII, at most 200 characters) is added to the
 owner-visible operation log row for that request, found by the trace id with `GET /v1/apps/:appId/logs`. It is sent only
-over the platform's trusted hop to the data worker, never to an anonymous or non-owner caller. When the caller is signed in
-as the app's owner (or a platform admin), the same text is also returned in the response body as `detail` (#561). SQLite does not say which statement of a batch
+over the platform's trusted hop to the data worker, never in a response. SQLite does not say which statement of a batch
 or which trigger failed, so the log shows the error text, not a statement index.
 
 The owner does not have to read the log by hand: the MCP tool `get_action_trace(app_id, trace_id)` takes the `traceId` from the
