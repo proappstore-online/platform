@@ -166,7 +166,8 @@ function platformReturnToAllowed(u: URL): boolean {
 }
 
 /** Apex domains of first-party PAS surfaces. */
-const FIRST_PARTY_APEXES = new Set(['proappstore.online', 'proideastore.online']);
+// proideastore.online is deliberately absent (#567): ProIdeaStore is a separate product outside PAS's trust boundary.
+const FIRST_PARTY_APEXES = new Set(['proappstore.online']);
 /** Reserved subdomains that are first-party platform SPAs (NOT creator-controlled apps). */
 const FIRST_PARTY_SUBDOMAINS = new Set(['console', 'dashboard', 'admin', 'agents']);
 

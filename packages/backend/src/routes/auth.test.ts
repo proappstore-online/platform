@@ -12,7 +12,6 @@ describe('isFirstPartyHost (#56 platform-role gate)', () => {
     for (const h of [
       'proappstore.online', 'console.proappstore.online', 'dashboard.proappstore.online',
       'admin.proappstore.online', 'agents.proappstore.online',
-      'proideastore.online', 'console.proideastore.online',
       'localhost', '127.0.0.1',
     ]) {
       expect(isFirstPartyHost(h), h).toBe(true);
@@ -24,6 +23,8 @@ describe('isFirstPartyHost (#56 platform-role gate)', () => {
       'chess-academy.proappstore.online', 'interns.proappstore.online', 'evil.proappstore.online',
       'chessclubs.online', 'evil.com', 'attacker.co.uk',
       'proappstore.online.evil.com', 'notconsole.proappstore.online',
+      // #567: ProIdeaStore is a separate product, outside PAS's trust boundary.
+      'proideastore.online', 'console.proideastore.online', 'admin.proideastore.online', 'agents.proideastore.online',
     ]) {
       expect(isFirstPartyHost(h), h).toBe(false);
     }
@@ -1329,6 +1330,31 @@ describe('OAuth callback — issues a code, never a token in the query (#87, #11
     await callback('https://console.proappstore.online/cb', 'query', firstParty);
     const consoleClaims = JSON.parse((firstParty.inserts[0] as string[])[1]!) as { roles: string[] };
     expect(consoleClaims.roles).toContain('creator');
+  });
+
+  it('#567: a sign-in returning to proideastore.online redeems to exactly [user] with no first_party_session context, even for an admin', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    const res = await callback('https://proideastore.online/.pis/auth/callback', 'query', db, { ADMIN_GITHUB_IDS: 'gh:4242' });
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('Location')!).searchParams.get('code')).toBeTruthy();
+    const claims = JSON.parse(db.inserts[0]![1] as string) as { roles: string[]; cred?: unknown };
+    expect(claims.roles).toEqual(['user']);
+    expect(claims.cred).toBeUndefined();
+
+    // Control: the same admin on a real first-party surface keeps the elevated roles.
+    const firstParty = codeIssuingDb();
+    await callback('https://console.proappstore.online/cb', 'query', firstParty, { ADMIN_GITHUB_IDS: 'gh:4242' });
+    expect((JSON.parse(firstParty.inserts[0]![1] as string) as { roles: string[] }).roles).toEqual(['user', 'creator', 'admin']);
+  });
+
+  it('#567: *.proideastore.online hosts do not resolve as PAS apps', async () => {
+    stubGithub();
+    const db = codeIssuingDb();
+    await callback('https://someapp.proideastore.online/cb', 'query', db);
+    const claims = JSON.parse(db.inserts[0]![1] as string) as { roles: string[]; cred?: unknown };
+    expect(claims.roles).toEqual(['user']);
+    expect(claims.cred).toBeUndefined();
   });
 
   it('leaves the fragment flow alone — it was never the leak', async () => {
