@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, type ToolManifest } from './action-sql.js';
+import { batchPayload, prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, type ToolManifest } from './action-sql.js';
 
 const manifest: ToolManifest = {
   name: 'list_mine',
@@ -284,5 +284,15 @@ describe(':__user_is_child (#513)', () => {
     expect(referencesChildFlag({ ...guarded, sql: undefined, statements: ['SELECT 1', 'SELECT :__user_is_child'] })).toBe(true);
     expect(referencesChildFlag({ ...guarded, sql: 'SELECT :__user_id' })).toBe(false);
     expect(referencesChildFlag({ ...guarded, sql: 'SELECT :__user_is_children' })).toBe(false);
+  });
+});
+
+describe('batchPayload (#565)', () => {
+  const statements = [{ sql: 'INSERT INTO b VALUES (1)', params: [] }];
+  const manifest = { name: 'm', description: 'd', operation: 'batch', params: {}, requires_auth: true } as ToolManifest;
+
+  it('carries the budget designation only when the manifest declares one', () => {
+    expect(batchPayload(manifest, statements)).toEqual({ statements });
+    expect(batchPayload({ ...manifest, budget_statement_index: 0 }, statements)).toEqual({ statements, budget_statement_index: 0 });
   });
 });

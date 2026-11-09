@@ -47,6 +47,15 @@ describe('validateManifest', () => {
     expect(validateManifest(query({ requires_auth: false, sql: 'SELECT * FROM items LIMIT 10' }))).toBeNull();
   });
 
+  it('validates budget_statement_index (#565) on batch tools only', () => {
+    const batch = { operation: 'batch' as const, sql: undefined, statements: ['INSERT INTO b (k) VALUES (1)', 'DELETE FROM t WHERE id = 1'] };
+    expect(validateManifest(query({ ...batch, budget_statement_index: 1 }))).toBeNull();
+    for (const bad of [2, -1, 0.5]) {
+      expect(validateManifest(query({ ...batch, budget_statement_index: bad }))).toBe('budget_statement_index must be the index of one of the tool statements');
+    }
+    expect(validateManifest(query({ budget_statement_index: 0 }))).toBe('only batch tools may declare budget_statement_index');
+  });
+
   it('keeps batch tools on statements and caps them at 25', () => {
     expect(validateManifest(query({ operation: 'batch', sql: 'SELECT 1' }))).toBe('batch tools use statements, not sql');
     expect(validateManifest(query({ operation: 'batch', sql: undefined, statements: [] }))).toBe('batch tools require a non-empty statements array');

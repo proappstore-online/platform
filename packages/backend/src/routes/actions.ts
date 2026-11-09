@@ -9,6 +9,7 @@ import {
   actionCallers,
   MCP_VIA_HEADER,
   MCP_VIA_VALUE,
+  batchPayload,
   prepareActionBatch,
   prepareActionQuery,
   prepareVerifyInput,
@@ -210,7 +211,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       // Batch tools run all statements in ONE D1 transaction on the data
       // worker — multi-step flows can't be left half-applied.
       endpoint = 'batch';
-      payload = { statements: prepareActionBatch(manifest, input, userId, isChild) };
+      payload = batchPayload(manifest, prepareActionBatch(manifest, input, userId, isChild));
     } else {
       endpoint = manifest.operation === 'query' ? 'query' : 'execute';
       payload = prepareActionQuery(manifest, input, userId, isChild);

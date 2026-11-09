@@ -40,6 +40,10 @@ export interface ToolManifest {
    *  cascading deletes) can't be left half-applied by a mid-sequence failure.
    *  On a verify tool: the writes that run after a completed verification. */
   statements?: string[];
+  /** #565, batch tools: index into `statements` of the rate-limit counter write of a budgeted read. The data worker
+   *  reports that statement as `meta.changes: 0` and its physical write count as `meta.budget_changes`, so the read
+   *  does not look like a data change. The counter update itself stays one atomic statement in the same transaction. */
+  budget_statement_index?: number;
   /** Id of the platform-vetted verifier a verify tool runs (lib/verifiers). */
   verifier?: string;
   params: Record<string, ToolParam>;
@@ -160,6 +164,13 @@ export function prepareActionBatch(
   const now = Date.now();
   const call = { __call_uuid: crypto.randomUUID() };
   return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, call, isChild));
+}
+
+/** The data worker's /batch body for a batch tool: its statements, plus the #565 budget designation when it has one. */
+export function batchPayload(manifest: ToolManifest, statements: PreparedQuery[]): { statements: PreparedQuery[]; budget_statement_index?: number } {
+  return manifest.budget_statement_index === undefined
+    ? { statements }
+    : { statements, budget_statement_index: manifest.budget_statement_index };
 }
 
 /**

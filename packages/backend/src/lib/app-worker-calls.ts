@@ -119,6 +119,8 @@ export function recordWorkerCall(env: Pick<Env, 'APP_WORKER_CALLS'>, appId: stri
 interface PreparedCall {
   name: string;
   endpoint: 'query' | 'execute' | 'batch';
+  /** #565: the batch statement whose physical write count is reported as budget_changes. */
+  budgetIndex?: number | undefined;
   statements: { sql: string; params: unknown[] }[];
   /** The app role a caller-grant call ran under, for the success audit (#232). */
   role: string | null;
@@ -180,7 +182,7 @@ async function prepareWorkerCall(
       case 'execute':
         return { name, endpoint: manifest.operation, statements: [prepareActionQuery(manifest, input, userId, isChild)], role };
       case 'batch':
-        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, userId, isChild), role };
+        return { name, endpoint: 'batch', statements: prepareActionBatch(manifest, input, userId, isChild), budgetIndex: manifest.budget_statement_index, role };
       default:
         throw new WorkerCallError('Forbidden', `"${name}" is a ${manifest.operation} action, which workers cannot run`);
     }
@@ -217,7 +219,9 @@ export async function queryAsUser(env: Env, appId: string, name: string, params:
 /** Run one registered action as `system:worker`. Returns the data worker's answer (`rows`/`meta`, or `results` for a batch tool). */
 export async function workerActionCall(env: Env, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null): Promise<unknown> {
   const call = await prepareWorkerCall(env, appId, name, params, caller);
-  const payload = call.endpoint === 'batch' ? { statements: call.statements } : call.statements[0];
+  const payload = call.endpoint === 'batch'
+    ? { statements: call.statements, ...(call.budgetIndex === undefined ? {} : { budget_statement_index: call.budgetIndex }) }
+    : call.statements[0];
   const answer = await dataWorker(env, appId, call.endpoint, payload);
   await auditAsUser(env, appId, [call], caller);
   return answer;

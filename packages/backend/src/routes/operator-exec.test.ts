@@ -25,6 +25,7 @@ vi.mock('./actions.js', () => ({
 vi.mock('../lib/auth.js', async (orig) => ({ ...(await orig<typeof import('../lib/auth.js')>()), requireRecentAuth: m.requireRecentAuth }));
 vi.mock('../lib/action-sql.js', () => ({
   actionCallers: m.actionCallers,
+  batchPayload: (_manifest: unknown, statements: unknown) => ({ statements }),
   prepareActionBatch: m.prepareActionBatch,
   prepareActionQuery: m.prepareActionQuery,
 }));

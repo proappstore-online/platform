@@ -73,6 +73,13 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
   }
   if (tool.requires_auth !== true && tool.requires_auth !== false) return 'requires_auth must be explicitly true or false';
   if (tool.verifier !== undefined && tool.operation !== 'verify') return 'only verify tools may declare a verifier';
+  if (tool.budget_statement_index !== undefined) {
+    if (tool.operation !== 'batch') return 'only batch tools may declare budget_statement_index';
+    const count = Array.isArray(tool.statements) ? tool.statements.length : 0;
+    if (!Number.isInteger(tool.budget_statement_index) || tool.budget_statement_index < 0 || tool.budget_statement_index >= count) {
+      return 'budget_statement_index must be the index of one of the tool statements';
+    }
+  }
 
   // Every statement the tool will run, with the kind it is validated as.
   let checks: { sql: string; kind: 'query' | 'execute' }[];

@@ -433,6 +433,50 @@ describe("POST /batch", () => {
     expect(body.results).toHaveLength(1);
   });
 
+  describe("budgeted reads (#565)", () => {
+    const post = (db: ReturnType<typeof mockD1>, body: unknown) => app.request("/batch", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, makeEnv(db));
+    const STATEMENTS = [{ sql: "INSERT INTO budget (k) VALUES (?)", params: ["a"] }, { sql: "SELECT 1" }];
+    type Meta = { changes: number; budget_changes?: number };
+
+    it("reports an empty read as zero domain changes and the counter write as budget_changes", async () => {
+      const db = mockD1();
+      db.batch.mockResolvedValue([{ results: [], meta: { changes: 1, last_row_id: 7 } }, { results: [], meta: { changes: 0, last_row_id: 7 } }]);
+      const res = await post(db, { statements: STATEMENTS, budget_statement_index: 0 });
+      const { results } = await res.json() as { results: { rows: unknown[]; meta: Meta }[] };
+      expect(results[0]!.meta).toEqual({ changes: 0, budget_changes: 1, last_row_id: 7 });
+      expect(results[1]!.meta.changes).toBe(0);
+      expect(results[1]!.meta.budget_changes).toBeUndefined();
+      expect(db.batch).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the rows of a non-empty read on the designated statement", async () => {
+      const db = mockD1();
+      db.batch.mockResolvedValue([{ results: [{ id: 1 }], meta: { changes: 1, last_row_id: 7 } }]);
+      const res = await post(db, { statements: [STATEMENTS[0]], budget_statement_index: 0 });
+      const { results } = await res.json() as { results: { rows: unknown[]; meta: Meta }[] };
+      expect(results[0]!.rows).toEqual([{ id: 1 }]);
+      expect(results[0]!.meta).toMatchObject({ changes: 0, budget_changes: 1 });
+    });
+
+    it("leaves an ordinary batch's changes untouched", async () => {
+      const db = mockD1();
+      db.batch.mockResolvedValue([{ results: [], meta: { changes: 1, last_row_id: 7 } }]);
+      const res = await post(db, { statements: [STATEMENTS[0]] });
+      const { results } = await res.json() as { results: { meta: Meta }[] };
+      expect(results[0]!.meta).toEqual({ changes: 1, last_row_id: 7 });
+    });
+
+    it("rejects an index outside the statements", async () => {
+      for (const budget_statement_index of [2, -1, 0.5, "0"]) {
+        expect((await post(mockD1(), { statements: STATEMENTS, budget_statement_index })).status).toBe(400);
+      }
+    });
+  });
+
   it("rejects empty statements array", async () => {
     const res = await app.request("/batch", {
       method: "POST",

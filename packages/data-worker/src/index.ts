@@ -282,9 +282,14 @@ app.post('/execute', async (c) => {
 
 app.post('/batch', async (c) => {
   await authorize(c, 'developer');
-  const body = await c.req.json<{ statements: unknown[] }>();
+  const body = await c.req.json<{ statements: unknown[]; budget_statement_index?: unknown }>();
   if (!Array.isArray(body.statements) || body.statements.length === 0) {
     throw new HTTPException(400, { message: 'statements must be a non-empty array' });
+  }
+  // #565: the rate-limit counter write of a budgeted read. It stays in the one transaction; only its report changes.
+  const budgetIndex = body.budget_statement_index;
+  if (budgetIndex !== undefined && (!Number.isInteger(budgetIndex) || (budgetIndex as number) < 0 || (budgetIndex as number) >= body.statements.length)) {
+    throw new HTTPException(400, { message: 'budget_statement_index must be the index of one of the statements' });
   }
   const stmts = body.statements.map((raw) => {
     const { sql, params } = validateSql(raw);
@@ -293,9 +298,11 @@ app.post('/batch', async (c) => {
   });
   const results = await c.env.DB.batch(stmts);
   return c.json({
-    results: results.map((r) => ({
+    results: results.map((r, i) => ({
       rows: r.results,
-      meta: { changes: r.meta.changes, last_row_id: r.meta.last_row_id },
+      meta: i === budgetIndex
+        ? { changes: 0, budget_changes: r.meta.changes, last_row_id: r.meta.last_row_id }
+        : { changes: r.meta.changes, last_row_id: r.meta.last_row_id },
     })),
   });
 });

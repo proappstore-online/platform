@@ -7,7 +7,7 @@
  */
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
-import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
+import { actionCallers, batchPayload, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
@@ -130,7 +130,7 @@ async function runOperatorCall(
   try {
     endpoint = manifest.operation === 'batch' ? 'batch' : manifest.operation;
     payload = manifest.operation === 'batch'
-      ? { statements: prepareActionBatch(manifest, input, user.id) }
+      ? batchPayload(manifest, prepareActionBatch(manifest, input, user.id))
       : prepareActionQuery(manifest, input, user.id);
   } catch (e) {
     throw new HttpError(e instanceof Error ? e.message : String(e), 400);
