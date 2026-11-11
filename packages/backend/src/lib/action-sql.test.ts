@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { actionD1LimitError } from '@proappstore/compliance';
 import { batchPayload, prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, type ToolManifest } from './action-sql.js';
 
 const manifest: ToolManifest = {
@@ -294,5 +295,23 @@ describe('batchPayload (#565)', () => {
   it('carries the budget designation only when the manifest declares one', () => {
     expect(batchPayload(manifest, statements)).toEqual({ statements });
     expect(batchPayload({ ...manifest, budget_statement_index: 0 }, statements)).toEqual({ statements, budget_statement_index: 0 });
+  });
+});
+
+describe('D1 parameter count parity (#571)', () => {
+  // The registration lint (`@proappstore/compliance` lib/d1-limits.ts) counts bound parameters with its own copy of the
+  // executor's pattern. This pins the two together: the lint's 100 is exactly the number of values the executor binds.
+  const tricky = (n: number) => {
+    const fixed = ":a, :__user_id, :__now, ':a in a string' /* :a */";
+    const occurrences = 5; // `:a` ×3 (twice in a string or comment), `:__user_id`, `:__now`
+    return `SELECT ${fixed}, ${Array.from({ length: n - occurrences }, () => ':a').join(', ')} FROM t`;
+  };
+  const tool = (sql: string): ToolManifest => ({ name: 'q', description: 'q', operation: 'query', sql, params: { a: { type: 'string' } }, requires_auth: true });
+
+  it('binds exactly as many values as the lint counts, at the boundary', () => {
+    expect(prepareActionQuery(tool(tricky(100)), { a: 'x' }, 'u1').params).toHaveLength(100);
+    expect(actionD1LimitError(tool(tricky(100)))).toBeNull();
+    expect(prepareActionQuery(tool(tricky(101)), { a: 'x' }, 'u1').params).toHaveLength(101);
+    expect(actionD1LimitError(tool(tricky(101)))).toMatch(/binds 101 parameters/);
   });
 });

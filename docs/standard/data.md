@@ -4,7 +4,7 @@ description: "Application Standard requirements for app data, migrations, regist
 
 # Data, actions, and Workers
 
-**Standard version 1.12** · Chapter `DATA` · Part of the [Application Standard](./index.md)
+**Standard version 1.13** · Chapter `DATA` · Part of the [Application Standard](./index.md)
 
 **Scope.** D1 schema and migrations, registered actions, per-user/project/tenant row scoping, KV, counters, storage, rooms and Durable Objects, Workers and service bindings.
 
@@ -51,7 +51,7 @@ per action and per table. Every step cites its clause.
 2. **Parse `mcp.json`.** For each tool: `requires_auth` explicit and correct; `auth.app_roles` minimal; no `auth.platform_roles` on app features → [004](#pas-data-004). Every `:param` declared and typed, `max` on limits → [005](#pas-data-005). No `user_id`/`created_at`/`role` params standing in for the caller → [006](#pas-data-006).
 3. **Read every predicate.** Each statement of an authenticated tool restricts rows by `:__user_id` directly or through a membership sub-query; a client-supplied tenant id is never the only filter; `:__user_id` is not used tautologically → [007](#pas-data-007). Transitions and grants are guarded in SQL → [008](#pas-data-008).
 4. **Check the exemptions.** Every `caller_unscoped` returns an aggregate or shared catalogue, with a specific reason; search/export/stats are scoped → [012](#pas-data-012). Every public tool names its columns and has a literal `LIMIT ≤ 500` → [011](#pas-data-011).
-5. **Check shape.** Multi-step flows are `batch` → [009](#pas-data-009). Lists have a bounded `LIMIT` and explicit columns → [010](#pas-data-010). Creates are idempotent under retry → [018](#pas-data-018).
+5. **Check shape.** Multi-step flows are `batch` → [009](#pas-data-009). Lists have a bounded `LIMIT` and explicit columns → [010](#pas-data-010). Creates are idempotent under retry → [018](#pas-data-018). Every statement fits D1's per-statement limits → [023](#pas-data-023).
 6. **Check the code.** No `app.db.*` in user paths, no direct data-worker URLs, no app-owned Worker → [003](#pas-data-003), [014](#pas-data-014), [016](#pas-data-016). Failures surface → [021](#pas-data-021). Caches die with the session → [020](#pas-data-020).
 7. **Check the tests.** A cross-tenant negative test exists per scoped action → [022](#pas-data-022).
 
@@ -59,7 +59,7 @@ per action and per table. Every step cites its clause.
 
 | Statement | Kind |
 |---|---|
-| Migration lint (additive-only, `NOT NULL` needs `DEFAULT`), `_migrations` idempotency by name, schema coherence at registration, manifest validation (explicit auth, declared params, no DDL/semicolons, `WHERE` on writes, `:__user_id` or `caller_unscoped`, public-tool constraints, 500 tools, 25 statements), data-worker role gates, batch transactions, room caps | Automated enforcement by the platform — the clause names the mechanism |
+| Migration lint (additive-only, `NOT NULL` needs `DEFAULT`), `_migrations` idempotency by name, schema coherence at registration, manifest validation (explicit auth, declared params, no DDL/semicolons, `WHERE` on writes, `:__user_id` or `caller_unscoped`, public-tool constraints, 500 tools, 25 statements, D1's 100 bound parameters and 5 compound terms per statement), data-worker role gates, batch transactions, room caps | Automated enforcement by the platform — the clause names the mechanism |
 | Schema conventions, scoping idioms, idempotency, pagination, caching, failure handling, negative tests, service bindings, no app-owned Workers | Recommended conformity (`MUST`/`SHOULD`) |
 | KV, counters, storage, rooms, batch actions, public queries, tenant helpers | Optional capabilities — absent use is never a finding |
 
@@ -118,7 +118,7 @@ CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created TE
 
 ### PAS-DATA-002 — Schema changes are additive, named, ordered, never edited, and applied by the deploy {#pas-data-002}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/INDEX/VIEW/TRIGGER`, `ALTER TABLE … ADD`, `INSERT INTO`; rejected: `DROP`, `DELETE`, `UPDATE`, `RENAME`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `REPLACE`, and `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`); the data worker tracks applied names in `_migrations` · **Since:** 1.3
+**Severity:** High · **Verification:** Manual · **Enforcement:** automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, and a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · **Since:** 1.3
 
 **Rule.** `migrations.json` MUST be the only schema source: entries are appended with a new name, never edited once deployed, and contain only additive statements. Renames and removals MUST be done expand/contract (add the new column or table, migrate data through an action, stop reading the old one; drop nothing). The app MUST NOT run DDL at runtime from browser code except `app.db.migrate` mirroring the same file in local development.
 
@@ -873,3 +873,38 @@ web/src/**/*.test.ts: renders, formats dates — no test touches mcp.json
 **Tests.** CI runs the suite; removing a scoping predicate from any action makes a test fail.
 
 **Supporting links.** [App actions security — guard idioms](../app-actions-security.md#guard-idioms-the-sql-is-the-security-boundary), [Operations chapter](./ops.md), [PAS-DATA-007](#pas-data-007).
+
+### PAS-DATA-023 — Registered statements fit D1's per-statement limits {#pas-data-023}
+
+**Severity:** High · **Verification:** Automated · **Enforcement:** automated — registration (`PUT /v1/apps/:id/tools`) refuses a new or changed action whose `sql` or any `statements[]` entry binds more than 100 parameters or has more than 5 terms in one compound SELECT, and warns for one registered unchanged; compliance check *Actions fit D1 limits* (`mcp-d1-limits`, warn-only) · **Since:** 1.13
+
+**Rule.** Every statement of a registered action MUST bind at most **100** parameters, counting each `:name` occurrence (the executor binds every occurrence as its own `?`, magic params such as `:__user_id` included), and MUST have at most **5** terms in any one compound SELECT (`UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`). The app SHOULD run its registered statements against Miniflare's D1 in its tests.
+
+**Applicability.** Apps with registered actions.
+
+**Rationale.** D1 refuses these statements at parse time (`too many SQL variables`, `too many terms in compound SELECT`), so every call to such an action fails with a 500. Local SQLite (`node:sqlite`) allows 32,766 parameters and 500 terms, so contract and browser tests that use it pass. The limit applies to one compound chain: a chain inside parentheses (a subquery, a CTE body, an `IN (…)` list, a `WITH RECURSIVE` body) is counted on its own, so nested groups of up to 5 terms run any number of terms. Multi-row `VALUES` is not a compound and is not limited. Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live D1 refused 10 terms and ran 4.
+
+**Recommended implementation.** Bind a value used many times once, in a one-row derived table: `JOIN (SELECT :from AS d_from, :to AS d_to) p` and refer to `p.d_from`. Nest a long union in parenthesised groups of at most 5 terms. In the app's tests, apply `migrations.json` to Miniflare's D1 and run every registered statement with the executor's binding (`:name` → `?`), as [smsf's `tests/actions-d1.test.mjs`](https://github.com/proappstore-online/smsf/blob/main/tests/actions-d1.test.mjs) (a private org repo) does. That also catches the next D1-only difference.
+
+**Conforming example.**
+
+```sql
+SELECT * FROM (SELECT 'cash' AS k, SUM(cash) AS v FROM t WHERE owner = :__user_id UNION ALL SELECT 'shares', SUM(shares) FROM t WHERE owner = :__user_id)
+UNION ALL
+SELECT * FROM (SELECT 'super', SUM(super) FROM t WHERE owner = :__user_id UNION ALL SELECT 'debt', SUM(debt) FROM t WHERE owner = :__user_id)
+```
+
+**Non-conforming example.**
+
+```sql
+SELECT 'a', … UNION ALL SELECT 'b', … UNION ALL SELECT 'c', … UNION ALL SELECT 'd', … UNION ALL SELECT 'e', … UNION ALL SELECT 'f', …
+-- 6 terms in one chain: D1 answers "too many terms in compound SELECT" on every call
+```
+
+**Evidence.** Configuration: each statement in `mcp.json`; the `mcp-d1-limits` result of `pas check`; registration warnings in the deploy log.
+
+**Remediation.** Rewrite the statement with fewer bound occurrences or nested unions; add a Miniflare D1 test that runs it; deploy and confirm the registration warning is gone.
+
+**Tests.** The app's Miniflare D1 test runs every registered statement without a D1 error; `pas check` reports *Actions fit D1 limits* as passed.
+
+**Supporting links.** [MCP app tools — D1 limits](../mcp-app-tools.md#d1-limits), [PAS-DATA-005](#pas-data-005), [PAS-DATA-022](#pas-data-022).

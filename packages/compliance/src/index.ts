@@ -13,6 +13,7 @@ import { checkHtmlMeta } from './checks/html-meta.js';
 import { checkLicenseMit } from './checks/license-mit.js';
 import { checkManifest } from './checks/manifest.js';
 import { checkMaskableIcon } from './checks/pwa-maskable-icon.js';
+import { checkMcpD1Limits } from './checks/mcp-d1-limits.js';
 import { checkMcpUnscoped } from './checks/mcp-unscoped.js';
 import { checkNoBrandOverrides } from './checks/no-brand-overrides.js';
 import { checkNoEnvProduction } from './checks/no-env-production.js';
@@ -57,6 +58,8 @@ export {
   validateApprovals,
 } from './lib/unscoped-policy.js';
 export type { PersonalDataExposure, UnscopedApproval, UnscopedEvaluation, UnscopedPolicyTool } from './lib/unscoped-policy.js';
+// #571: D1's per-statement limits, shared with the platform's registration gate.
+export { actionD1LimitError } from './lib/d1-limits.js';
 export type { LiveAuditInput, LiveAuditReport } from './live/index.js';
 // Live-URL audit (used by the compliance audit Worker; runs in
 // browser/Workers env, no filesystem). Separate export path so callers
@@ -88,6 +91,7 @@ export {
   checkLicenseMit,
   checkManifest,
   checkMaskableIcon,
+  checkMcpD1Limits,
   checkMcpUnscoped,
   checkNoBrandOverrides,
   checkNoEnvProduction,
@@ -152,6 +156,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'claude-md-slim', run: checkClaudeMdSlim },
   { id: 'mcp-unscoped', run: checkMcpUnscoped },
   { id: 'caller-unscoped', run: checkCallerUnscoped },
+  { id: 'mcp-d1-limits', run: checkMcpD1Limits },
   { id: 'deploy-workflow', run: checkDeployWorkflow },
   { id: 'permissions', run: checkPermissions },
   { id: 'template-default-icon', run: checkTemplateDefaultIcon },

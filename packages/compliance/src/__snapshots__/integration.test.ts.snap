@@ -21,6 +21,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "mcp-d1-limits",
+    "citations": [
+      {
+        "clauseId": "PAS-DATA-023",
+        "url": "https://docs.proappstore.online/standard/data/#pas-data-023",
+      },
+    ],
+    "detail": "1 action(s) within 100 parameters and 5 compound terms per statement",
+    "evidence": {
+      "class": "configuration",
+      "detail": "1 action(s) within 100 parameters and 5 compound terms per statement",
+    },
+    "name": "Actions fit D1 limits",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "app-title",
     "citations": [
       {

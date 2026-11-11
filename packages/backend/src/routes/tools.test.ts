@@ -2118,6 +2118,66 @@ describe('caller_unscoped deny-by-default (#426)', () => {
   });
 });
 
+describe('D1 per-statement limits (#571)', () => {
+  /** A D1 whose app_tools read returns `registered` as the app's current code tools. */
+  const dbWith = (registered: Record<string, unknown>[] = []) => {
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }));
+    const fallback = db.prepare.getMockImplementation();
+    db.prepare.mockImplementation((sql: string) => (String(sql).startsWith('SELECT name, manifest, state FROM app_tools')
+      ? mockStmt({ all: { results: registered.map((t) => ({ name: t.name, manifest: JSON.stringify(t) })) } })
+      : fallback ? fallback(sql) : mockStmt()));
+    return db;
+  };
+  const put = async (tools: Record<string, unknown>[], registered: Record<string, unknown>[] = []) => {
+    const db = dbWith(registered);
+    const res = await app.request('/v1/apps/test-app/tools', {
+      method: 'PUT', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tools }),
+    }, makeEnv({}, db));
+    const inserted = db.prepare.mock.calls.some((c) => String(c[0]).startsWith('INSERT INTO app_tools'));
+    return { res, inserted, body: await res.json() as { error?: string; warnings?: string[] } };
+  };
+  const terms = (n: number) => Array.from({ length: n }, (_, i) => `SELECT ${i} AS k, COUNT(*) AS v FROM t WHERE user_id = :__user_id`).join(' UNION ALL ');
+  const report = (n: number) => ({ name: 'report', description: 'Totals', operation: 'query', requires_auth: true, sql: terms(n), params: {} });
+  /** A batch whose second statement binds `n` parameters (`:__user_id` once, `:v` the rest). */
+  const save = (n: number) => ({
+    name: 'save', description: 'Save', operation: 'batch', requires_auth: true, params: { v: { type: 'string' } },
+    statements: [
+      'INSERT INTO t (id, user_id) VALUES (:__uuid, :__user_id)',
+      `UPDATE t SET v = coalesce(${Array.from({ length: n - 1 }, () => ':v').join(', ')}) WHERE user_id = :__user_id`,
+    ],
+  });
+
+  it('registers 5 compound terms and 100 bound parameters', async () => {
+    const { res } = await put([report(5), save(100)]);
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses a new action with 6 compound terms, naming the limit and the fix, and writes nothing', async () => {
+    const { res, body, inserted } = await put([report(6)]);
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/^action "report" sql has a compound SELECT of 6 terms at one level; D1 allows at most 5 .*Nest the union in groups of at most 5/);
+    expect(inserted).toBe(false);
+  });
+
+  it('refuses a batch statement that binds 101 parameters', async () => {
+    const { res, body } = await put([save(101)]);
+    expect(res.status).toBe(400);
+    expect(body.error).toMatch(/^action "save" statements\[1\] binds 101 parameters; D1 allows at most 100 per statement/);
+  });
+
+  it('registers an action already registered with the same statements, with a warning', async () => {
+    const { res, body, inserted } = await put([{ ...report(6), description: 'Totals, reworded' }], [report(6)]);
+    expect(res.status).toBe(200);
+    expect(inserted).toBe(true);
+    expect(body.warnings).toContainEqual(expect.stringMatching(/^action "report" sql has a compound SELECT of 6 terms.*registered unchanged.*D1 refuses every call to it/));
+  });
+
+  it('refuses a registered action over the limit once its statements change', async () => {
+    const { res } = await put([report(7)], [report(6)]);
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('stagedStates (#428)', () => {
   const tool = (extra: Record<string, unknown> = {}) => ({ ...validTool, ...extra }) as never;
   const reg = (state: 'staged' | 'live', extra: Record<string, unknown> = {}) => new Map([['list_items', { manifest: tool(extra), state }]]);

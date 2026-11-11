@@ -8,6 +8,22 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.13
+
+D1's per-statement limits on registered actions (#571).
+
+- **Added** — PAS-DATA-023: every registered statement binds at most 100
+  parameters and has at most 5 terms in one compound SELECT, the limits D1
+  enforces and local SQLite does not. Registration refuses a new or changed
+  action over either and warns for one registered unchanged; the
+  `mcp-d1-limits` compliance check warns in `pas check`. Apps should run their
+  registered statements on Miniflare's D1 in tests.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — PAS-DATA-002's enforcement line lists every refusal of the
+  migration lint (upserts, `INSERT OR REPLACE`, `DROP COLUMN`, `TEMP` objects,
+  non-fts5 virtual tables, `_pas_*` writes) and the allowed backfill `UPDATE`.
+
 ## 1.12
 
 Intentional offline content and safe local work (#520–#524, [ADR-012](../adr/012-offline-content.md)).

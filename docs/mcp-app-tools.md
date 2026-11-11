@@ -322,6 +322,52 @@ These are injected by the platform — **do not** declare them in `params`:
 A manifest that violates any rule is rejected — the whole batch fails, so a bad
 tool never half-registers.
 
+### D1 limits
+
+D1 refuses two things local SQLite allows (`node:sqlite`: 32,766 parameters, 500
+compound terms), so an action that passes local tests can fail on every live call.
+Registration checks both for each `sql` and `statements[]` entry (#571,
+[PAS-DATA-023](./standard/data.md#pas-data-023)):
+
+| Limit | D1 error | Counted |
+|---|---|---|
+| **100 bound parameters** per statement | `too many SQL variables` | every `:name` occurrence, magic params included: the executor binds each one as its own `?`, so `:from` used 3 times counts 3 |
+| **5 terms** per compound SELECT | `too many terms in compound SELECT` | `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`, per chain. A chain inside parentheses (subquery, CTE body, `IN (…)`, `WITH RECURSIVE` body) counts on its own. Multi-row `VALUES` is not counted |
+
+Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live
+D1 refused 10 terms and ran 4.
+
+- A **new or changed** action over either limit is refused, naming the action,
+  the statement, the count and the limit.
+- An action **already registered with the same statements** still registers, with
+  a warning: D1 already refuses every call to it. Fix it on your next change.
+- `pas check` runs the same count as the `mcp-d1-limits` check (warn-only, since
+  it cannot see what is registered).
+
+To stay within them, bind a repeated value once in a one-row derived table
+(`JOIN (SELECT :from AS d_from, :to AS d_to) p`, then `p.d_from`), and nest a long
+union in groups of at most 5:
+`SELECT * FROM (a UNION ALL b UNION ALL c) UNION ALL SELECT * FROM (d UNION ALL e)`.
+
+Static checks cover the two known limits. To catch the next D1-only difference,
+run every registered statement on Miniflare's D1 in the app's tests: apply
+`migrations.json`, bind `:name` → `?` as the executor does, and run each
+statement. [smsf's `tests/actions-d1.test.mjs`](https://github.com/proappstore-online/smsf/blob/main/tests/actions-d1.test.mjs)
+(a private org repo) is a ~50-line example of the pattern.
+
+### Migrations are additive
+
+`migrations.json` is applied by the deploy before actions register, and its
+lint ([PAS-DATA-002](./standard/data.md#pas-data-002)) refuses anything that is
+not additive: `DROP` (`no-drop`), `DELETE`, `UPDATE` (except a backfill
+`UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added),
+`REPLACE` / `INSERT OR REPLACE`, an upsert's `DO UPDATE`, `ALTER … RENAME` /
+`DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`,
+`ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, virtual tables other
+than `fts5`, and writes to `_pas_*` tables. Change a shape by expand/contract:
+add the new column or table, move the data through an action, stop reading the
+old one.
+
 ## Scheduled actions
 
 An `execute` or atomic `batch` action can run unattended on the platform's

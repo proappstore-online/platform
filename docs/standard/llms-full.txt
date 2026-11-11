@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.12. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.13. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -2224,7 +2224,7 @@ Supporting links: [MCP app tools — magic placeholders](../mcp-app-tools.md#mag
 
 ### PAS-DATA-002 — Schema changes are additive, named, ordered, never edited, and applied by the deploy
 URL: https://docs.proappstore.online/standard/data/#pas-data-002
-Severity: high · Verification: manual (Manual) · Enforcement: automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/INDEX/VIEW/TRIGGER`, `ALTER TABLE … ADD`, `INSERT INTO`; rejected: `DROP`, `DELETE`, `UPDATE`, `RENAME`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `REPLACE`, and `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`); the data worker tracks applied names in `_migrations` · Since: 1.3
+Severity: high · Verification: manual (Manual) · Enforcement: automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, and a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · Since: 1.3
 
 Rule: `migrations.json` MUST be the only schema source: entries are appended with a new name, never edited once deployed, and contain only additive statements. Renames and removals MUST be done expand/contract (add the new column or table, migrate data through an action, stop reading the old one; drop nothing). The app MUST NOT run DDL at runtime from browser code except `app.db.migrate` mirroring the same file in local development.
 
@@ -3273,6 +3273,55 @@ Tests: CI runs the suite; removing a scoping predicate from any action makes a t
 *
 
 Supporting links: [App actions security — guard idioms](../app-actions-security.md#guard-idioms-the-sql-is-the-security-boundary), [Operations chapter](./ops.md), [PAS-DATA-007](#pas-data-007).
+
+### PAS-DATA-023 — Registered statements fit D1's per-statement limits
+URL: https://docs.proappstore.online/standard/data/#pas-data-023
+Severity: high · Verification: automated (Automated) · Enforcement: automated — registration (`PUT /v1/apps/:id/tools`) refuses a new or changed action whose `sql` or any `statements[]` entry binds more than 100 parameters or has more than 5 terms in one compound SELECT, and warns for one registered unchanged; compliance check *Actions fit D1 limits* (`mcp-d1-limits`, warn-only) · Since: 1.13
+
+Rule: Every statement of a registered action MUST bind at most **100** parameters, counting each `:name` occurrence (the executor binds every occurrence as its own `?`, magic params such as `:__user_id` included), and MUST have at most **5** terms in any one compound SELECT (`UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`). The app SHOULD run its registered statements against Miniflare's D1 in its tests.
+
+*
+
+Applicability: Apps with registered actions.
+
+*
+
+Rationale: D1 refuses these statements at parse time (`too many SQL variables`, `too many terms in compound SELECT`), so every call to such an action fails with a 500. Local SQLite (`node:sqlite`) allows 32,766 parameters and 500 terms, so contract and browser tests that use it pass. The limit applies to one compound chain: a chain inside parentheses (a subquery, a CTE body, an `IN (…)` list, a `WITH RECURSIVE` body) is counted on its own, so nested groups of up to 5 terms run any number of terms. Multi-row `VALUES` is not a compound and is not limited. Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live D1 refused 10 terms and ran 4.
+
+*
+
+Recommended implementation: Bind a value used many times once, in a one-row derived table: `JOIN (SELECT :from AS d_from, :to AS d_to) p` and refer to `p.d_from`. Nest a long union in parenthesised groups of at most 5 terms. In the app's tests, apply `migrations.json` to Miniflare's D1 and run every registered statement with the executor's binding (`:name` → `?`), as [smsf's `tests/actions-d1.test.mjs`](https://github.com/proappstore-online/smsf/blob/main/tests/actions-d1.test.mjs) (a private org repo) does. That also catches the next D1-only difference.
+
+*
+
+Conforming example: ```sql
+SELECT * FROM (SELECT 'cash' AS k, SUM(cash) AS v FROM t WHERE owner = :__user_id UNION ALL SELECT 'shares', SUM(shares) FROM t WHERE owner = :__user_id)
+UNION ALL
+SELECT * FROM (SELECT 'super', SUM(super) FROM t WHERE owner = :__user_id UNION ALL SELECT 'debt', SUM(debt) FROM t WHERE owner = :__user_id)
+```
+
+*
+
+Non-conforming example: ```sql
+SELECT 'a', … UNION ALL SELECT 'b', … UNION ALL SELECT 'c', … UNION ALL SELECT 'd', … UNION ALL SELECT 'e', … UNION ALL SELECT 'f', …
+-- 6 terms in one chain: D1 answers "too many terms in compound SELECT" on every call
+```
+
+*
+
+Evidence: Configuration: each statement in `mcp.json`; the `mcp-d1-limits` result of `pas check`; registration warnings in the deploy log.
+
+*
+
+Remediation: Rewrite the statement with fewer bound occurrences or nested unions; add a Miniflare D1 test that runs it; deploy and confirm the registration warning is gone.
+
+*
+
+Tests: The app's Miniflare D1 test runs every registered statement without a D1 error; `pas check` reports *Actions fit D1 limits* as passed.
+
+*
+
+Supporting links: [MCP app tools — D1 limits](../mcp-app-tools.md#d1-limits), [PAS-DATA-005](#pas-data-005), [PAS-DATA-022](#pas-data-022).
 
 ## Chapter INT — Integrations and platform services
 Proxy and secrets, AI, maps, notifications, email and SMS, webhooks, subscriptions and licenses, MCP tools
