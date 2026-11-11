@@ -310,6 +310,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/agent-teams/src/templates/realtime.ts': { category: 'end_user_business', basis: 'inventory', note: 'template example app roles' },
   'packages/build-core/src/index.ts': { category: 'live_authorization', basis: 'inventory', note: 're-export of ownership' },
   'packages/build-core/src/ownership.ts': { category: 'live_authorization', basis: 'inventory', note: 'verifyAppOwnership used by workers' },
+  'packages/build-core/src/app-claim.ts': { category: 'provisioning_actor', basis: 'inventory', note: 'stable ownership and canonical public-name reservation before provisioning' },
   'packages/build-core/src/provision-rate-limit.ts': { category: 'provisioning_actor', basis: 'inventory', note: 'rate-limit key' },
   'packages/data-worker/src/index.ts': { category: 'live_authorization', basis: 'inventory', note: 'raw SQL/migration authorization via /v1/apps' },
   'packages/mcp/src/index.ts': { category: 'live_authorization', basis: 'inventory', note: 'MCP tool ownership' },

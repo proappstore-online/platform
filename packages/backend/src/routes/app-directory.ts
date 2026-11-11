@@ -263,15 +263,17 @@ async function drafts(db: D1Database, userId: string, now: number): Promise<{ id
 }
 
 /** Whether anyone holds an id: a registry row, a provisioning claim, or an agent project. Never who. */
-async function idTaken(db: D1Database, id: string): Promise<{ taken: boolean; listed: boolean }> {
+async function idTaken(db: D1Database, id: string): Promise<{ taken: boolean; listed: boolean; reserved: boolean }> {
   const row = await db.prepare(
     `SELECT
        EXISTS (SELECT 1 FROM apps WHERE id = ?1)
          OR EXISTS (SELECT 1 FROM provision_operations WHERE app_id = ?1)
-         OR EXISTS (SELECT 1 FROM agent_projects WHERE slug = ?1) AS taken,
+         OR EXISTS (SELECT 1 FROM agent_projects WHERE slug = ?1)
+         OR EXISTS (SELECT 1 FROM app_custom_domains WHERE domain = ?1 || '.proappstore.online' AND status = 'active' AND canonical = 1) AS taken,
+       EXISTS (SELECT 1 FROM app_custom_domains WHERE domain = ?1 || '.proappstore.online' AND status = 'active' AND canonical = 1) AS reserved,
        COALESCE((SELECT listed FROM app_storefront_publication WHERE app_id = ?1), 0) AS listed`,
-  ).bind(id).first<{ taken: number; listed: number }>();
-  return { taken: !!row?.taken, listed: row?.listed === 1 };
+  ).bind(id).first<{ taken: number; listed: number; reserved: number }>();
+  return { taken: !!row?.taken, listed: row?.listed === 1, reserved: row?.reserved === 1 };
 }
 
 function matchesText(item: DirectoryItem, needle: string, domainsById: Map<string, string[]>): boolean {
@@ -341,9 +343,9 @@ appDirectoryRoutes.get('/apps/directory', wrap(async (c) => {
       if (mine) lookup = { id: lookupId, status: mine.accessLevel === 'owner' ? 'yours' : 'accessible' };
       else if (isReservedId(lookupId)) lookup = { id: lookupId, status: 'reserved' };
       else {
-        const { taken, listed } = await idTaken(db, lookupId);
-        lookup = { id: lookupId, status: taken ? 'exists_inaccessible' : 'unclaimed' };
-        if (taken) items.push(presentInaccessible(lookupId, listed));
+        const { taken, listed, reserved } = await idTaken(db, lookupId);
+        lookup = { id: lookupId, status: reserved ? 'reserved' : taken ? 'exists_inaccessible' : 'unclaimed' };
+        if (taken && !reserved) items.push(presentInaccessible(lookupId, listed));
       }
     }
   }

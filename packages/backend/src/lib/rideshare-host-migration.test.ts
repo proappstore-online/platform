@@ -11,7 +11,7 @@ describe('Rideshare public host migration (#573)', () => {
   it('retains the original identity and existing domains while declaring exactly one canonical host', async () => {
     const db = new DatabaseSync(':memory:');
     try {
-      for (const file of readdirSync(migrations).filter((name) => name.endsWith('.sql') && !name.startsWith('0135_')).sort()) {
+      for (const file of readdirSync(migrations).filter((name) => name.endsWith('.sql') && name < '0135_').sort()) {
         db.exec(readFileSync(new URL(file, migrations), 'utf8'));
       }
       db.exec("INSERT INTO apps (id, creator_id, created_at) VALUES ('loopride', 'gh:1', 1)");

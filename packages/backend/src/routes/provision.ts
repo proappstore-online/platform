@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { runChecksFromFiles } from '@proappstore/compliance';
 import {
   internalTokenOk,
+  appClaim,
   type Step,
   checkProvisionQuota,
   d1ProvisionAdmissionStore,
@@ -197,8 +198,8 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
 
   // Ownership always precedes quota/reservation, so an attacker cannot reserve
   // or spend quota against another owner's app id.
-  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
-    .bind(body.appId).first<{ creator_id: string }>();
+  const claimed = await appClaim(c.env.DB, body.appId);
+  if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
     return c.json({ error: 'appId already claimed by another user' }, 403);
   }
@@ -411,9 +412,8 @@ export async function provisionApp(c: Context<{ Bindings: Env }>, body: Provisio
   // An unclaimed appId still provisions normally: this is a "not yours" check,
   // not a "must exist" one. Platform admins pass for support/re-provision,
   // matching requireAppAccess.
-  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
-    .bind(appId)
-    .first<{ creator_id: string }>();
+  const claimed = await appClaim(c.env.DB, appId);
+  if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   // #382: an admin's support bypass covers provisioning as themselves only; an
   // approval provisioning for a submitter must not land on someone else's app.
   if (claimed && claimed.creator_id !== ownerId && !(ownerId === user.id && user.roles.includes('admin'))) {
@@ -652,9 +652,8 @@ provisionRoutes.post('/provision-data', async (c) => {
   //
   // Team developers pass: running Agent Teams on an app you build for its
   // creator is legitimate. Before any Cloudflare call, like the user path.
-  const claimed = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?')
-    .bind(body.appId)
-    .first<{ creator_id: string }>();
+  const claimed = await appClaim(c.env.DB, body.appId);
+  if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   if (claimed && claimed.creator_id !== body.creatorId) {
     const member = await c.env.DB.prepare('SELECT role FROM team_members WHERE app_id = ? AND user_id = ?')
       .bind(body.appId, body.creatorId)

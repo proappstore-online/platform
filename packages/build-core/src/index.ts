@@ -57,3 +57,5 @@ export {
   prefillSite,
 } from './marketing-site.js';
 export type { MarketingListing } from './marketing-site.js';
+
+export { appClaim } from './app-claim.js';

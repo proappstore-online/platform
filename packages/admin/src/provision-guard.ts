@@ -18,6 +18,7 @@
 
 import {
   checkProvisionQuota,
+  appClaim,
   d1ProvisionAttemptStore,
   type ProvisionQuotaResult,
 } from "@proappstore/build-core";
@@ -41,10 +42,6 @@ export interface GuardResult {
   userId?: string | undefined;
 }
 
-interface OwnerRow {
-  creator_id: string;
-}
-
 /**
  * Is `appId` already claimed by someone other than the immutable session uid?
  */
@@ -53,12 +50,8 @@ async function checkOwnership(
   appId: string,
   userId: string,
 ): Promise<GuardResult> {
-  const row = await db
-    .prepare(
-      "SELECT creator_id FROM apps WHERE id = ?",
-    )
-    .bind(appId)
-    .first<OwnerRow>();
+  const row = await appClaim(db, appId);
+  if (row?.alias_reserved) return { ok: false, status: 409, error: "app ID reserved by canonical hostname" };
 
   // No row — an unclaimed id. First publish proceeds; this is a "not yours"
   // check, not a "must already exist" one.

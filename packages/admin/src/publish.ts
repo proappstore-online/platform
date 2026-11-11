@@ -1,5 +1,5 @@
 import { deriveLettermark } from "@proappstore/compliance/lettermark";
-import { type CfConfig, ensureAnalytics, makeGitHub, type Step } from "@proappstore/build-core";
+import { type CfConfig, appClaim, ensureAnalytics, makeGitHub, type Step } from "@proappstore/build-core";
 import { E2E_SPEC_PREFIX, e2eHarnessFiles } from "./e2e-harness.js";
 import { ensureOidcTestGrant } from "./e2e-grant.js";
 import type { Env } from "./env.js";
@@ -655,6 +655,11 @@ async function provisionApp(
     return stop();
   }
 
+  if ((await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE))?.alias_reserved) {
+    steps.push({ name: "Validation", status: "fail", detail: "app ID reserved by canonical hostname" });
+    return stop();
+  }
+
   // 1. GitHub repo (fatal)
   const repoStep = await createRepo(env, req);
   steps.push(repoStep);
@@ -930,6 +935,10 @@ export async function runProvisionSteps(
   const idError = validateAppId(req.id);
   if (idError) throw new ProvisionValidationError(`Validation: ${idError}`);
   if (!req.name) throw new ProvisionValidationError("Validation: name is required");
+
+  if ((await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE))?.alias_reserved) {
+    throw new ProvisionValidationError("Validation: app ID reserved by canonical hostname");
+  }
 
   // 1. GitHub repo (fatal, retryable).
   steps.push(await doStep("github-repo", () => fatalStep(createRepo(env, req))));

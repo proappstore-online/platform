@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./env.js";
-import { addToRegistry, APP_DEPLOY_TAG, APP_DEPLOY_WORKFLOW, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml, reconcileStorefrontPublication } from "./publish.js";
+import { addToRegistry, APP_DEPLOY_TAG, APP_DEPLOY_WORKFLOW, buildAgentBundle, deployWorkflowYaml, handleAgentDeploy, handlePublish, isPrivateForRegistry, kbWorkflowYaml, reconcileStorefrontPublication, runProvisionSteps } from "./publish.js";
 
 /**
  * The two ways an app repo gets provisioned must yield the SAME hosting:
@@ -133,6 +133,20 @@ function cfHosting(rec: Recorder): string[] {
 }
 
 const names = (r: { steps: { name: string }[] }) => r.steps.map((s) => s.name);
+
+describe("canonical alias allocation preflight (#574)", () => {
+  it("refuses publishing and agent deploy before creating external resources", async () => {
+    const network = vi.fn(); globalThis.fetch = network;
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ creator_id: null, alias_reserved: 1 }) }) }) } as unknown as D1Database;
+    const req = { id: "renamed", name: "Renamed", category: "tools", icon: "x", iconBg: "#fff", description: "Test app" };
+    expect(await handlePublish(req, { ...ENV, DB: db })).toMatchObject({ success: false, steps: [{ name: "Validation", status: "fail" }] });
+    expect(await handleAgentDeploy({ ...req, files: {} }, { ...ENV, DB: db })).toMatchObject({ success: false, steps: [{ name: "Validation", status: "fail" }] });
+    const step = vi.fn();
+    await expect(runProvisionSteps({ req }, { ...ENV, DB: db }, step)).rejects.toThrow('reserved');
+    expect(step).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
+  });
+});
 
 describe("provisioning: shared core", () => {
   it("handlePublish provisions hosting + registry, succeeds, pushes no files", async () => {

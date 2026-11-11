@@ -1,4 +1,4 @@
-import type { Step } from '@proappstore/build-core';
+import { appClaim, type Step } from '@proappstore/build-core';
 import { deployDataWorker } from './deploy-worker.js';
 
 export interface ProvisionDataArgs {
@@ -38,6 +38,10 @@ export async function provisionData(
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
   const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken, templateId, templateRev, dataWorkerHost } = args;
   const steps: Step[] = [];
+  if ((await appClaim(db, appId))?.alias_reserved) {
+    return { steps: [{ name: 'reserve_id', status: 'fail', detail: 'app ID reserved by canonical hostname' }], dataWorkerUrl: '', dbId: '' };
+  }
+
 
   // 1. Create D1 database (skip if it already exists)
   let dbId = '';

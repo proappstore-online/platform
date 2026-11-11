@@ -173,6 +173,15 @@ describe('GET /v1/apps/directory', () => {
     }
   });
 
+  it('reports another app canonical platform alias as reserved without offering a claim', async () => {
+    sqlite.exec("INSERT INTO app_custom_domains (app_id, domain, status, canonical, added_at) VALUES ('beta', 'renamed.proappstore.online', 'active', 1, 1)");
+    try {
+      const result = await dir('q=renamed', OTHER);
+      expect(result.json.lookup).toEqual({ id: 'renamed', status: 'reserved' });
+      expect(result.json.items).toEqual([]);
+    } finally { sqlite.exec("DELETE FROM app_custom_domains WHERE domain = 'renamed.proappstore.online'"); }
+  });
+
   it('gives each access level only the links it can use', async () => {
     const r = await dir();
     expect(item(r, 'alpha')).toMatchObject({

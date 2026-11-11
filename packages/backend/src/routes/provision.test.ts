@@ -69,6 +69,23 @@ function multiFetch(cfResponses: Record<string, { status: number; body: unknown 
   });
 }
 
+describe('canonical alias preflight (#574)', () => {
+  it.each([TOK, NON_ADMIN_TOK])('refuses an alias for every authenticated caller before quota or allocation', async (token) => {
+    const stmt = mockStmt({ first: { creator_id: null, alias_reserved: 1 } });
+    const db = { prepare: vi.fn().mockReturnValue(stmt) };
+    const network = vi.fn(); vi.stubGlobal('fetch', network);
+    for (const [path, body] of [
+      ['/v1/provision', { appId: 'renamed', skipCompliance: true }],
+      ['/v1/provision-operations', { appId: 'renamed', intent: {}, bootstrapIntent: {} }],
+    ] as const) {
+      const response = await app.request(path, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, makeEnv({}, db));
+      expect(response.status).toBe(409);
+    }
+    expect(network).not.toHaveBeenCalled();
+    expect(db.prepare.mock.calls.every(([sql]) => sql.includes('alias_reserved'))).toBe(true);
+  });
+});
+
 describe('POST /v1/provision', () => {
   it('returns 401 without auth', async () => {
     const res = await app.request('/v1/provision', {

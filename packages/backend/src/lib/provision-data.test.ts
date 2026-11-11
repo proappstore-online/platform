@@ -42,6 +42,13 @@ beforeEach(() => {
 describe('provisionData', () => {
   const base = { appId: 'test-app', creatorId: 'u-1', cfToken: 'tok', cfAccount: 'acct', sessionSigningKey: 'sk', internalToken: 'internal-secret' };
 
+  it('refuses a canonical alias before any external allocation', async () => {
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ creator_id: null, alias_reserved: 1 }) }) }) } as unknown as D1Database;
+    expect(await provisionData({ ...base, db })).toMatchObject({ dbId: '', dataWorkerUrl: '', steps: [{ name: 'reserve_id', status: 'fail' }] });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(deployDataWorker).not.toHaveBeenCalled();
+  });
+
   it('creates D1, deploys worker, records app on success', async () => {
     // D1 create succeeds
     mockFetch.mockResolvedValueOnce({
