@@ -228,16 +228,19 @@ async function resolveAppOrigin(env: Env, hostname: string): Promise<string | nu
   const host = hostname.toLowerCase().replace(/\.$/, '');
   if (isFirstPartyHost(host)) return null;
   const dot = host.indexOf('.');
-  if (dot > 0) {
-    const sub = host.slice(0, dot);
-    const apex = host.slice(dot + 1);
-    if (FIRST_PARTY_APEXES.has(apex) && APP_ID_RE.test(sub) && !isReservedId(sub)) return sub;
-  }
   try {
+    // Registered exact platform aliases retain their real app audience. Never
+    // derive it from caller-supplied app_id or from the alias's visible slug.
     const exact = await env.DB.prepare(
-      `SELECT app_id FROM app_custom_domains WHERE domain = ?1 AND status = 'active' LIMIT 1`,
-    ).bind(host).first<{ app_id: string }>();
+      `SELECT app_id FROM app_custom_domains WHERE domain = ?1 AND status = 'active'
+         AND NOT EXISTS (SELECT 1 FROM apps WHERE id = ?2) LIMIT 1`,
+    ).bind(host, host.endsWith('.proappstore.online') ? host.slice(0, -'.proappstore.online'.length) : null).first<{ app_id: string }>();
     if (exact) return exact.app_id;
+    if (dot > 0) {
+      const sub = host.slice(0, dot);
+      const apex = host.slice(dot + 1);
+      if (FIRST_PARTY_APEXES.has(apex) && APP_ID_RE.test(sub) && !isReservedId(sub)) return sub;
+    }
     const wildcardBase = dot > 0 ? host.slice(dot + 1) : '';
     if (!wildcardBase) return null;
     const wildcard = await env.DB.prepare(

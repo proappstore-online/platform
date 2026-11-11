@@ -44,6 +44,25 @@ describe("host auth token-handler routes", () => {
     expect(cookie).not.toContain("Domain=");
   });
 
+  it("redirects legacy read navigation to the canonical host but keeps auth callbacks and writes on their origin", async () => {
+    const env = makeEnv();
+    const base = env.DB;
+    env.DB = { prepare: (sql: string) => sql.startsWith("SELECT domain FROM app_custom_domains")
+      ? { bind: () => ({ first: async () => ({ domain: "renamed.proappstore.online" }) }) }
+      : base.prepare(sql),
+    } as D1Database;
+    for (const method of ["GET", "HEAD"]) {
+      const response = await worker.fetch(new Request("https://meetup.proappstore.online/trip/123?tab=map", { method }), env, ctx());
+      expect(response.status).toBe(308);
+      expect(response.headers.get("Location")).toBe("https://renamed.proappstore.online/trip/123?tab=map");
+    }
+    const start = await worker.fetch(new Request("https://meetup.proappstore.online/.pas/auth/start"), env, ctx());
+    expect(new URL(start.headers.get("Location")!).hostname).toBe("api.proappstore.online");
+    const mutation = await worker.fetch(new Request("https://meetup.proappstore.online/trip/123", { method: "POST" }), env, ctx());
+    expect(mutation.status).toBe(405);
+    expect(mutation.headers.get("Location")).toBeNull();
+  });
+
   it("starts OAuth from an active custom domain on that same custom origin", async () => {
     const env = makeEnv();
     const res = await worker.fetch(

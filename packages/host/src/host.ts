@@ -116,10 +116,10 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
   const platformSlug = slugFromHostname(host);
   if (platformSlug) {
     const route = await resolveRoute(db, platformSlug);
-    return route ? { ...route, matched: "platform" } : null;
+    if (route) return { ...route, matched: "platform" };
   }
 
-  if (host === PLATFORM_ZONE || host.endsWith(ZONE)) return null;
+  if (host === PLATFORM_ZONE || (!platformSlug && host.endsWith(ZONE))) return null;
 
   const parts = host.split(".");
   const tenant = parts.length > 2 ? parts[0] : null;
@@ -131,6 +131,7 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
        JOIN routes r ON r.slug = d.app_id AND r.zone = ?1
        ${join ? "LEFT JOIN app_visibility v ON v.app_id = r.slug" : ""}
        WHERE d.status = 'active'
+         AND (?4 = 0 OR COALESCE(d.kind, 'exact') = 'exact')
          AND ((COALESCE(d.kind, 'exact') = 'exact' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?2)
            OR (COALESCE(d.kind, 'exact') = 'wildcard' AND d.domain = ?3))
@@ -146,7 +147,7 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
          d.app_id
        LIMIT 1`,
     )
-    .bind(PLATFORM_ZONE, host, wildcardBase)
+    .bind(PLATFORM_ZONE, host, wildcardBase, platformSlug ? 1 : 0)
     .first<Route & { kind?: string | null; matched_domain?: string | null }>());
 
   if (!row) return null;
@@ -154,6 +155,19 @@ export async function resolveRouteForHostname(db: D1Database, hostname: string):
     return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, ...(row.visibility_mode ? { visibility_mode: row.visibility_mode } : {}), matched: "wildcard", tenant: row.matched_domain === host ? undefined : tenant ?? undefined, base: row.matched_domain ?? wildcardBase ?? undefined };
   }
   return { slug: row.slug, zone: row.zone, r2_prefix: row.r2_prefix, store: row.store, ...(row.visibility_mode ? { visibility_mode: row.visibility_mode } : {}), matched: "exact" };
+}
+
+/** The operator-declared canonical exact host; migrations may precede this host deploy. */
+export async function canonicalHostname(db: D1Database, appId: string): Promise<string | null> {
+  try {
+    const row = await db.prepare(
+      "SELECT domain FROM app_custom_domains WHERE app_id = ?1 AND status = 'active' AND COALESCE(kind, 'exact') = 'exact' AND canonical = 1 AND NOT EXISTS (SELECT 1 FROM routes WHERE zone = 'proappstore.online' AND slug || '.proappstore.online' = domain AND slug <> app_id) LIMIT 1",
+    ).bind(appId).first<{ domain: string }>();
+    return row?.domain ?? null;
+  } catch (error) {
+    if (/no such column: canonical/i.test(String((error as Error)?.message ?? error))) return null;
+    throw error;
+  }
 }
 
 /** Fetch listing metadata for meta tag injection. Returns null if no listing exists. */

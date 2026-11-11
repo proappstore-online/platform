@@ -122,6 +122,7 @@ interface AppSignalRow {
   incoming_transfer: number;
   outgoing_transfer: number;
   display_name: string | null;
+  canonical_hostname?: string | null;
   submission_status: string | null;
   listed: number | null;
   provision_status: string | null;
@@ -163,9 +164,11 @@ function present(row: AppSignalRow | null, draft: { id: string; name: string | n
   const manages = accessLevel === 'owner' || accessLevel === 'team';
   const lifecycle = classifyLifecycle(signals);
   const repoRef = row ? `${APP_ORG}/${id}` : null;
+  const publicSlug = row?.canonical_hostname?.endsWith(`.${DOMAIN}`)
+    ? row.canonical_hostname.slice(0, -`.${DOMAIN}`.length) : id;
   return {
     id,
-    displayName: row?.display_name ?? draft?.name ?? titleCase(id),
+    displayName: row?.display_name ?? draft?.name ?? titleCase(publicSlug),
     lifecycle,
     deployStatus: deployStatus(signals),
     lastDeployAt: signals.lastDeployAt,
@@ -173,14 +176,14 @@ function present(row: AppSignalRow | null, draft: { id: string; name: string | n
     accessLevel,
     teamRole: row?.is_owner ? 'owner' : row?.team_role ?? null,
     pendingTransfer: row?.incoming_transfer ? 'incoming' : row?.outgoing_transfer ? 'outgoing' : null,
-    routeUrl: `https://${id}.${DOMAIN}`,
+    routeUrl: `https://${publicSlug}.${DOMAIN}`,
     routeHealth: null,
     repoRef: manages ? repoRef : null,
     links: {
       details: accessLevel === 'operator' ? `${CONSOLE}/#/apps/${id}/operator` : accessLevel === 'transfer_recipient' ? null : `${CONSOLE}/#/apps/${id}`,
       deployHistory: manages && row ? `https://github.com/${APP_ORG}/${id}/actions` : null,
       ownership: `/v1/apps/${id}/ownership`,
-      storePage: lifecycle === 'live' ? `https://${DOMAIN}/apps/${id}/` : null,
+      storePage: lifecycle === 'live' ? `https://${DOMAIN}/apps/${publicSlug}/` : null,
       repository: manages && row ? `https://github.com/${APP_ORG}/${id}` : null,
     },
     createdAt: row?.created_at ?? draft?.created_at ?? null,
@@ -231,6 +234,7 @@ async function accessibleApps(db: D1Database, user: { id: string; login: string 
                       AND t.status = 'pending' AND (t.expiry_ms IS NULL OR t.expiry_ms > ?3)) AS incoming_transfer,
             EXISTS (SELECT 1 FROM app_ownership_transfers t WHERE t.app_id = a.id AND t.from_user = ?1 AND t.kind = 'transfer'
                       AND t.status = 'pending' AND (t.expiry_ms IS NULL OR t.expiry_ms > ?3)) AS outgoing_transfer,
+            (SELECT domain FROM app_custom_domains WHERE app_id = a.id AND canonical = 1 AND status = 'active' LIMIT 1) AS canonical_hostname,
             (SELECT s.name FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS display_name,
             (SELECT s.status FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS submission_status,
             p.listed,

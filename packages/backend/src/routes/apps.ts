@@ -29,6 +29,7 @@ interface AppRow {
   team_role?: string | null;
   template_id?: string | null;
   template_rev?: string | null;
+  canonical_hostname?: string | null;
 }
 
 interface SubmissionMetaRow {
@@ -96,13 +97,13 @@ appsRoutes.get('/apps', wrap(async (c) => {
   // Pull apps: owned by this user OR where they're a team member (or all if admin).
   const appsQuery = creatorFilter
     ? c.env.DB.prepare(
-        `SELECT DISTINCT a.*, CASE WHEN a.creator_id = ?1 THEN 'owner' ELSE tm.role END AS team_role
+        `SELECT DISTINCT a.*, (SELECT domain FROM app_custom_domains WHERE app_id = a.id AND canonical = 1 AND status = 'active' LIMIT 1) AS canonical_hostname, CASE WHEN a.creator_id = ?1 THEN 'owner' ELSE tm.role END AS team_role
          FROM apps a
          LEFT JOIN team_members tm ON tm.app_id = a.id AND tm.user_id = ?1
          WHERE a.creator_id = ?1 OR tm.user_id IS NOT NULL
          ORDER BY a.created_at DESC`,
       ).bind(creatorFilter)
-    : c.env.DB.prepare("SELECT *, 'owner' AS team_role FROM apps ORDER BY created_at DESC");
+    : c.env.DB.prepare("SELECT a.*, (SELECT domain FROM app_custom_domains WHERE app_id = a.id AND canonical = 1 AND status = 'active' LIMIT 1) AS canonical_hostname, 'owner' AS team_role FROM apps a ORDER BY created_at DESC");
   const appsResult = await appsQuery.all<AppRow>();
   const apps = appsResult.results ?? [];
 
@@ -148,7 +149,7 @@ appsRoutes.get('/apps', wrap(async (c) => {
       d1_database_id: a.d1_database_id,
       template_id: a.template_id ?? null,
       template_rev: a.template_rev ?? null,
-      name: sub?.name ?? toTitleCase(a.id),
+      name: sub?.name ?? toTitleCase(a.canonical_hostname?.endsWith('.proappstore.online') ? a.canonical_hostname.slice(0, -'.proappstore.online'.length) : a.id),
       category: sub?.category ?? null,
       description: sub?.description ?? null,
       icon: sub?.icon ?? null,
@@ -176,6 +177,7 @@ appsRoutes.get('/me/administered-apps', wrap(async (c) => {
   const user = await requireUser(c);
   const { results } = await c.env.DB.prepare(
     `SELECT a.id, a.created_at,
+            (SELECT domain FROM app_custom_domains WHERE app_id = a.id AND canonical = 1 AND status = 'active' LIMIT 1) AS canonical_hostname,
             (SELECT s.name FROM submissions s WHERE s.app_id = a.id ORDER BY s.created_at DESC LIMIT 1) AS name
        FROM apps a JOIN app_operator_view v ON v.app_id = a.id
       WHERE a.creator_id <> ?1
@@ -186,12 +188,12 @@ appsRoutes.get('/me/administered-apps', wrap(async (c) => {
            WHERE r.user_id = ?1 OR r.user_id = ?2)
       ORDER BY a.created_at DESC
       LIMIT 200`,
-  ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null }>();
+  ).bind(...roleSubjects(user)).all<{ id: string; created_at: number; name: string | null; canonical_hostname?: string | null }>();
   c.header('Cache-Control', 'private, no-store');
   return c.json({
     apps: sortAppsByName((results ?? []).map((a) => ({
       id: a.id,
-      name: a.name ?? toTitleCase(a.id),
+      name: a.name ?? toTitleCase(a.canonical_hostname?.endsWith('.proappstore.online') ? a.canonical_hostname.slice(0, -'.proappstore.online'.length) : a.id),
       created_at: a.created_at,
     }))),
   });

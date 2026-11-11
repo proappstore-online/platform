@@ -158,6 +158,21 @@ describe('GET /v1/apps/directory', () => {
     expect(item(r, 'eta').displayName).toBe('Eta');
   });
 
+  it('uses the canonical public name and links while keeping the stable API identity', async () => {
+    sqlite.exec("INSERT INTO app_custom_domains (app_id, domain, status, canonical, added_at) VALUES ('beta', 'rideshare.proappstore.online', 'active', 1, 1)");
+    sqlite.exec("INSERT INTO app_storefront_publication (app_id, listed, updated_at) VALUES ('beta', 1, 1)");
+    try {
+      const result = await dir();
+      expect(item(result, 'beta')).toMatchObject({
+        id: 'beta', displayName: 'Rideshare', routeUrl: 'https://rideshare.proappstore.online',
+        links: { storePage: 'https://proappstore.online/apps/rideshare/', ownership: '/v1/apps/beta/ownership' },
+      });
+    } finally {
+      sqlite.exec("DELETE FROM app_custom_domains WHERE domain = 'rideshare.proappstore.online'");
+      sqlite.exec("DELETE FROM app_storefront_publication WHERE app_id = 'beta'");
+    }
+  });
+
   it('gives each access level only the links it can use', async () => {
     const r = await dir();
     expect(item(r, 'alpha')).toMatchObject({

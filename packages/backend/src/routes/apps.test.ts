@@ -48,6 +48,16 @@ describe('GET /v1/apps', () => {
     expect(body.apps[0].has_submission).toBe(false);
   });
 
+  it('uses the canonical public hostname for a renamed app without inventing a submission', async () => {
+    const db = mockD1(
+      mockStmt({ all: { results: [{ id: 'legacy-app', creator_id: 'gh:1', created_at: 1000, canonical_hostname: 'rideshare.proappstore.online' }] } }),
+      mockStmt({ all: { results: [] } }),
+    );
+    const response = await app.request('/v1/apps', { headers: { Authorization: `Bearer ${TOK}` } }, makeEnv({}, db));
+    const body = await response.json() as { apps: { id: string; name: string; has_submission: boolean }[] };
+    expect(body.apps[0]).toMatchObject({ id: 'legacy-app', name: 'Rideshare', has_submission: false });
+  });
+
   it('returns apps enriched with submission metadata when a submission exists', async () => {
     const appsStmt = mockStmt({
       all: {
@@ -148,7 +158,7 @@ describe('GET /v1/apps', () => {
     expect(res.status).toBe(200);
     // The admin path uses a query without WHERE creator_id
     expect(db.prepare).toHaveBeenCalledWith(
-      expect.stringContaining('FROM apps ORDER BY created_at DESC'),
+      expect.stringContaining('FROM apps a ORDER BY created_at DESC'),
     );
   });
 

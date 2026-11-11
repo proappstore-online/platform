@@ -1488,7 +1488,7 @@ describe('OAuth callback — #pas_session fragment retirement (#196)', () => {
     expect((await verifySession(tokenOf(res), TEST_SK))?.cred).toBeUndefined();
   });
 
-  it('a custom domain destination mints app_bound to the app the domain is registered to, resolved independently from D1 by resolveAppOrigin', async () => {
+  it.each(['chessclubs.online', 'renamed.proappstore.online'])('a registered domain %s mints app_bound to its actual app identity independently from the caller hint', async (host) => {
     stubGithub();
     // `returnToAllowed`'s own check (`activeCustomDomainAllowed`) requires state's app_id to already
     // match the domain's real owner, so a mismatched app_id can never reach the callback for a custom
@@ -1507,18 +1507,18 @@ describe('OAuth callback — #pas_session fragment retirement (#196)', () => {
             if (/app_id\s*=\s*\?1/i.test(sql)) {
               // activeCustomDomainAllowed: app_id bound first.
               const [appId, domain] = stmt._args as [string, string];
-              return appId === realOwner && domain === 'chessclubs.online' ? { 1: 1 } : null;
+              return appId === realOwner && domain === host ? { 1: 1 } : null;
             }
             // resolveAppOrigin: domain bound first, no app_id in the query at all.
             const [domain] = stmt._args as [string];
-            return domain === 'chessclubs.online' ? { app_id: realOwner } : null;
+            return domain === host ? { app_id: realOwner } : null;
           },
           async run() { return { meta: { changes: 1 } }; },
         };
         return stmt;
       },
     };
-    const state = stateFor('https://chessclubs.online/cb', realOwner);
+    const state = stateFor(`https://${host}/cb`, realOwner);
     const res = await app.request(
       `/v1/auth/github/callback?code=gh-code&state=${state}`,
       { headers: { Cookie: `__Host-pas_oauth_state=${state}` } },

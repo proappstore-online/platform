@@ -27,6 +27,7 @@ import {
   r2KeyFor,
   renderSitemap,
   resolveRouteForHostname,
+  canonicalHostname,
   securityHeaders,
   slugFromHostname,
   withCodeHealthCors,
@@ -132,6 +133,17 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
 
   if (route.matched === "wildcard" && route.tenant === "www" && route.base) {
     return Response.redirect(`https://${route.base}${url.pathname}${url.search}`, 301);
+  }
+
+  // Keep old auth callbacks and mutation origins usable during a brand move.
+  // Navigation moves to the one declared host, preserving path and query.
+  if (route.matched === "platform" && (request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/.pas/")) {
+    const canonical = await canonicalHostname(env.DB, route.slug);
+    if (canonical && canonical !== url.hostname) {
+      const target = new URL(url);
+      target.hostname = canonical;
+      return Response.redirect(target.toString(), 308);
+    }
   }
 
   const authResponse = await handleAuthRoute(request, env, route);

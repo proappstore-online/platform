@@ -87,6 +87,15 @@ describe("resolveRouteForHostname", () => {
     await expect(resolveRouteForHostname(db, "meetup.proappstore.online")).resolves.toEqual({ ...route, matched: "platform" });
   });
 
+  it("resolves a registered platform alias to the original identity and visibility", async () => {
+    const db = { prepare: (sql: string) => ({ bind: (...args: unknown[]) => ({ first: async () =>
+      sql.includes("FROM app_custom_domains d") && args[1] === "renamed.proappstore.online"
+        ? { ...route, visibility_mode: "private", kind: "exact", matched_domain: args[1] } : null,
+    }) }) } as unknown as D1Database;
+    await expect(resolveRouteForHostname(db, "renamed.proappstore.online")).resolves.toEqual({ ...route, visibility_mode: "private", matched: "exact" });
+    expect(r2KeyFor((await resolveRouteForHostname(db, "renamed.proappstore.online"))!, "/")).toBe("apps/meetup/index.html");
+  });
+
   it("resolves active custom domains back to their app route", async () => {
     const db = fakeRouteDb();
 

@@ -25,7 +25,7 @@
  */
 import { AUTH_PREFIX, clearSessionCookie, fetchMe, isSameOriginMutation, readCookie, sameOriginPath, SESSION_COOKIE_NAME } from "./auth-handler.js";
 import type { Env } from "./env.js";
-import type { Route } from "./host.js";
+import { canonicalHostname, type Route } from "./host.js";
 import { askVisibilityFresh, inviteCodeFromPath } from "./visibility-gate.js";
 
 const API_BASE = "https://api.proappstore.online";
@@ -33,6 +33,7 @@ const API_BASE = "https://api.proappstore.online";
 export async function signInPage(request: Request, env: Env, route: Route): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", { Allow: "GET" });
   const url = new URL(request.url);
+  const appName = await publicAppName(env, route);
   const returnTo = sameOriginPath(url, url.searchParams.get("return_to"));
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
   const who = token ? await signedInAs(env, token) : null;
@@ -43,7 +44,7 @@ export async function signInPage(request: Request, env: Env, route: Route): Prom
 <p class="lede">You are signed in as <strong>${esc(who)}</strong>. If this app refused you, it was not shared with this account.</p>
 <a class="btn primary" href="${esc(returnTo)}">Continue</a>
 <button class="btn" type="button" id="switch">Use a different account</button>`
-    : `<h1>Sign in to ${esc(route.slug)}</h1>
+    : `<h1>Sign in to ${esc(appName)}</h1>
 <p class="lede">Sign in to continue. Use the account the app's owner shared it with.</p>
 <a class="btn" href="${esc(start("github"))}">Continue with GitHub</a>
 <a class="btn" href="${esc(start("google"))}">Continue with Google</a>
@@ -92,7 +93,7 @@ if (sw) sw.addEventListener("click", async () => {
 const err = /auth_error=([^&]+)/.exec(location.hash);
 if (err) say("Sign-in did not complete (" + decodeURIComponent(err[1]) + "). Try again.");
 `;
-  return page(`Sign in · ${route.slug}`, body, script);
+  return page(`Sign in · ${appName}`, body, script);
 }
 
 export async function joinPage(request: Request, env: Env, route: Route): Promise<Response> {
@@ -100,6 +101,7 @@ export async function joinPage(request: Request, env: Env, route: Route): Promis
   if (request.method === "POST") return redeem(request, env, route);
   if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", { Allow: "GET, POST" });
 
+  const appName = await publicAppName(env, route);
   const code = normaliseCode(url.searchParams.get("code"));
   if (!code) return page("Invite", `<h1>That invite link is not valid</h1><p class="lede">Ask whoever sent it for a new one.</p>`);
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
@@ -107,8 +109,8 @@ export async function joinPage(request: Request, env: Env, route: Route): Promis
   if (!who) return signInFirst(url, code, Boolean(token));
 
   return page(
-    `Invite · ${route.slug}`,
-    `<h1>You have been invited to ${esc(route.slug)}</h1>
+    `Invite · ${appName}`,
+    `<h1>You have been invited to ${esc(appName)}</h1>
 <p class="lede">Accept the invite as <strong>${esc(who)}</strong> to open the app.</p>
 <form method="post" action="${AUTH_PREFIX}/join">
   <input type="hidden" name="code" value="${esc(code)}">
@@ -149,12 +151,13 @@ async function redeem(request: Request, env: Env, route: Route): Promise<Respons
   // The role exists now; drop this isolate's remembered refusal so the next
   // request sees it, and only send them on if it actually opens the app.
   const answer = await askVisibilityFresh(env, route.slug, token);
+  const appName = await publicAppName(env, route);
   if (answer === "allowed" || answer === "unavailable") {
     return new Response(null, { status: 303, headers: { Location: new URL(`/join/${code}`, url.origin).toString(), "Cache-Control": "no-store" } });
   }
   return page(
     "Invite",
-    `<h1>Invite accepted</h1><p class="lede">The role this invite grants does not open ${esc(route.slug)} on its own. Ask the app's owner for access.</p>`,
+    `<h1>Invite accepted</h1><p class="lede">The role this invite grants does not open ${esc(appName)} on its own. Ask the app's owner for access.</p>`,
   );
 }
 
@@ -246,4 +249,12 @@ function esc(s: string): string {
 /** A string literal safe inside an inline <script>: JSON, with `<` escaped so `</script>` cannot close it. */
 function jsonForScript(value: string): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+/** Canonical platform aliases provide public labels without changing auth identities. */
+async function publicAppName(env: Env, route: Route): Promise<string> {
+  const host = await canonicalHostname(env.DB, route.slug);
+  if (!host?.endsWith(".proappstore.online")) return route.slug;
+  return host.slice(0, -".proappstore.online".length).split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
