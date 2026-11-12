@@ -52,6 +52,14 @@ const errorText = (e: unknown): string => (e instanceof Error ? e.message : Stri
 export const isConstraintRejection = (message: string): boolean => /\bSQLITE_CONSTRAINT/.test(message);
 
 /**
+ * An action's own input validation, written as `json_extract('Invalid …', '$')` in a CASE: plain SQL has no RAISE, so
+ * apps raise "malformed JSON" on purpose (bookkeeper's income_year checks). A sample value tripping it is the action
+ * refusing bad input, like a constraint, not a broken action (#592). Only when the SQL has that idiom.
+ */
+export const isDeliberateJsonRaise = (message: string, statements: string[]): boolean =>
+  /malformed JSON/.test(message) && statements.some((sql) => /\bjson_extract\(\s*'(?:[^']|'')*'\s*,/i.test(sql));
+
+/**
  * A value for a declared param: its default, else something of the right type that the executor's own typing accepts.
  * A string the SQL reads as JSON (`jsonInput`, see jsonParams) gets `'{}'`: in production it always carries JSON, and
  * `'sample'` would fail every JSON function with "malformed JSON" (#592).
@@ -146,7 +154,7 @@ export async function testMigrationChain(db: D1Like, input: { migrations: Migrat
       report.actions.push({ name: a.name, operation, outcome: 'ok' });
     } catch (e) {
       const detail = errorText(e);
-      if (isConstraintRejection(detail)) report.actions.push({ name: a.name, operation, outcome: 'rejected', detail });
+      if (isConstraintRejection(detail) || isDeliberateJsonRaise(detail, statements)) report.actions.push({ name: a.name, operation, outcome: 'rejected', detail });
       else { report.actions.push({ name: a.name, operation, outcome: 'failed', detail }); report.ok = false; }
     }
   }

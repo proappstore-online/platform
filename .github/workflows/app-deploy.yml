@@ -211,7 +211,7 @@ jobs:
           code=0
           for attempt in 1 2; do
             set +e
-            npx -y -p @proappstore/cli@latest -p miniflare@4.20250906.0 pas migrations test
+            npx -y -p @proappstore/cli@latest -p miniflare@4.20260730.0 pas migrations test
             code=$?
             set -e
             [ "$code" -ne 2 ] && break

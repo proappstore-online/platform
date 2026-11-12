@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseStatements, tokenize, type SqlStatement, type SqlToken } from './lib/sql-statements.js';
-import { bindAction, isConstraintRejection, jsonParams, MiniflareUnavailable, sampleParam, testMigrationChain, withFreshD1, type D1Like } from './migrations-test.js';
+import { bindAction, isConstraintRejection, isDeliberateJsonRaise, jsonParams, MiniflareUnavailable, sampleParam, testMigrationChain, withFreshD1, type D1Like } from './migrations-test.js';
 
 describe('the vendored statement splitter (#503)', () => {
   it('tokenizes without comments, and reports where each statement starts', () => {
@@ -110,6 +110,13 @@ describe('the report, on a scripted D1', () => {
     const { db } = scripted({});
     const r = await testMigrationChain(db, { migrations: [{ name: '1', sql: 'CREATE TABLE a (x); CREATE TABLE b (y)' }], actions: [] });
     expect(r).toMatchObject({ migrations: 1, statements: 2, ok: true, migrationFailure: null });
+  });
+
+  it("treats 'malformed JSON' as a rejection only when the action raises it on purpose (#592)", () => {
+    const raising = ["SELECT CASE WHEN :y BETWEEN 2000 AND 2099 THEN :y ELSE json_extract('Invalid income_year: require YYYY','$') END"];
+    expect(isDeliberateJsonRaise('D1_ERROR: malformed JSON: SQLITE_ERROR', raising)).toBe(true);
+    expect(isDeliberateJsonRaise('D1_ERROR: malformed JSON: SQLITE_ERROR', ["SELECT json_extract(:p, '$.a')"])).toBe(false);
+    expect(isDeliberateJsonRaise('D1_ERROR: no such column: x', raising)).toBe(false);
   });
 
   it('recognises only SQLITE_CONSTRAINT (with or without an extended code) as an expected rejection', () => {
