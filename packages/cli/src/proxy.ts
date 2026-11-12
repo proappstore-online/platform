@@ -31,7 +31,7 @@ export const proxyCommand = new Command('proxy')
   .addCommand(
     new Command('allow')
       .description('Allow the proxy to inject a secret when calling URLs starting with <pattern>.')
-      .argument('<pattern>', 'URL prefix (must start with https://)')
+      .argument('<pattern>', 'https://<lowercase host>/<path prefix>, e.g. https://api.example.com/ (no port or user)')
       .option('--secret <name>', 'name of a previously stored app secret')
       .option('--user-secret <name>', "inject the calling user's own secret <name> (declared in mcp.json user_secrets); never falls back to an app secret")
       .requiredOption(

@@ -216,7 +216,13 @@ await app.userSecrets.delete('OPENAI_KEY')
 
 Requires `authMode: 'platform-cookie'`. Values are encrypted per (app, user, name) and never
 returned. A rule with `--user-secret` injects only the calling user's key: a user who has not
-set one gets `412 user_secret_missing`, never the app's secret.
+set one gets `412 user_secret_missing`, never the app's secret. Calls through a user-scoped rule
+count against the app's daily proxy budget like any other proxy call.
+
+A user's key is protected from other users and other apps, **not from the app's developer**: the
+developer controls the app's code and proxy allowlist, so they choose where a user's key is sent
+(and a new owner after an ownership transfer inherits that). Tell users which key to create, and
+ask for the narrowest one that works.
 
 ### Database (Per-app SQL)
 

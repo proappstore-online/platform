@@ -4,7 +4,7 @@
 import type { Hono } from 'hono';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { openSecret, type SealedSecret } from '../lib/encryption.js';
-import { AllowlistError, injectSecret, pickRule } from '../lib/proxy-allowlist.js';
+import { AllowlistError, injectSecret, isPlainHostname, pickRule } from '../lib/proxy-allowlist.js';
 import { checkAndBump, d1UsageStore } from '../lib/proxy-rate-limit.js';
 import { openUserSecret } from '../lib/user-secrets.js';
 import { OAUTH2_TOKEN_TIMEOUT_MS, getOAuth2Token } from '../lib/proxy-oauth2.js';
@@ -97,6 +97,9 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       // platform user may use any app — which is what the per-user sub-cap
       // below bounds.
       requireMediatedApp(c, appId, 'proxy');
+      // The caller chooses the host segment: only a plain lowercase hostname, so
+      // `a.com@evil.test`, `a.com:8443` and the like never become the upstream (#587 review).
+      if (!isPlainHostname(host)) return c.json({ error: 'invalid upstream host' }, 400);
 
       const kek = requireKek(c);
 
@@ -154,6 +157,10 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
           // #587: the calling user's own secret — the SESSION user, never an id
           // from the request. A user without one gets 412; nothing falls back to
           // the app secret, which may hold data only its developer should see.
+          // The name must still be declared: removing it from mcp.json retires it.
+          const declared = await c.env.DB.prepare('SELECT 1 FROM app_user_secret_decls WHERE app_id = ? AND name = ?')
+            .bind(appId, rule.secretName).first();
+          if (!declared) return c.json({ error: `user secret '${rule.secretName}' is not declared in this app's mcp.json user_secrets` }, 403);
           const own = await openUserSecret(c.env, kek, appId, user.id, rule.secretName);
           if (own === null) return c.json({ error: 'user_secret_missing', secret: rule.secretName }, 412);
           plaintext = own;
@@ -296,6 +303,10 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
           respHeaders.append(k, v);
         }
       }
+      // The response is served from the app's origin through /.pas/api: never let
+      // a browser sniff or run it as a page there (#587 review).
+      respHeaders.set('X-Content-Type-Options', 'nosniff');
+      respHeaders.set('Content-Security-Policy', 'sandbox');
       return new Response(respBuf, {
         status: upstreamRes.status,
         statusText: upstreamRes.statusText,

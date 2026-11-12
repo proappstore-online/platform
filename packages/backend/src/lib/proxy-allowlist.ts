@@ -30,6 +30,13 @@ export interface AllowlistRule {
  */
 const AI_PROVIDER_HOSTS: readonly string[] = [];
 
+/** A plain lowercase DNS hostname: no userinfo, port, uppercase or anything else a URL parser would reinterpret. */
+const PLAIN_HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+export function isPlainHostname(host: string): boolean {
+  return PLAIN_HOSTNAME.test(host);
+}
+
 export class AllowlistError extends Error {
   constructor(message: string) {
     super(message);
@@ -61,6 +68,14 @@ export function validateRule(input: {
     url = new URL(pattern);
   } catch {
     throw new AllowlistError('pattern is not a valid URL');
+  }
+  // SECURITY (#587 review): the pattern is matched as a prefix of the upstream
+  // URL, whose host the caller chooses. Without the path `https://api.example.com`
+  // was a prefix of `https://api.example.com.evil.test/…` and of
+  // `https://api.example.com@evil.test/…`, and the injected key went there.
+  // So a pattern is exactly an origin (lowercase host, default port) plus a path.
+  if (url.port || !isPlainHostname(url.hostname) || !pattern.startsWith(`${url.origin}/`)) {
+    throw new AllowlistError('pattern must be https://<lowercase host>/<path prefix>, e.g. https://api.example.com/ (no port, user or uppercase)');
   }
   if (isAiProviderHost(url.hostname)) {
     throw new AllowlistError(
@@ -140,8 +155,10 @@ export function validateRule(input: {
 
 /**
  * Pick the rule that matches an inbound proxy request. Returns null if none.
- * Match = pattern is a prefix of url AND method is allowed. If multiple rules
- * match, the longest pattern wins (most specific).
+ * Match = same origin as the pattern AND pattern is a prefix of url AND method
+ * is allowed. The origin check keeps a rule stored before patterns were
+ * validated (`https://api.example.com`, no path) from matching another host.
+ * If multiple rules match, the longest pattern wins (most specific).
  */
 export function pickRule(
   rules: AllowlistRule[],
@@ -149,9 +166,11 @@ export function pickRule(
   method: string,
 ): AllowlistRule | null {
   const upperMethod = method.toUpperCase();
+  const origin = originOf(url);
+  if (!origin) return null;
   let best: AllowlistRule | null = null;
   for (const rule of rules) {
-    if (!url.startsWith(rule.pattern)) continue;
+    if (originOf(rule.pattern) !== origin || !url.startsWith(rule.pattern)) continue;
     if (!rule.methods.includes(upperMethod)) continue;
     if (best === null || rule.pattern.length > best.pattern.length) {
       best = rule;
@@ -183,6 +202,14 @@ export function injectSecret(
   const u = new URL(url);
   u.searchParams.set(rule.injectName, secret);
   return { url: u.toString(), headers: out };
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 export function isAiProviderHost(hostname: string): boolean {

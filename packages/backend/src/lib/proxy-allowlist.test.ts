@@ -117,6 +117,20 @@ describe('pickRule', () => {
     { pattern: 'https://api.example.com/v2/', injectKind: 'header', injectName: 'X-Key', secretName: 'k2', secretName2: '', tokenUrl: '', methods: ['GET'] },
   ];
 
+  it('a pathless legacy pattern matches only its own origin (#587 review)', () => {
+    const legacy: AllowlistRule[] = [{ ...rules[0]!, pattern: 'https://api.example.com' }];
+    expect(pickRule(legacy, 'https://api.example.com/v1', 'GET')).not.toBeNull();
+    for (const url of ['https://api.example.com.evil.test/v1', 'https://api.example.com@evil.test/v1', 'https://api.example.com:8443/v1', 'not a url']) {
+      expect(pickRule(legacy, url, 'GET'), url).toBeNull();
+    }
+  });
+
+  it('validateRule refuses a pattern that is not origin + path', () => {
+    for (const pattern of ['https://api.example.com', 'https://api.example.com:8443/', 'https://u@api.example.com/', 'https://API.example.com/']) {
+      expect(() => validateRule({ pattern, injectKind: 'bearer', injectName: '', secretName: 'K', methods: ['GET'] }), pattern).toThrow(AllowlistError);
+    }
+  });
+
   it('matches the longest prefix', () => {
     const rule = pickRule(rules, 'https://api.example.com/v2/users', 'GET');
     expect(rule?.secretName).toBe('k2');

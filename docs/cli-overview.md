@@ -51,6 +51,7 @@ pas secret list                     # list secret names (values never shown)
 pas secret rm API_KEY               # delete a secret
 pas proxy allow <pattern> --inject bearer --secret API_KEY
 pas proxy allow <pattern> --inject bearer --user-secret OPENAI_KEY   # inject the calling user's own key (mcp.json user_secrets); no fallback to an app secret
+# <pattern> is https://<lowercase host>/<path prefix> (ends in a path, no port or user): https://api.example.com/
 pas proxy list                      # show proxy allowlist
 pas proxy deny <pattern>            # remove a proxy rule
 

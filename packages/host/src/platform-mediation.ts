@@ -25,6 +25,7 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
     // relying party for a ceremony. Do not turn /.pas/api into a second way
     // to obtain an app-host assertion and expose its token to page JS.
     const isPasskeyRoute = url.pathname.startsWith(`${API_PREFIX}/v1/auth/passkey/`);
+    if (!isAppApiFetch(request)) return noStore(new Response("Forbidden", { status: 403 }));
     return forwardWithSession(request, env.API, upstreamApiUrl(url), true, route, undefined, !isPasskeyRoute);
   }
   if (url.pathname === DATA_PREFIX || url.pathname.startsWith(`${DATA_PREFIX}/`)) {
@@ -53,6 +54,22 @@ export async function handlePlatformMediation(request: Request, env: Env, route:
     });
   }
   return null;
+}
+
+/**
+ * #587 review: the session cookie is SameSite=Lax, so a top-level GET from any
+ * site (or from another app, which is same-site) carries it, and the mutation
+ * Origin check never sees a GET. A /.pas/api GET can spend the user's own keys
+ * through the proxy, so the API plane takes only what the browser says the
+ * app's own page fetched: no navigation, and Sec-Fetch-Site same-origin when the
+ * browser sends it. Fetches, <img>, sendBeacon and room WebSockets from the app
+ * all qualify; a client that sends no fetch metadata is unchanged.
+ */
+function isAppApiFetch(request: Request): boolean {
+  const mode = request.headers.get("Sec-Fetch-Mode");
+  if (mode === "navigate" || mode === "nested-navigate") return false;
+  const site = request.headers.get("Sec-Fetch-Site");
+  return site === null || site === "same-origin";
 }
 
 function upstreamApiUrl(url: URL): string {

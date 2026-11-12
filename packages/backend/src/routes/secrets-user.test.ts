@@ -36,9 +36,9 @@ const put = (as: string, value: string, opts: { app?: string | null; appId?: str
 const proxy = (as: string, appId = 'appx') => call(`/v1/apps/${appId}/proxy/api.example.com/v1/costs`, { as, app: appId });
 const rows = () => db.sql.prepare('SELECT app_id, user_id, name FROM app_user_secrets ORDER BY app_id, user_id, name').all();
 
-function addRule(appId: string, scope: 'app' | 'user') {
+function addRule(appId: string, scope: 'app' | 'user', pattern = 'https://api.example.com/') {
   db.sql.prepare(`INSERT INTO app_proxy_allowlist (app_id, pattern, inject_kind, inject_name, secret_name, methods, created_at, secret_scope)
-    VALUES (?, 'https://api.example.com/', 'bearer', '', 'OPENAI_KEY', 'GET', 1, ?)`).run(appId, scope);
+    VALUES (?, ?, 'bearer', '', 'OPENAI_KEY', 'GET', 1, ?)`).run(appId, pattern, scope);
 }
 
 async function addAppSecret(appId: string, name: string, value: string) {
@@ -249,5 +249,91 @@ describe('lifecycle', () => {
     expect(res.status).toBe(200);
     expect(rows()).toEqual([{ app_id: 'appy', user_id: ALICE, name: 'OPENAI_KEY' }]);
     expect(db.sql.prepare("SELECT COUNT(*) AS n FROM app_user_secret_decls WHERE app_id = 'appx'").get()).toEqual({ n: 0 });
+  });
+});
+
+// #587 review (HIGH): a pattern is a URL prefix, so a pattern without a path
+// matched any host that starts with it. The caller picks the :host segment.
+describe('pattern matching cannot be steered to another host', () => {
+  const ownerAllow = (pattern: string) => call('/v1/apps/appx/allowlist', { as: OWNER, app: null, method: 'PUT',
+    body: { pattern, injectKind: 'bearer', methods: ['GET'], secretName: 'OPENAI_KEY', secretScope: 'user' } });
+
+  it('refuses a pattern that is not an origin followed by a path', async () => {
+    for (const pattern of ['https://api.example.com', 'https://api.example.com:8443/', 'https://user@api.example.com/', 'https://API.example.com/']) {
+      expect((await ownerAllow(pattern)).status, pattern).toBe(400);
+    }
+    expect((await ownerAllow('https://api.example.com/')).status).toBe(204);
+  });
+
+  for (const scope of ['app', 'user'] as const) {
+    it(`a ${scope} rule's key never reaches a lookalike, userinfo or port host`, async () => {
+      await addAppSecret('appx', 'OPENAI_KEY', APP_KEY);
+      await put(ALICE, ALICE_KEY);
+      addRule('appx', scope, 'https://api.example.com'); // stored before patterns were checked
+      for (const host of ['api.example.com.evil.test', 'api.example.com@evil.test', 'api.example.com:8443', 'API.example.com']) {
+        const res = await call(`/v1/apps/appx/proxy/${host}/v1/costs`, { as: ALICE });
+        expect(res.status, host).not.toBe(200);
+      }
+      expect(upstream).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a user rule only allows its methods', async () => {
+    addRule('appx', 'user');
+    await put(ALICE, ALICE_KEY);
+    const res = await call('/v1/apps/appx/proxy/api.example.com/v1/costs', { as: ALICE, method: 'POST', body: {} });
+    expect(res.status).toBe(403);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('review follow-ups (#587)', () => {
+  it('a proxy response cannot run as a page on the app origin', async () => {
+    upstream.mockResolvedValueOnce(new Response('<script>steal()</script>', { headers: { 'Content-Type': 'text/html' } }));
+    addRule('appx', 'user');
+    await put(ALICE, ALICE_KEY);
+    const res = await proxy(ALICE);
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(res.headers.get('Content-Security-Policy')).toBe('sandbox');
+  });
+
+  it('a user rule whose name is no longer declared is refused at proxy time', async () => {
+    addRule('appx', 'user');
+    await put(ALICE, ALICE_KEY);
+    db.sql.prepare("DELETE FROM app_user_secret_decls WHERE app_id = 'appx'").run();
+    const res = await proxy(ALICE);
+    expect(res.status).toBe(403);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /apps/:appId/tools clears the declared names with the rest of the manifest', async () => {
+    const res = await call('/v1/apps/appx/tools', { as: OWNER, app: null, method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(db.sql.prepare("SELECT COUNT(*) AS n FROM app_user_secret_decls WHERE app_id = 'appx'").get()).toEqual({ n: 0 });
+  });
+
+  it('refuses control characters in a value', async () => {
+    for (const value of ['sk-1\r\nX-Injected: 1', 'sk-1\n', 'sk\u00001', 'sk\u007f', 'sk\t1']) {
+      const res = await put(ALICE, value);
+      expect(res.status, JSON.stringify(value)).toBe(400);
+      expect(await res.text()).not.toContain('sk-1');
+    }
+    expect(rows()).toEqual([]);
+  });
+
+  it('ignores a forged user id in the query or body: every route acts for the session user', async () => {
+    addRule('appx', 'user');
+    await put(BOB, BOB_KEY);
+    const forged = (path: string, method = 'GET', body?: unknown) =>
+      call(`${path}?userId=${encodeURIComponent(BOB)}&user_id=${encodeURIComponent(BOB)}`, { as: ALICE, method, body });
+    expect((await forged('/v1/apps/appx/user-secrets/OPENAI_KEY', 'PUT', { value: ALICE_KEY, userId: BOB, user_id: BOB })).status).toBe(204);
+    expect((await (await forged('/v1/apps/appx/user-secrets')).json()) as unknown).toMatchObject({ secrets: [{ name: 'OPENAI_KEY' }] });
+    expect((await forged('/v1/apps/appx/proxy/api.example.com/v1/costs')).status).toBe(200);
+    expect(injected()).toEqual([`Bearer ${ALICE_KEY}`]);
+    expect((await forged('/v1/apps/appx/user-secrets/OPENAI_KEY', 'DELETE', { userId: BOB })).status).toBe(204);
+    expect(rows()).toEqual([{ app_id: 'appx', user_id: BOB, name: 'OPENAI_KEY' }]);
+    const bobStill = await proxy(BOB);
+    expect(bobStill.status).toBe(200);
+    expect(injected()[1]).toBe(`Bearer ${BOB_KEY}`);
   });
 });

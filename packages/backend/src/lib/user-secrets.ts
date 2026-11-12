@@ -11,9 +11,9 @@ import { openSecret, sealSecret, type SealedSecret } from './encryption.js';
 /** How often last_used_at is rewritten for one secret, to bound D1 writes. */
 const LAST_USED_GRANULARITY_MS = 60_000;
 
-/** The associated data of one row. App ids and names cannot contain `|`, so it is unambiguous. */
+/** The associated data of one row: a JSON array, unambiguous whatever the ids and name contain. */
 function userSecretAad(appId: string, userId: string, name: string): string {
-  return `${appId}|${userId}|${name}`;
+  return JSON.stringify([appId, userId, name]);
 }
 
 export function sealUserSecret(value: string, kek: string, appId: string, userId: string, name: string): Promise<SealedSecret> {

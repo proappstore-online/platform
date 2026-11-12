@@ -604,6 +604,8 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_hooks WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_connectors WHERE app_id = ?').bind(appId),
     c.env.DB.prepare('DELETE FROM app_room_rules WHERE app_id = ?').bind(appId),
+    // #587: the declared user-secret names; users' stored values stay theirs.
+    c.env.DB.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

@@ -14,7 +14,7 @@
  * Optional associated data (#587): when `aad` is given, both AES-GCM operations
  * (the value under the DEK and the DEK under the KEK) authenticate it, so a
  * sealed value opens only with the same `aad`. Per-user secrets bind it to their
- * row (`app_id|user_id|name`): a row copied to another user or app fails to
+ * row (`["app_id","user_id","name"]` as JSON): a row copied to another user or app fails to
  * decrypt. Without `aad` the bytes are exactly as before, so existing rows and
  * callers are unchanged.
  *

@@ -79,7 +79,9 @@ app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
 //   `user:<uid>` rooms admit only that user; `mcp.json` `rooms` declares who may join others
 
 // Secret-injecting API proxy — requires authMode: 'platform-cookie' (calls are
-// bound to the app's own origin; a legacy-bearer call gets 403)
+// bound to the app's own origin; a legacy-bearer call gets 403). The host refuses
+// /.pas/api navigations and requests the browser marks as not same-origin, and
+// proxy responses carry nosniff + CSP sandbox.
 app.proxy.fetch(url, opts)
 
 // The signed-in user's own keys for this app (BYO keys, #587) — platform-cookie only.

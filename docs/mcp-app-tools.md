@@ -834,7 +834,7 @@ own secret for this app, such as their own API key (#587):
   gets 403. Writes are limited to 30 a minute per user and app. A value is at
   most 4096 characters.
 - Values are sealed like app secrets (envelope AES-256-GCM under the platform
-  KEK) with `app|user|name` as associated data, so a row copied to another user
+  KEK) with the JSON array `[app, user, name]` as associated data, so a row copied to another user
   or app does not decrypt. No route, log or error returns a value.
 - A value reaches the outside world only through the proxy. A rule added with
   `pas proxy allow <pattern> --inject bearer --user-secret NAME`
@@ -848,6 +848,21 @@ own secret for this app, such as their own API key (#587):
   values are deleted with their account in the app
   (`DELETE /v1/apps/<app>/users/<id>/account`), and every user's are deleted
   with the app.
+
+- A user-scoped rule whose name is no longer declared is refused (403). A
+  value may not contain control characters (CR, LF, NUL and the rest).
+- Proxy calls through a user-scoped rule count against the app's daily proxy
+  budget and the caller's share of it, like any other proxy call.
+
+**What user secrets protect, and what they do not.** A user's secret is
+protected from other users and from other apps: nobody else can read, use or
+overwrite it, and it is never returned. It is **not** protected from the app's
+developer. The developer writes the app's JavaScript and controls its proxy
+allowlist, so they decide which hosts a user's key is sent to, and can add a
+rule that sends it to a host they control. A user who stores a key is trusting
+the app's owner with that key. Transferring the app to a new owner hands that
+power to the new owner, and the stored values stay. Users should give an app a
+key scoped to what it needs (a read-only or admin-costs key, not a full key).
 
 App workers cannot read user secrets yet.
 

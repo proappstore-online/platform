@@ -66,6 +66,10 @@ export function registerUserSecretsRoutes(secretsRoutes: Hono<{ Bindings: Env }>
       if (value.length > MAX_SECRET_VALUE_CHARS) {
         throw new HttpError(`value too long (max ${MAX_SECRET_VALUE_CHARS} chars)`, 400);
       }
+      // It is injected into a header or query string: no CR/LF, NUL or other control characters.
+      if (/[\u0000-\u001f\u007f]/.test(value)) {
+        throw new HttpError('value must not contain control characters', 400);
+      }
 
       const sealed = await sealUserSecret(value, kek, appId, user.id, name);
       const now = Date.now();

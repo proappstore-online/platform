@@ -271,7 +271,8 @@ namespace_id = "1005"
 simple = { limit = 1, period = 60 }
 
 # Per-user secret writes (#587): PUT/DELETE /v1/apps/:id/user-secrets, 30 per 60 s per
-# (app, user), key `${appId}:${userId}`. PAS holds 1000-1006.
+# (app, user), key `${appId}:${userId}`. namespace_id is account-unique: PWS holds 0, 2
+# and 1001; PAS holds 1000 and 1002-1006.
 [[unsafe.bindings]]
 name = "USER_SECRET_RATE_LIMIT"
 type = "ratelimit"

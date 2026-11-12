@@ -264,7 +264,7 @@ describe('PUT /v1/apps/:appId/allowlist', () => {
       method: 'PUT',
       headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        pattern: 'https://api.example.com',
+        pattern: 'https://api.example.com/',
         injectKind: 'bearer',
         injectName: '',
         secretName: 'MISSING_KEY',
