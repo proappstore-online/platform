@@ -1377,7 +1377,7 @@ describe('add_marketing_site (#421)', () => {
   const DEPLOY_NEW = `${DEPLOY_OLD}      - name: Publish marketing site (marketing/ -> about-<app>, keyless)\n`;
 
   /** GitHub as the tool reads it: template-app's tree + blobs, the app's tree, package.json and deploy.yml. */
-  function github(opts: { appFiles?: string[]; truncated?: boolean; unlisted?: string[]; pkg?: string | null; deploy?: string; templateStatus?: number } = {}) {
+  function github(opts: { appFiles?: string[]; truncated?: boolean; unlisted?: string[]; pkg?: string | null; deploy?: string; templateStatus?: number; appBlobs?: Record<string, string>; vite?: string } = {}) {
     const appFiles = opts.appFiles ?? ['package.json', 'web/src/App.tsx'];
     mockGh.api.mockImplementation(async (path: string) => {
       if (path === '/repos/proappstore-online/template-app/git/trees/main?recursive=1') {
@@ -1392,6 +1392,8 @@ describe('add_marketing_site (#421)', () => {
       }
       const blob = path.match(/^\/repos\/proappstore-online\/template-app\/git\/blobs\/sha:(.+)$/);
       if (blob) return { ok: true, status: 200, data: { encoding: 'base64', content: TEMPLATE[blob[1]!]!.replace(/(.{8})/g, '$1\n') } };
+      const appBlob = path.match(/^\/repos\/test-org\/shop\/git\/blobs\/(.+)$/);
+      if (appBlob && opts.appBlobs?.[appBlob[1]!]) return { ok: true, status: 200, data: { encoding: 'base64', content: opts.appBlobs[appBlob[1]!] } };
       if (path === '/repos/test-org/shop/git/trees/main?recursive=1') {
         return { ok: true, status: 200, data: { truncated: opts.truncated ?? false, tree: appFiles.map((p) => ({ path: p, type: 'blob', sha: p })) } };
       }
@@ -1400,6 +1402,7 @@ describe('add_marketing_site (#421)', () => {
     mockGh.getFile.mockImplementation(async (_id: string, path: string) => {
       if (path === 'package.json' && opts.pkg !== null) return { ok: true, status: 200, sha: 'p', content: opts.pkg ?? '{"name":"shop","scripts":{"build":"vite build"}}' };
       if (path === '.github/workflows/deploy.yml') return { ok: true, status: 200, sha: 'w', content: opts.deploy ?? DEPLOY_NEW };
+      if (path === 'web/vite.config.ts' && opts.vite) return { ok: true, status: 200, sha: 'v', content: opts.vite };
       if (opts.unlisted?.includes(path)) return { ok: true, status: 200, sha: 'x', content: '' };
       return { ok: false, status: 404 };
     });
@@ -1426,6 +1429,34 @@ describe('add_marketing_site (#421)', () => {
       expect(bytes).toEqual(renderLettermarkPng('shop', 192));
       expect(icon.content).not.toBe(TEMPLATE['marketing/public/icon-192.png']);
     } finally { TEMPLATE['marketing/public/icon-192.png'] = original!; }
+  });
+
+  // #589: the manifest name, the scaffold date, the app's own icons (with a new cache key) and .gitignore.
+  it("names the site from the app's PWA manifest and copies the app's own icons", async () => {
+    const extra = {
+      'marketing/.gitignore': b64('.astro/\ndist/\nnode_modules/\n'),
+      'marketing/src/layouts/Layout.astro': b64('<link rel="icon" href="/icon-192.png?v=neutral-1" />'),
+    };
+    Object.assign(TEMPLATE, extra);
+    try {
+      const own = Buffer.from([0x89, 0x50, 0x4e, 0x47, 7, 7, 7]).toString('base64');
+      github({
+        appFiles: ['package.json', 'web/public/icon-192.png'],
+        appBlobs: { 'web/public/icon-192.png': own },
+        vite: "VitePWA({ manifest: { name: 'GrassKarma', short_name: 'GK' } })",
+      });
+      listing({}, 404);
+      const out = getText(await run());
+      const files = Object.fromEntries(pushed().map((f) => [f.path, f]));
+      const site = files['marketing/src/site.ts']!.content;
+      expect(site).toContain('name: "GrassKarma"');
+      expect(files['marketing/public/icon-192.png']).toEqual({ path: 'marketing/public/icon-192.png', content: own, encoding: 'base64' });
+      expect(files['marketing/src/layouts/Layout.astro']!.content).toMatch(/^<link rel="icon" href="\/icon-192\.png\?v=app-[0-9a-f]{8}" \/>$/);
+      expect(Buffer.from(files['marketing/.gitignore']!.content, 'base64').toString('utf8')).toBe('.astro/\ndist/\nnode_modules/\n');
+      expect(out).toContain("Copied the app's own icons from web/public: marketing/public/icon-192.png.");
+    } finally {
+      for (const k of Object.keys(extra)) delete TEMPLATE[k];
+    }
   });
 
   it('adds every template file in one commit: APPNAME replaced, site.ts pre-filled, the icon as base64, root scripts added', async () => {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMarketing, detectAppId, prefillSite, deployPublishesMarketing } from './marketing.js';
+import { addMarketing, detectAppId, prefillSite, deployPublishesMarketing, manifestAppName } from './marketing.js';
 
 // #410: `pas marketing add` copies template-app's marketing/ into an existing
 // app repo, never overwriting, pre-filled from the app id and public listing.
@@ -14,6 +14,7 @@ const SITE_TS = `export const site = {
   appUrl: 'https://APPNAME.proappstore.online/',
   owner: 'The APPNAME team',
   supportUrl: '',
+  legalUpdated: '2026-10-18',
   colors: {
     accent: '#d86f4d',
     accentDeep: '#9f4427',
@@ -25,6 +26,9 @@ const SITE_TS = `export const site = {
 }
 `;
 const ICON = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00]);
+const LAYOUT = '<link rel="icon" href="/icon-192.png?v=neutral-1" />\n<img src="/icon-192.png?v=neutral-1" />\n';
+const GITIGNORE = '.astro/\ndist/\nnode_modules/\n';
+const today = () => new Date().toISOString().slice(0, 10);
 
 let root: string;
 let template: string;
@@ -34,6 +38,7 @@ let app: string;
 function makeTemplate(): string {
   const dir = join(root, 'template', 'marketing');
   mkdirSync(join(dir, 'src', 'pages'), { recursive: true });
+  mkdirSync(join(dir, 'src', 'layouts'), { recursive: true });
   mkdirSync(join(dir, 'public'), { recursive: true });
   mkdirSync(join(dir, 'node_modules', 'astro'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@APPNAME/marketing', scripts: { build: 'astro build' } }));
@@ -41,6 +46,8 @@ function makeTemplate(): string {
   writeFileSync(join(dir, 'src', 'pages', 'index.astro'), '<h1>{site.name}</h1>');
   writeFileSync(join(dir, 'src', 'pages', 'privacy.astro'), '<h1>Privacy</h1>');
   writeFileSync(join(dir, 'public', 'icon-192.png'), ICON);
+  writeFileSync(join(dir, 'src', 'layouts', 'Layout.astro'), LAYOUT);
+  writeFileSync(join(dir, '.gitignore'), GITIGNORE);
   writeFileSync(join(dir, 'node_modules', 'astro', 'x.js'), 'never copied');
   return dir;
 }
@@ -64,7 +71,7 @@ describe('pas marketing add (#410)', () => {
     const r = await addMarketing({ cwd: app, fetchTemplate, fetchListing: noListing });
     expect(r.appId).toBe('kanban-pro');
     expect(r.added.sort()).toEqual([
-      'marketing/package.json', 'marketing/public/icon-192.png', 'marketing/src/pages/index.astro', 'marketing/src/pages/privacy.astro', 'marketing/src/site.ts',
+      'marketing/.gitignore', 'marketing/package.json', 'marketing/src/layouts/Layout.astro', 'marketing/public/icon-192.png', 'marketing/src/pages/index.astro', 'marketing/src/pages/privacy.astro', 'marketing/src/site.ts',
     ].map(path => join(...path.split('/'))).sort());
     expect(r.skipped).toEqual([]);
     expect(JSON.parse(read('marketing/package.json')).name).toBe('@kanban-pro/marketing');
@@ -73,10 +80,39 @@ describe('pas marketing add (#410)', () => {
     expect(site).toContain(`appId: 'kanban-pro'`);
     expect(site).toContain('name: "Kanban Pro"');
     expect(site).toContain('headline: "Explore Kanban Pro."');
+    expect(site).toContain(`legalUpdated: "${today()}"`);
     expect(site).not.toContain('APPNAME');
+    expect(read('marketing/.gitignore')).toBe(GITIGNORE);
+    expect(read('marketing/src/layouts/Layout.astro')).toBe(LAYOUT); // no app icon: the template's stays, cache key too
+    expect(r.icons).toEqual([]);
     // Never node_modules, and the workspace is left alone.
     expect(() => read('marketing/node_modules/astro/x.js')).toThrow();
     expect(read('pnpm-workspace.yaml')).toBe('packages:\n  - web\n');
+  });
+
+  // #589: the app's display name and icons, not the capitalised id and the template's.
+  it("takes the name from the app's PWA manifest and copies its own icons, busting the icon cache key", async () => {
+    mkdirSync(join(app, 'web', 'public'), { recursive: true });
+    writeFileSync(join(app, 'web', 'vite.config.ts'), "VitePWA({\n  manifest: {\n    name: 'GrassKarma',\n    short_name: 'GK',\n  },\n})\n");
+    const own192 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    writeFileSync(join(app, 'web', 'public', 'icon-192.png'), own192);
+    const r = await addMarketing({ cwd: app, fetchTemplate, fetchListing: noListing });
+    const site = read('marketing/src/site.ts');
+    expect(site).toContain('name: "GrassKarma"');
+    expect(site).toContain('owner: "The GrassKarma team"');
+    expect(readFileSync(join(app, 'marketing/public/icon-192.png'))).toEqual(own192);
+    expect(r.icons).toEqual([join('marketing', 'public', 'icon-192.png')]);
+    const layout = read('marketing/src/layouts/Layout.astro');
+    expect(layout).not.toContain('neutral-1');
+    expect(layout.match(/icon-192\.png\?v=app-[0-9a-f]{8}/g)).toHaveLength(2);
+  });
+
+  it("keeps the template's icon when the app still ships a template default", async () => {
+    mkdirSync(join(app, 'web', 'public'), { recursive: true });
+    writeFileSync(join(app, 'web', 'public', 'icon-192.png'), readFileSync(new URL('../../compliance/src/__fixtures__/template-icons/f-192.png', import.meta.url)));
+    const r = await addMarketing({ cwd: app, fetchTemplate, fetchListing: noListing });
+    expect(r.icons).toEqual([]);
+    expect(readFileSync(join(app, 'marketing/public/icon-192.png'))).toEqual(ICON);
   });
 
   it('never overwrites an existing file', async () => {
@@ -148,7 +184,7 @@ describe('prefillSite (#410)', () => {
 
   it('fills tagline, an https support link and the brand colour from the public listing', () => {
     const r = prefillSite(site, 'shop', { tagline: "Shop's best: \"fast\" checkout", supportUrl: 'https://help.example/shop', themeColor: '#336699' });
-    expect(r.prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner', 'summary', 'supportUrl', 'colors']);
+    expect(r.prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner', 'legalUpdated', 'summary', 'supportUrl', 'colors']);
     expect(r.text).toContain('summary: "Shop\'s best: \\"fast\\" checkout"');
     expect(r.text).toContain('supportUrl: "https://help.example/shop"');
     expect(r.text).toContain('accent: "#336699"');
@@ -159,10 +195,27 @@ describe('prefillSite (#410)', () => {
 
   it('keeps the template defaults when the listing has nothing usable', () => {
     const r = prefillSite(site, 'shop', { tagline: '  ', supportUrl: 'javascript:alert(1)', themeColor: 'red' });
-    expect(r.prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner']);
+    expect(r.prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner', 'legalUpdated']);
     expect(r.text).toContain("supportUrl: ''");
     expect(r.text).toContain("accent: '#d86f4d'");
-    expect(prefillSite(site, 'shop', null).prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner']);
+    expect(prefillSite(site, 'shop', null).prefilled).toEqual(['name', 'headline', 'ctaLabel', 'owner', 'legalUpdated']);
+  });
+
+  it('uses a given display name and date', () => {
+    const r = prefillSite(site, 'shop', null, { name: 'ShopKit', today: '2026-11-12' });
+    expect(r.text).toContain('name: "ShopKit"');
+    expect(r.text).toContain('ctaLabel: "Open ShopKit"');
+    expect(r.text).toContain('legalUpdated: "2026-11-12"');
+  });
+
+  it('manifestAppName reads vite.config.ts, then manifest.json, and ignores placeholders', () => {
+    const vite = (n: string) => `VitePWA({ manifest: { short_name: 'S', name: ${n}, icons: [] } })`;
+    expect(manifestAppName(vite("'GrassKarma'"), null)).toBe('GrassKarma');
+    expect(manifestAppName(vite('"Two Words"'), '{"name":"Other"}')).toBe('Two Words');
+    expect(manifestAppName(vite("'APPNAME'"), '{"name":"From JSON"}')).toBe('From JSON');
+    expect(manifestAppName("defineConfig({ plugins: [] })", null)).toBeNull();
+    expect(manifestAppName(null, 'not json')).toBeNull();
+    expect(manifestAppName(null, '{"name":"  "}')).toBeNull();
   });
 
   it('detectAppId ignores an invalid .pas.json appId and strips a package scope', () => {

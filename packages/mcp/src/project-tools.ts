@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { isTemplateDefaultIcon, renderLettermarkPng } from '@proappstore/compliance/icons';
 /**
  * Project-building MCP tools — scaffold, edit, and deploy PAS apps.
@@ -13,7 +14,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeGitHub } from "@proappstore/build-core";
 import { selectTemplate, getTemplate, DEFAULT_TEMPLATE_ID } from "@proappstore/build-core";
-import { b64decode, deployPublishesMarketing, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
+import { b64decode, bustIconCache, deployPublishesMarketing, manifestAppName, prefillSite, MARKETING_DEPLOY_STEP, MARKETING_SCRIPTS, MARKETING_TEXT_EXTENSIONS, type MarketingListing } from "@proappstore/build-core";
 import { createProvisioningWorkflow, type ProvisionOperationReceipt } from "./provisioning-workflow.js";
 import { gateMutation, dryRun } from "./safety.js";
 import { BUILD_WITH_APPSHELL } from "./sdk-reference.js";
@@ -696,9 +697,28 @@ export function registerProjectTools(
         listing = res.ok ? ((await res.json()) as MarketingListing) : null;
       } catch { /* private (404), unlisted or unreachable: the template's defaults stay */ }
 
+      // #589: the app's display name from its PWA manifest, and its own icons in place of the template's.
+      const [viteConfig, manifestJson] = await Promise.all(["web/vite.config.ts", "web/public/manifest.json"].map((p) => gh.getFile(app_id, p)));
+      const name = manifestAppName(viteConfig!.ok ? viteConfig!.content : null, manifestJson!.ok ? manifestJson!.content : null);
+      const appIcons = new Map<string, Buffer>();
+      for (const size of [192, 512] as const) {
+        const sha = blobsOf(appTree).find((t) => t.path === `web/public/icon-${size}.png`)?.sha;
+        if (!sha) continue;
+        const blob = await gh.api(`/repos/${org}/${app_id}/git/blobs/${sha}`);
+        const content = (blob.data as { content?: string } | null)?.content;
+        if (!blob.ok || content === undefined) continue; // unreadable: the template's icon stays
+        const bytes = Buffer.from(content.replace(/\s/g, ""), "base64");
+        if (!isTemplateDefaultIcon(size, bytes)) appIcons.set(`marketing/public/icon-${size}.png`, bytes);
+      }
+      const iconVersion = appIcons.size
+        ? "app-" + createHash("sha256").update(Buffer.concat([...appIcons.values()])).digest("hex").slice(0, 8)
+        : null;
+
       let prefilled: string[] = [];
       const files: { path: string; content: string; encoding?: "base64" }[] = [];
       for (const s of toAdd) {
+        const appIcon = appIcons.get(s.path);
+        if (appIcon) { files.push({ path: s.path, content: appIcon.toString("base64"), encoding: "base64" }); continue; }
         const blob = await gh.api(`/repos/${template.repo}/git/blobs/${s.sha}`);
         const content = (blob.data as { content?: string } | null)?.content?.replace(/\n/g, "");
         if (!blob.ok || content === undefined) return errText(`Could not read ${s.path} from ${template.repo} (HTTP ${blob.status}). Nothing was written.`);
@@ -712,7 +732,8 @@ export function registerProjectTools(
           continue;
         }
         let body = b64decode(content).split("APPNAME").join(app_id);
-        if (s.path === "marketing/src/site.ts") ({ text: body, prefilled } = prefillSite(body, app_id, listing));
+        if (s.path === "marketing/src/site.ts") ({ text: body, prefilled } = prefillSite(body, app_id, listing, { name }));
+        if (iconVersion) body = bustIconCache(body, iconVersion);
         files.push({ path: s.path, content: body });
       }
       if (pkg && scripts.length) {
@@ -723,7 +744,8 @@ export function registerProjectTools(
 
       const res = await gh.pushFiles(app_id, files, "feat(marketing): add the Astro marketing site (add_marketing_site)");
       if (!res.ok) return errText(`Error committing the marketing site: ${res.error ?? "unknown"}. Nothing was written.`);
-      return text(`Marketing site for ${app_id} committed to main (${res.commitSha?.slice(0, 7)}):\n${summary(prefilled)}`);
+      const copiedIcons = files.filter((f) => appIcons.has(f.path)).map((f) => f.path);
+      return text(`Marketing site for ${app_id} committed to main (${res.commitSha?.slice(0, 7)}):\n${summary(prefilled)}${copiedIcons.length ? `\nCopied the app's own icons from web/public: ${copiedIcons.join(", ")}.` : ""}`);
     },
   );
 }

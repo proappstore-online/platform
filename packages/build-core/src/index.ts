@@ -50,7 +50,9 @@ export {
 } from './turnstile.js';
 export type { TurnstileConfig, TurnstileReason, TurnstileResult } from './turnstile.js';
 export {
+  bustIconCache,
   deployPublishesMarketing,
+  manifestAppName,
   MARKETING_DEPLOY_STEP,
   MARKETING_SCRIPTS,
   MARKETING_TEXT_EXTENSIONS,

@@ -60,15 +60,41 @@ function titleCase(id: string): string {
   return id.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
-/** site.ts with the app's name and, when the public listing has them, its tagline, support link and brand colour. */
-export function prefillSite(text: string, appId: string, listing: MarketingListing | null): { text: string; prefilled: string[] } {
-  const name = titleCase(appId);
+/**
+ * The app's display name from its PWA manifest (#589): `manifest: { name: '...' }` in
+ * web/vite.config.ts, else `name` in a manifest.json; null when neither has a real one.
+ */
+export function manifestAppName(viteConfig: string | null | undefined, manifestJson: string | null | undefined): string | null {
+  const real = (v: unknown) => (typeof v === 'string' && v.trim() && !v.includes('APPNAME') ? v.trim() : null);
+  const vite = viteConfig?.match(/\bmanifest\s*:\s*\{[\s\S]*?\bname\s*:\s*(['"])([^'"\n]+)\1/);
+  if (vite && real(vite[2])) return real(vite[2]);
+  try { return real((JSON.parse(manifestJson ?? '') as { name?: unknown }).name); } catch { return null; }
+}
+
+/** Point the template's `/icon-*.png?v=...` references at a new version, so a copied app icon is not served from cache (#589). */
+export function bustIconCache(text: string, version: string): string {
+  return text.replace(/(\/icon-(?:192|512)\.png)\?v=[\w.-]+/g, `$1?v=${version}`);
+}
+
+/**
+ * site.ts with the app's name (`opts.name`, its manifest name, else the title-cased id), the
+ * scaffold date as `legalUpdated`, and, when the public listing has them, its tagline, support
+ * link and brand colour. Owner/contact stay the template's (#498).
+ */
+export function prefillSite(
+  text: string,
+  appId: string,
+  listing: MarketingListing | null,
+  opts: { name?: string | null; today?: string } = {},
+): { text: string; prefilled: string[] } {
+  const name = opts.name || titleCase(appId);
   const src = { text };
   const prefilled: string[] = [];
   if (setField(src, 'name', name)) prefilled.push('name');
   if (setField(src, 'headline', `Explore ${name}.`)) prefilled.push('headline');
   if (setField(src, 'ctaLabel', `Open ${name}`)) prefilled.push('ctaLabel');
   if (setField(src, 'owner', `The ${name} team`)) prefilled.push('owner');
+  if (setField(src, 'legalUpdated', opts.today ?? new Date().toISOString().slice(0, 10))) prefilled.push('legalUpdated');
   const summary = (listing?.tagline || listing?.longDescription || '').trim().slice(0, 300);
   if (summary && setField(src, 'summary', summary)) prefilled.push('summary');
   const support = typeof listing?.supportUrl === 'string' && /^https:\/\//.test(listing.supportUrl) ? listing.supportUrl : null;

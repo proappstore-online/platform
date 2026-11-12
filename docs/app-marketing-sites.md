@@ -122,12 +122,21 @@ git add marketing package.json && git commit -m "Add marketing site" && git push
   overwritten**, only reported as skipped, so re-running it is safe;
 - replaces `APPNAME` with the app id (from `.pas.json`, else the root
   `package.json` name) in the files it adds, and pre-fills
-  `marketing/src/site.ts`: the app's name, headline, call to action and owner,
-  and — from the app's public listing (`GET /v1/storefront/apps/:id`), when it
+  `marketing/src/site.ts`: the app's name (its PWA manifest `name` from
+  `web/vite.config.ts`, else `web/public/manifest.json`, else the title-cased
+  id, #589), headline, call to action, the default operator `The <name> team`
+  (never a real owner or contact, see #498) and `legalUpdated` (the scaffold
+  date), and — from the app's public listing (`GET /v1/storefront/apps/:id`), when it
   has one — the summary (tagline), an https support link and the brand colours
   (theme colour, with darker and lighter shades derived from it). A private or
   unlisted app keeps the template's placeholders; review the copy before you
   push;
+- copies the app's own `web/public/icon-192.png` / `icon-512.png` into
+  `marketing/public/` when the app has set its own (a template-default icon is
+  not copied), and gives the `/icon-*.png?v=…` references in the added files a
+  new cache key so browsers do not keep the template's icon (#589);
+- writes `marketing/.gitignore` (`.astro/`, `dist/`, `node_modules/`) from the
+  template, so `git add marketing` never commits generated output;
 - adds root `dev:marketing` and `build:marketing` scripts
   (`pnpm --dir marketing --ignore-workspace …`) only if they are absent.
 
@@ -146,8 +155,9 @@ The same thing without a checkout: `add_marketing_site { app_id }` on
 `mcp.proappstore.online/mcp` (owner only; `dry_run: true` previews the plan).
 It reads `template-app`'s `marketing/` through the GitHub API, skips every file
 the app repo already has, applies the same `APPNAME` replacement, `site.ts`
-pre-fill (`prefillSite` in `packages/build-core/src/marketing-site.ts`, held
-equal to the CLI's copy by its test) and root scripts, and commits the result
+pre-fill (`prefillSite` and `manifestAppName` in
+`packages/build-core/src/marketing-site.ts`, held equal to the CLI's copies by
+its test), app-icon copy and root scripts, and commits the result
 to `main` in **one** commit, so the push deploys it. Binary files (the icon)
 go in that same commit as base64 blobs. It reports whether `deploy.yml`
 publishes the site, as the CLI does; it never writes under `.github/`.
