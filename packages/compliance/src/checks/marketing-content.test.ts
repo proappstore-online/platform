@@ -70,6 +70,32 @@ describe('marketing-content (#498)', () => {
     expect(rules(WRITTEN.replace("'Know your stock'", "'Fast'").replace("'See what is left before the market opens.'", "'Quick.'"))).toEqual([]);
   });
 
+  // #588: the template's home page carries an enquiry form; that is a contact path on its own.
+  const FORM = '<form method="POST" action={`https://api.proappstore.online/v1/apps/${site.appId}/enquiries`}>';
+  const withHome = (src: string, home: string) => mapFileSource(new Map([['marketing/src/site.ts', src], ['marketing/src/pages/index.astro', home]]));
+  const noEmail = WRITTEN.replace("'hello@shop.example'", "''");
+
+  it('accepts the enquiry form instead of a contactEmail (#588)', async () => {
+    expect(marketingFindings(noEmail, true)).toEqual([]);
+    expect((await checkMarketingContent(withHome(noEmail, `<section id="contact">${FORM}</section>`))).status).toBe('pass');
+  });
+
+  it('still wants a contactEmail when the home page has no enquiry form (#588)', async () => {
+    const r = await checkMarketingContent(withHome(noEmail, '<section id="contact"><p>Write to us.</p></section>'));
+    expect(r.status).toBe('warn');
+    expect(r.detail).toContain('no contactEmail');
+    expect((await checkMarketingContent(site(noEmail))).detail).toContain('no contactEmail');
+  });
+
+  it('with the enquiry form, a default operator and a missing governing law are still findings (#588)', async () => {
+    const src = noEmail.replace("'Ada Lovelace Pty Ltd'", "'The Shop team'").replace("'Victoria, Australia'", "''");
+    const r = await checkMarketingContent(withHome(src, FORM));
+    expect(r.status).toBe('warn');
+    expect(r.detail).toContain('operator "The Shop team" is the default');
+    expect(r.detail).toContain('no governing law');
+    expect(r.detail).not.toContain('no contactEmail');
+  });
+
   it('is skipped for an app with no marketing site, and never throws on an unrecognisable site.ts', async () => {
     expect((await checkMarketingContent(mapFileSource(new Map([['web/src/App.tsx', 'x']])))).detail).toBe('no marketing site');
     expect(marketingFindings('export default {}').map((f) => f.rule)).toEqual(['operator-contact', 'operator-contact', 'imagery']);

@@ -93,11 +93,11 @@ An app can publish `marketing/` exactly as scaffolded: the template's headline a
 | Rule | Flags |
 |---|---|
 | `template-copy` | the headline `Explore <name>.`, the summary sentence, benefit titles and bodies, or how-it-works steps that are still the template's own words |
-| `operator-contact` | the default operator `The <name> team` (or none), no `contactEmail`, no `governingLaw` for the Terms |
+| `operator-contact` | the default operator `The <name> team` (or none), no `contactEmail` while `src/pages/index.astro` has no enquiry form, no `governingLaw` for the Terms |
 | `imagery` | no hero image and no screenshots; without a hero image the social preview is the app icon |
 | `placeholder` | an `APPNAME` the scaffold never replaced |
 
-It only recognises the template's strings, so any copy an owner has written passes. It is a **warning** in `pas check` and `compliance.yml`, and never stops a deploy there.
+It only recognises the template's strings, so any copy an owner has written passes. The enquiry form (#588) is a contact path on its own: the template's home page posts it to `/v1/apps/<id>/enquiries` from a section with `id="contact"`, and with no `contactEmail` the legal pages tell people to "use the contact form at `https://about-<id>.proappstore.online/#contact`". An owner who publishes no email is therefore not flagged and not blocked on first activation, as long as the form stays; a default operator or a missing governing law still are. It is a **warning** in `pas check` and `compliance.yml`, and never stops a deploy there.
 
 The **"Publish marketing site" deploy step** (`.github/workflows/app-deploy.yml`) runs the same check again, right before upload, and reports its result to the run's job summary either way. If the check found anything and the `about-<app>` site has never answered a live request before (a plain `HEAD /` probe — the host's own "no active revision" signal, #497), the step stops there: it never uploads or activates, so the site never goes live on the template's copy. A redeploy of an app whose site is already live is never blocked this way — the owner is already past this gate once, and a template-copy warning on an edit they are actively making is `pas check`'s job, not the deploy's.
 

@@ -14,7 +14,7 @@ export const site = {
   appUrl: 'https://APPNAME.proappstore.online/',
   /** Who runs the app; named as the operator on the legal pages and in the footer. */
   owner: 'The APPNAME team',
-  /** Where people can reach you. Leave empty to point them at the app instead. */
+  /** Where people can reach you. Leave empty to point them at the contact form on the home page instead. */
   contactEmail: '',
   /** Optional help page or support link shown in the footer. */
   supportUrl: '',
@@ -60,4 +60,4 @@ interface Image {
 /** How the legal pages tell people to reach you. */
 export const contact = site.contactEmail
   ? `email ${site.contactEmail}`
-  : `contact us through ${site.appUrl}`
+  : `use the contact form at https://about-${site.appId}.proappstore.online/#contact`

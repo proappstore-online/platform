@@ -185,7 +185,7 @@
       "automation": "partial",
       "evidenceClass": "source",
       "scope": "apps",
-      "limits": "Extends the placeholder rule to the about- site: recognises the template's own headline, summary, benefit and step text, the default operator, an empty contact or governing law, and a missing hero image or screenshots, in marketing/src/site.ts. Not that the copy is accurate or good. Skipped when the app has no marketing/ folder. A warning in this release.",
+      "limits": "Extends the placeholder rule to the about- site: recognises the template's own headline, summary, benefit and step text, the default operator, an empty contact (unless the home page has the enquiry form) or governing law, and a missing hero image or screenshots, in marketing/src/site.ts. Not that the copy is accurate or good. Skipped when the app has no marketing/ folder. A warning in this release.",
       "live": false
     },
     {

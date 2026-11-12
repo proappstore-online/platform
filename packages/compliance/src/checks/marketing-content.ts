@@ -11,7 +11,8 @@ import type { CheckResult, CheckStatus } from '../types.js';
  *
  *   template-copy     the headline, summary, benefits or how-it-works steps are the template's words
  *   operator-contact  the operator named on the legal pages is the default `The <name> team`,
- *                     there is no contactEmail, or the Terms name no governing law
+ *                     there is no contactEmail and no enquiry form (#588), or the Terms name no
+ *                     governing law
  *   imagery           no hero image and no screenshots; without a hero the social preview
  *                     falls back to the app icon
  *   placeholder       an `APPNAME` the scaffold never replaced
@@ -32,6 +33,10 @@ export const RULE_SEVERITY: Record<MarketingRule, CheckStatus> = {
 };
 
 const SITE = 'marketing/src/site.ts';
+const HOME = 'marketing/src/pages/index.astro';
+
+/** #588: the home page posts an enquiry form to `/v1/apps/<id>/enquiries`, so people can reach the owner without an email. */
+const ENQUIRY_FORM = /\baction=\{?\s*[`'"][^`'"]*\/enquiries[`'"]/;
 
 /** The template's own sentences (template-app `marketing/src/site.ts`), the ones an owner is meant to replace. */
 const TEMPLATE_SUMMARY = /^Describe in one or two sentences/i;
@@ -70,7 +75,7 @@ interface Finding {
   what: string;
 }
 
-export function marketingFindings(raw: string): Finding[] {
+export function marketingFindings(raw: string, hasEnquiryForm = false): Finding[] {
   const src = stripCommentsOnly(raw);
   const out: Finding[] = [];
   const add = (rule: MarketingRule, what: string) => out.push({ rule, what });
@@ -102,7 +107,7 @@ export function marketingFindings(raw: string): Finding[] {
   const owner = literal(src, 'owner');
   if (owner !== null && owner.trim() === '') add('operator-contact', 'no operator named on the legal pages');
   else if (owner !== null && (owner === `The ${name} team` || owner === `The ${appId} team`)) add('operator-contact', `operator "${owner}" is the default`);
-  if ((literal(src, 'contactEmail') ?? '').trim() === '') add('operator-contact', 'no contactEmail on the legal pages');
+  if (!hasEnquiryForm && (literal(src, 'contactEmail') ?? '').trim() === '') add('operator-contact', 'no contactEmail on the legal pages');
   if ((literal(src, 'governingLaw') ?? '').trim() === '') add('operator-contact', 'no governing law in the Terms');
 
   const hero = /(?:^|\n)\s*heroImage:\s*null\b/.test(src) || !/(?:^|\n)\s*heroImage:/.test(src);
@@ -122,7 +127,7 @@ export async function checkMarketingContent(source: FileSource): Promise<CheckRe
   const name = 'Marketing site content';
   const raw = await source.read(SITE);
   if (raw === null) return { name, status: 'pass', detail: 'no marketing site' };
-  const findings = marketingFindings(raw);
+  const findings = marketingFindings(raw, ENQUIRY_FORM.test((await source.read(HOME)) ?? ''));
   if (findings.length === 0) return { name, status: 'pass', detail: `${SITE}: no template copy, operator and contact set, imagery present` };
   let status: CheckStatus = 'pass';
   const parts: string[] = [];
@@ -137,7 +142,7 @@ export async function checkMarketingContent(source: FileSource): Promise<CheckRe
     status,
     detail: `${SITE}: ${parts.join(' | ')}`,
     suggestions: [
-      'Edit marketing/src/site.ts: your own headline, summary and benefits; the operator and a contact email for the legal pages; a hero image or screenshots in marketing/public/assets/.',
+      'Edit marketing/src/site.ts: your own headline, summary and benefits; the operator for the legal pages, and a contact email unless the home page keeps its contact form; a hero image or screenshots in marketing/public/assets/.',
       'Keep claims true: no invented pricing, testimonials or customer counts. Leave an optional section empty and it is left out.',
     ],
   };
