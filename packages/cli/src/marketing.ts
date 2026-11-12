@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { Command } from 'commander';
 import { exists, resolveTemplate, run } from './create.js';
+import { captureScreenshots, parseRoutes, siteSnippet, VIEWPORT } from './marketing-screenshots.js';
 import { readConfig } from './lib/config.js';
 import { readJsonIfExists } from './lib/json-file.js';
 import { toTitleCase } from './lib/title-case.js';
@@ -211,6 +212,32 @@ marketingCommand
       }
     } catch (e) {
       process.stderr.write(`pas marketing add: ${(e as Error).message}\n`);
+      process.exitCode = 1;
+    }
+  });
+
+marketingCommand
+  .command('screenshots')
+  .description(`Capture routes of a running app (${VIEWPORT.width}x${VIEWPORT.height}, service workers blocked) into marketing/public/assets/ for the hero image and screenshots. Screenshots are public: run the app on demo/mock data.`)
+  .requiredOption('--routes <list>', 'comma-separated routes, optionally named: /,settings=/app/settings')
+  .option('--url <url>', 'the running app (default: `pnpm preview`)', 'http://localhost:4173')
+  .option('--setup <file>', 'module whose default export (context, { route, url }) prepares each browser context, e.g. mocks the platform with demo data')
+  .option('--format <format>', 'webp or png', 'webp')
+  .option('--allow-remote', 'allow a URL that is not localhost (it must show nothing private)')
+  .action(async (o: { routes: string; url: string; setup?: string; format: string; allowRemote?: boolean }) => {
+    try {
+      if (o.format !== 'webp' && o.format !== 'png') throw new Error('--format must be webp or png');
+      const r = await captureScreenshots({
+        cwd: process.cwd(), url: o.url, routes: parseRoutes(o.routes), format: o.format, setup: o.setup, allowRemote: o.allowRemote,
+      });
+      const out = (s: string) => process.stdout.write(s + '\n');
+      for (const f of r.files) out(`  + marketing/public${f.src}  (${f.route})`);
+      if (r.files.some((f) => f.format !== o.format)) out('Note: this browser could not encode WebP, so PNG was written instead.');
+      if (!o.setup) out('\nNo --setup given: pages were captured signed out. Use --setup to show them with demo data.');
+      out('\nPaste into marketing/src/site.ts (first route is the hero) and write real alt text:\n');
+      out(siteSnippet(r.files));
+    } catch (e) {
+      process.stderr.write(`pas marketing screenshots: ${(e as Error).message}\n`);
       process.exitCode = 1;
     }
   });

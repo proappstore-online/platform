@@ -152,6 +152,64 @@ to `main` in **one** commit, so the push deploys it. Binary files (the icon)
 go in that same commit as base64 blobs. It reports whether `deploy.yml`
 publishes the site, as the CLI does; it never writes under `.github/`.
 
+## Hero image and screenshots: `pas marketing screenshots` (#590)
+
+The `imagery` rule of the `marketing-content` check wants a hero image and
+screenshots. To shoot them from the app itself, run in the app root while the
+app is running locally:
+
+```bash
+pnpm build && pnpm preview          # http://localhost:4173
+pas marketing screenshots --routes /,dashboard=/mower,/mower/streets --setup marketing/shots.setup.ts
+```
+
+`pas marketing screenshots` (`packages/cli/src/marketing-screenshots.ts`):
+
+- opens each route of `--url` (default `http://localhost:4173`, i.e.
+  `pnpm preview`) in a **fresh** Chromium context at **1200x900** (4:3, the
+  hero's 640x480 slot at about 2x), with service workers blocked so a cached
+  build is never shot, waits for the network to settle and fonts to load, and
+  takes a screenshot with animations disabled;
+- writes it to `marketing/public/assets/<name>.webp` (WebP quality 0.82,
+  encoded by Chromium itself, so no `cwebp` is needed; `--format png`, or PNG
+  when the browser cannot encode WebP). `<name>` comes from the route
+  (`/mower/streets` → `mower-streets`, `/` → `home`), or name it:
+  `dashboard=/mower`. Existing files of that name are overwritten;
+- prints the `heroImage` and `screenshots` entries to paste into
+  `marketing/src/site.ts` — the first route is the hero. Replace the `TODO`
+  alt text with a real description; it does not edit `site.ts` itself.
+
+**Screenshots are public.** They are published on `about-<app>`, so they must
+show demo data, never a real account:
+
+- Each route gets a new browser context with no cookies or storage, so no
+  signed-in session is ever used. There is no option to load one.
+- Use `--setup <file>` to put the app on its own mocked/demo fixtures — the
+  same ones its e2e tests use. The file's default export is called with each
+  Playwright `BrowserContext` (and `{ route, url }`) before the route loads,
+  e.g. to `context.route()` the platform's `/.pas/*` calls. A `.ts` file works
+  on Node 22.18 and later (type stripping), so it can import the e2e mock
+  directly. GrassKarma's, using its a11y suite's mock:
+
+  ```ts
+  // marketing/shots.setup.ts
+  import { mockPlatform } from '../e2e/a11y/platform.ts'
+  export default (context: Parameters<typeof mockPlatform>[0]) => mockPlatform(context, 'mower')
+  ```
+
+  Different personas for different pages: run the command once per persona.
+  Without `--setup` pages are shot signed out.
+- A `--url` that is not `localhost`/`127.0.0.1`/`[::1]` is refused unless you
+  pass `--allow-remote`: the deployed app shows whatever its live backend
+  returns, which can include real people's data.
+
+Playwright is **not** a dependency of the CLI (with its browser it is far
+larger than the rest of `pas`). The command uses the app's own install,
+looking in the app root, `e2e/` and `web/` (`playwright`, `@playwright/test`
+or `playwright-core`), and ignores any copy outside the app found through
+`NODE_PATH`. An app with browser e2e tests already has it; otherwise:
+`pnpm add -D playwright && pnpm exec playwright install chromium`.
+
 ## Default URL
 
 `https://about-<app-id>.proappstore.online/` with a reserved `about-` hostname
