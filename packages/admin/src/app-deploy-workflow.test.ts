@@ -260,14 +260,17 @@ describe('app-deploy.yml migration chain test (#503)', () => {
     return body!.split('\n').map((l) => l.replace(/^ {10}/, '')).join('\n');
   };
 
-  it('runs before production applies migrations, on the same condition, with miniflare pinned to the runtime tests\' version', () => {
+  // miniflare is pinned exactly, but deliberately NOT to runtime-tests' version (#592): that pool is held at
+  // 4.20250906.0 (packages/runtime-tests/MACOS_CRASH_DIAGNOSIS.md §8), whose workerd segfaults applying
+  // bookkeeper's migration 0090, which production D1 applied. The deploy gate must run a D1 at least as new
+  // as the apps' production migrations need; bump it deliberately, re-running the #591 pre-flight.
+  it('runs before production applies migrations, on the same condition, with miniflare pinned to an exact version', () => {
     expect(WORKFLOW.indexOf(`- name: ${NAME}`)).toBeGreaterThan(-1);
     expect(WORKFLOW.indexOf(`- name: ${NAME}`)).toBeLessThan(WORKFLOW.indexOf(`- name: ${APPLY}`));
     const cond = (name: string) => /\n {8}if: (.*)\n/.exec(step(name))![1];
     expect(cond(NAME)).toBe(cond(APPLY));
-    const pinned = JSON.parse(readFileSync(new URL('../../runtime-tests/package.json', import.meta.url), 'utf8')).dependencies?.miniflare
-      ?? JSON.parse(readFileSync(new URL('../../runtime-tests/package.json', import.meta.url), 'utf8')).devDependencies?.miniflare;
-    expect(step(NAME)).toContain(`-p miniflare@${pinned}`);
+    expect(step(NAME)).toMatch(/-p miniflare@\d+\.\d+\.\d+ /);
+    expect(step(NAME)).toContain('-p miniflare@4.20260730.0');
     expect(step(NAME)).toContain('pas migrations test');
   });
 
