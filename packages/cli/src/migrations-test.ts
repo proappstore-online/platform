@@ -51,10 +51,15 @@ const errorText = (e: unknown): string => (e instanceof Error ? e.message : Stri
 /** A schema rejecting sample values: workerd names it SQLITE_CONSTRAINT, with or without an extended code. */
 export const isConstraintRejection = (message: string): boolean => /\bSQLITE_CONSTRAINT/.test(message);
 
-/** A value for a declared param: its default, else something of the right type that the executor's own typing accepts. */
-export function sampleParam(schema: NonNullable<ActionManifest['params']>[string]): unknown {
+/**
+ * A value for a declared param: its default, else something of the right type that the executor's own typing accepts.
+ * A string the SQL reads as JSON (`jsonInput`, see jsonParams) gets `'{}'`: in production it always carries JSON, and
+ * `'sample'` would fail every JSON function with "malformed JSON" (#592).
+ */
+export function sampleParam(schema: NonNullable<ActionManifest['params']>[string], jsonInput = false): unknown {
   if (schema.default !== undefined) return schema.default;
   if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0];
+  if (jsonInput && (schema.type === undefined || schema.type === 'string')) return '{}';
   switch (schema.type) {
     case 'integer':
     case 'number':
@@ -83,6 +88,16 @@ export function bindAction(sql: string, resolved: Record<string, unknown>, userI
     throw new Error(`Unresolved parameter: ${name}`);
   });
   return { sql: bound, params };
+}
+
+/** Params the SQL passes to a JSON function (`json_each(:p`, `json_extract(:p`, `json(:p`, ...) or the `->`/`->>` operators. */
+export function jsonParams(statements: string[]): Set<string> {
+  const names = new Set<string>();
+  for (const sql of statements) {
+    for (const m of sql.matchAll(/\bjson\w*\(\s*:([a-zA-Z_][a-zA-Z0-9_]*)/gi)) names.add(m[1]!);
+    for (const m of sql.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)\s*->/g)) names.add(m[1]!);
+  }
+  return names;
 }
 
 function actionStatements(a: ActionManifest): string[] {
@@ -117,7 +132,8 @@ export async function testMigrationChain(db: D1Like, input: { migrations: Migrat
     if (statements.length === 0) { report.actions.push({ name: a.name, operation, outcome: 'skipped', detail: 'no sql' }); continue; }
     try {
       const resolved: Record<string, unknown> = {};
-      for (const [name, schema] of Object.entries(a.params ?? {})) resolved[name] = sampleParam(schema ?? {});
+      const asJson = jsonParams(statements);
+      for (const [name, schema] of Object.entries(a.params ?? {})) resolved[name] = sampleParam(schema ?? {}, asJson.has(name));
       const now = Date.now();
       const prepared = statements.map((sql) => bindAction(sql, resolved, 'sample-user', now));
       if (operation === 'batch') {

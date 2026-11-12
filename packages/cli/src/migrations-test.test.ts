@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseStatements, tokenize, type SqlStatement, type SqlToken } from './lib/sql-statements.js';
-import { bindAction, isConstraintRejection, MiniflareUnavailable, sampleParam, testMigrationChain, withFreshD1, type D1Like } from './migrations-test.js';
+import { bindAction, isConstraintRejection, jsonParams, MiniflareUnavailable, sampleParam, testMigrationChain, withFreshD1, type D1Like } from './migrations-test.js';
 
 describe('the vendored statement splitter (#503)', () => {
   it('tokenizes without comments, and reports where each statement starts', () => {
@@ -54,6 +54,19 @@ describe('sample params', () => {
     expect(sampleParam({ type: 'boolean' })).toBe(true);
     expect(sampleParam({ type: 'string' })).toBe('sample');
     expect(sampleParam({})).toBe('sample');
+  });
+  it('samples a string the SQL reads as JSON as {} (#592), keeping defaults, enums and non-strings', () => {
+    const asJson = jsonParams([
+      "SELECT 1 FROM json_each(:book, '$.organizations')",
+      "UPDATE malls SET name = json_extract(:patch, '$.name') WHERE id = :id",
+      'INSERT INTO p (payload) VALUES (json(:payload_json))',
+      "SELECT :doc ->> '$.a', :plain",
+    ]);
+    expect([...asJson].sort()).toEqual(['book', 'doc', 'patch', 'payload_json']);
+    expect(sampleParam({ type: 'string' }, true)).toBe('{}');
+    expect(sampleParam({}, true)).toBe('{}');
+    expect(sampleParam({ type: 'string', default: '[]' }, true)).toBe('[]');
+    expect(sampleParam({ type: 'integer' }, true)).toBe(1);
   });
 });
 
