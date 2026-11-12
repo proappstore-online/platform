@@ -109,11 +109,28 @@ jobs:
     writes every result to the run's job summary.
   - this repo is public, so any repository can call it, including
     `ChessClubs-online/chess-clubs`.
-- **Releases:** the moving tag **`app-deploy-v1`**.
-  - A compatible change merges to `main`, then moves the tag
-    (`git tag -fa app-deploy-v1 <sha>`, `git push -f origin refs/tags/app-deploy-v1`).
-    The next push of every app runs it, with no per-repo edit.
+- **Releases:** the moving tag **`app-deploy-v1`**, which every app calls.
+  - A compatible change merges to `main`. It reaches apps only when the tag moves, so release
+    promptly: by 2026-11-12 the tag had fallen 11 commits behind on this file (#591), and fixes
+    such as #498's first-activation gate reached no app.
+  - Each release is an immutable tag `app-deploy-v1.N`, and the moving tag follows it:
+    1. **Pre-flight** every caller: for each `proappstore-online` repo whose `deploy.yml` calls
+       this workflow, run the gates the release adds against it (e.g. for #503,
+       `npx -y -p @proappstore/cli@latest -p miniflare@<pin> pas migrations test` in each repo
+       with `migrations.json`). Any red app is fixed (in the app or the gate) before the tag moves.
+    2. `git tag -a app-deploy-v1.N <sha> -m "<summary>"`, then
+       `git tag -fa app-deploy-v1 <sha> -m "app-deploy-v1.N"`, and push both
+       (`git push origin refs/tags/app-deploy-v1.N`, `git push -f origin refs/tags/app-deploy-v1`).
+    3. Add a line to the changelog below, and watch the next deploy of 2–3 apps.
+  - Rolling back is moving `app-deploy-v1` to the previous `app-deploy-v1.N`.
+  - The next push of every app runs it, with no per-repo edit.
   - A breaking change is `app-deploy-v2`, and callers move when they are ready.
+  - **Changelog**
+    - `app-deploy-v1.1` (2026-11-12, #591): signed-in E2E minted keylessly from OIDC with a skip
+      when the repo has no grant (#462, #463, #564); jq on self-hosted macOS (#435); fresh-D1
+      migration and action test before production migrates (#503, #592; miniflare 4.20260730.0);
+      `pas check` results in the job summary (#499); marketing first-activation gate on template
+      copy (#498) and rollback hardening (#487, #488); opt-in referral readiness attestation.
 - **What the caller keeps:** what a reusable workflow cannot own.
   - The trigger.
   - The run name *Deploy to R2*: the Agent Teams deploy gate matches it.
