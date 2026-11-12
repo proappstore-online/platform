@@ -2,6 +2,7 @@ import { env, SELF, runInDurableObject, fetchMock } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { mintSession } from "@proappstore/build-core";
 import type { OAuthState } from "../../../mcp/src/oauth-state";
+import { MCP_SHARED_TOOL_COUNT } from "../../../mcp/src/tool-count";
 import { SESSION_SIGNING_KEY, INTERNAL_TOKEN } from "../../config/shared";
 
 const bindings = env as unknown as { OAUTH_KV: KVNamespace; OAUTH_STATE: DurableObjectNamespace<OAuthState> };
@@ -137,10 +138,10 @@ describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
     expect(await authority().readSeen(requestId)).toBe(true);
   });
 
-  it("publishes 75 annotated tools and no required token arguments on platform reads", async () => {
+  it("publishes every shared tool, annotated, with no required token arguments on platform reads", async () => {
     const { response, body } = await rpc(await access("gh:1"), "tools/list", {});
     expect(response.status).toBe(200);
-    expect(body.result.tools).toHaveLength(75);
+    expect(body.result.tools).toHaveLength(MCP_SHARED_TOOL_COUNT);
     for (const tool of body.result.tools) {
       expect(typeof tool.annotations.readOnlyHint, tool.name).toBe("boolean");
       expect(tool.inputSchema.properties, tool.name).not.toHaveProperty("token");
