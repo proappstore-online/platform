@@ -5,7 +5,7 @@ import type { Hono } from 'hono';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { sealSecret } from '../lib/encryption.js';
 import type { Env } from '../types.js';
-import { MAX_SECRETS_PER_APP, requireKek, SECRET_NAME_RE, wrap } from './secrets-shared.js';
+import { MAX_SECRET_VALUE_CHARS, MAX_SECRETS_PER_APP, requireKek, SECRET_NAME_RE, wrap } from './secrets-shared.js';
 
 interface SecretListRow {
   name: string;
@@ -50,8 +50,8 @@ export function registerSecretsCrudRoutes(secretsRoutes: Hono<{ Bindings: Env }>
       if (typeof value !== 'string' || value.length === 0) {
         throw new HttpError('value must be a non-empty string', 400);
       }
-      if (value.length > 4096) {
-        throw new HttpError('value too long (max 4096 chars)', 400);
+      if (value.length > MAX_SECRET_VALUE_CHARS) {
+        throw new HttpError(`value too long (max ${MAX_SECRET_VALUE_CHARS} chars)`, 400);
       }
 
       // Cap secrets per app — but allow updating an existing name without

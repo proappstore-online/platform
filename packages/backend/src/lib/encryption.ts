@@ -11,6 +11,13 @@
  *   - DB compromise alone yields ciphertext. Attacker also needs the KEK
  *     (held only in env.APP_SECRET_KEK as a Worker secret).
  *
+ * Optional associated data (#587): when `aad` is given, both AES-GCM operations
+ * (the value under the DEK and the DEK under the KEK) authenticate it, so a
+ * sealed value opens only with the same `aad`. Per-user secrets bind it to their
+ * row (`app_id|user_id|name`): a row copied to another user or app fails to
+ * decrypt. Without `aad` the bytes are exactly as before, so existing rows and
+ * callers are unchanged.
+ *
  * KEK is base64-encoded 32-byte raw key, stored in env.APP_SECRET_KEK.
  * Set once via:  wrangler secret put APP_SECRET_KEK
  *   (paste output of: openssl rand -base64 32)
@@ -34,7 +41,7 @@ const KEK_IV_LENGTH = 12;
  * then wrapped under the KEK. Returns the three byte sequences to store
  * (key_ciphertext, dek_wrapped, iv).
  */
-export async function sealSecret(plaintext: string, kekBase64: string): Promise<SealedSecret> {
+export async function sealSecret(plaintext: string, kekBase64: string, aad?: string): Promise<SealedSecret> {
   const kek = await importKek(kekBase64);
 
   // Fresh DEK + IV per row.
@@ -49,14 +56,14 @@ export async function sealSecret(plaintext: string, kekBase64: string): Promise<
   // Encrypt the plaintext key under the DEK.
   const plaintextBytes = new TextEncoder().encode(plaintext);
   const keyCiphertext = new Uint8Array(
-    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dek, plaintextBytes),
+    await crypto.subtle.encrypt(gcm(iv, aad), dek, plaintextBytes),
   );
 
   // Wrap the DEK under the KEK with its own IV. We store iv_kek prepended
   // to dekWrapped so we don't need a third column.
   const ivKek = crypto.getRandomValues(new Uint8Array(KEK_IV_LENGTH));
   const wrapped = new Uint8Array(
-    await crypto.subtle.encrypt({ name: 'AES-GCM', iv: ivKek }, kek, dekRaw),
+    await crypto.subtle.encrypt(gcm(ivKek, aad), kek, dekRaw),
   );
   const dekWrapped = new Uint8Array(KEK_IV_LENGTH + wrapped.byteLength);
   dekWrapped.set(ivKek, 0);
@@ -69,22 +76,27 @@ export async function sealSecret(plaintext: string, kekBase64: string): Promise<
  * Decrypt a sealed secret. Inverse of sealSecret; needs the same KEK.
  * Throws on bad ciphertext / wrong KEK / tampered tag.
  */
-export async function openSecret(sealed: SealedSecret, kekBase64: string): Promise<string> {
+export async function openSecret(sealed: SealedSecret, kekBase64: string, aad?: string): Promise<string> {
   const kek = await importKek(kekBase64);
 
   // Unwrap DEK: split off the prepended IV, decrypt under KEK.
   const ivKek = sealed.dekWrapped.slice(0, KEK_IV_LENGTH);
   const wrappedBody = sealed.dekWrapped.slice(KEK_IV_LENGTH);
   const dekRaw = new Uint8Array(
-    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivKek }, kek, wrappedBody),
+    await crypto.subtle.decrypt(gcm(ivKek, aad), kek, wrappedBody),
   );
 
   const dek = await crypto.subtle.importKey('raw', dekRaw, { name: 'AES-GCM' }, false, ['decrypt']);
 
   const plaintextBytes = new Uint8Array(
-    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: sealed.iv }, dek, sealed.keyCiphertext),
+    await crypto.subtle.decrypt(gcm(sealed.iv, aad), dek, sealed.keyCiphertext),
   );
   return new TextDecoder().decode(plaintextBytes);
+}
+
+/** AES-GCM parameters; associated data only when given, so no-`aad` calls are unchanged. */
+function gcm(iv: Uint8Array, aad: string | undefined) {
+  return aad === undefined ? { name: 'AES-GCM', iv } : { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(aad) };
 }
 
 async function importKek(kekBase64: string): Promise<CryptoKey> {

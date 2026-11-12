@@ -27,11 +27,13 @@ export interface SiteManifest {
   isolation?: unknown;
   /** Products the app sells and the action that authorizes a purchase (#507): lib/manifest/billing.ts. */
   billing?: unknown;
+  /** Names a user may store their own secret under (#587): `[{ name, label, description }]` — lib/manifest/user-secrets.ts. */
+  user_secrets?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions, embed: body?.embed, isolation: body?.isolation, billing: body?.billing };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions, embed: body?.embed, isolation: body?.isolation, billing: body?.billing, user_secrets: body?.user_secrets };
 }
 
 export interface PageMetaRoute { path: string; action: string; param: string; not_found?: 404 }

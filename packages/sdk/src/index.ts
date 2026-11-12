@@ -6,6 +6,7 @@ import { Counters } from './counters.js';
 import { Rooms } from './rooms.js';
 import { Roles } from './roles.js';
 import { ApiProxy } from './proxy.js';
+import { UserSecrets } from './user-secrets.js';
 import { AI } from './ai.js';
 import { Database } from './db.js';
 import { Maps } from './maps.js';
@@ -52,6 +53,7 @@ export type { Breadcrumb, BreadcrumbCategory, BreadcrumbData, LogHealth } from '
 // #390: request context for app.logs.capture / captureException.
 export type { CaptureContext } from './trace.js';
 export { Tokens } from './tokens.js';
+export type { UserSecret } from './user-secrets.js';
 export type { AppToken, MintedAppToken, CreateTokenOptions, TokenAccess } from './tokens.js';
 
 export type {
@@ -117,6 +119,8 @@ export class ProAppStore {
   readonly rooms: Rooms;
   readonly roles: Roles;
   readonly proxy: ApiProxy;
+  /** The signed-in user's own secrets for this app (#587): `set`, `delete`, `list` (never values). */
+  readonly userSecrets: UserSecrets;
   readonly subscription: SubscriptionApi;
   /** What this app sells (#509): products, checkout, the user's own purchases and entitlements, the customer portal. */
   readonly billing: BillingApi;
@@ -168,6 +172,7 @@ export class ProAppStore {
     this.rooms = new Rooms(opts.appId, apiBase, this.auth, this.logs);
     this.roles = new Roles(opts.appId, apiBase, this.auth);
     this.proxy = new ApiProxy(opts.appId, apiBase, this.auth);
+    this.userSecrets = new UserSecrets(opts.appId, apiBase, this.auth);
     this.subscription = new SubscriptionApi(opts.appId, apiBase, this.auth);
     this.billing = new BillingApi(opts.appId, apiBase, this.auth);
     this.license = new LicenseApi(opts.appId, apiBase, this.auth);

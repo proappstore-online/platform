@@ -42,6 +42,7 @@ export default defineWorkersConfig(async () => ({
             MODERATION_RATE_LIMIT: { simple: { limit: 60, period: 60 } },
             PUBLIC_LOG_RATE_LIMIT: { simple: { limit: 30, period: 60 } },
             PUBLIC_LOG_ERROR_COUNT_LIMIT: { simple: { limit: 1, period: 60 } },
+            USER_SECRET_RATE_LIMIT: { simple: { limit: 30, period: 60 } },
           },
           // kCurrentWorker binds SELF to this worker. The cast is type-only: the
           // `miniflare` package here and the one the pool bundles are the same

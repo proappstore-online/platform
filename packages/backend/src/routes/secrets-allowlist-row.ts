@@ -11,6 +11,8 @@ export interface AllowlistRow {
   secret_name: string;
   secret_name_2: string | null;
   token_url: string | null;
+  /** 'app' | 'user' (#587); absent on rows read before migration 0137. */
+  secret_scope?: string | null;
   methods: string;
   created_at: number;
 }
@@ -21,6 +23,7 @@ export function rowToRule(r: AllowlistRow): AllowlistRule {
     injectKind: r.inject_kind as AllowlistRule['injectKind'],
     injectName: r.inject_name,
     secretName: r.secret_name,
+    secretScope: r.secret_scope === 'user' ? 'user' : 'app',
     secretName2: r.secret_name_2 ?? '',
     tokenUrl: r.token_url ?? '',
     methods: r.methods.split(',').filter(Boolean),

@@ -2,11 +2,11 @@
  * The proxy itself. Extracted verbatim from secrets.ts.
  */
 import type { Hono } from 'hono';
-import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { openSecret, type SealedSecret } from '../lib/encryption.js';
 import { AllowlistError, injectSecret, pickRule } from '../lib/proxy-allowlist.js';
 import { checkAndBump, d1UsageStore } from '../lib/proxy-rate-limit.js';
+import { openUserSecret } from '../lib/user-secrets.js';
 import { OAUTH2_TOKEN_TIMEOUT_MS, getOAuth2Token } from '../lib/proxy-oauth2.js';
 import type { Env } from '../types.js';
 
@@ -21,6 +21,7 @@ import {
   MAX_REQUEST_BODY_BYTES,
   MAX_RESPONSE_BODY_BYTES,
   requireKek,
+  requireMediatedApp,
   toUint8,
 } from './secrets-shared.js';
 
@@ -95,17 +96,7 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       // A signed-in user can still script the victim app's own origin — any
       // platform user may use any app — which is what the per-user sub-cap
       // below bounds.
-      const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
-      if (mediatedApp !== appId) {
-        return c.json(
-          {
-            error: mediatedApp
-              ? 'app context mismatch'
-              : "proxy is only callable from the app's own origin — use initPro({ authMode: 'platform-cookie' })",
-          },
-          403,
-        );
-      }
+      requireMediatedApp(c, appId, 'proxy');
 
       const kek = requireKek(c);
 
@@ -120,7 +111,7 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
 
       // Look up rules for the app, then pick the best match.
       const ruleRows = await c.env.DB.prepare(
-        `SELECT pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, methods, created_at
+        `SELECT pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, secret_scope, methods, created_at
          FROM app_proxy_allowlist WHERE app_id = ?`,
       )
         .bind(appId)
@@ -137,7 +128,7 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       }
 
       {
-        // Daily cap (only for app-level secrets, not user keys). Two ceilings:
+        // Daily cap, for app- and user-scoped rules alike (#587). Two ceilings:
         // the app's budget, and this caller's share of it (#80) so one account
         // can't drain an app it has no relationship with.
         const usage = await checkAndBump(d1UsageStore(c.env.DB), {
@@ -159,22 +150,31 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
           );
         }
 
-        // Look up + decrypt the app secret.
-        const secretRow = await c.env.DB.prepare(
-          `SELECT key_ciphertext, dek_wrapped, iv FROM app_secrets
-           WHERE app_id = ? AND name = ?`,
-        )
-          .bind(appId, rule.secretName)
-          .first<{ key_ciphertext: unknown; dek_wrapped: unknown; iv: unknown }>();
-        if (!secretRow) {
-          return c.json({ error: `secret '${rule.secretName}' not found` }, 500);
+        if (rule.secretScope === 'user') {
+          // #587: the calling user's own secret — the SESSION user, never an id
+          // from the request. A user without one gets 412; nothing falls back to
+          // the app secret, which may hold data only its developer should see.
+          const own = await openUserSecret(c.env, kek, appId, user.id, rule.secretName);
+          if (own === null) return c.json({ error: 'user_secret_missing', secret: rule.secretName }, 412);
+          plaintext = own;
+        } else {
+          // Look up + decrypt the app secret.
+          const secretRow = await c.env.DB.prepare(
+            `SELECT key_ciphertext, dek_wrapped, iv FROM app_secrets
+             WHERE app_id = ? AND name = ?`,
+          )
+            .bind(appId, rule.secretName)
+            .first<{ key_ciphertext: unknown; dek_wrapped: unknown; iv: unknown }>();
+          if (!secretRow) {
+            return c.json({ error: `secret '${rule.secretName}' not found` }, 500);
+          }
+          const sealed: SealedSecret = {
+            keyCiphertext: toUint8(secretRow.key_ciphertext),
+            dekWrapped: toUint8(secretRow.dek_wrapped),
+            iv: toUint8(secretRow.iv),
+          };
+          plaintext = await openSecret(sealed, kek);
         }
-        const sealed: SealedSecret = {
-          keyCiphertext: toUint8(secretRow.key_ciphertext),
-          dekWrapped: toUint8(secretRow.dek_wrapped),
-          iv: toUint8(secretRow.iv),
-        };
-        plaintext = await openSecret(sealed, kek);
 
         // Build forward request: filter inbound headers, then inject secret.
         const forwardHeaders = new Headers();
@@ -272,8 +272,9 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
         return c.json({ error: 'upstream response too large' }, 502);
       }
 
-      // Update last_used_at probabilistically (1 in 10) to save D1 writes.
-      if (rule && Math.random() < 0.1) {
+      // Update last_used_at probabilistically (1 in 10) to save D1 writes. A user
+      // secret was marked used when it was opened (lib/user-secrets.ts).
+      if (rule.secretScope === 'app' && Math.random() < 0.1) {
         const update = c.env.DB.prepare(
           'UPDATE app_secrets SET last_used_at = ? WHERE app_id = ? AND name = ?',
         )

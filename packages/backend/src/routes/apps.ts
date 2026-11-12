@@ -202,7 +202,7 @@ appsRoutes.get('/me/administered-apps', wrap(async (c) => {
 /**
  * Remove an app from the owner's dashboard listing. This does NOT
  * deprovision Cloudflare Pages, D1, the GitHub repo, DNS, or the storefront
- * registry — those keep working. Its app worker, if any, is removed (#253). It only deletes the row in the `apps`
+ * registry — those keep working. Its app worker, if any, is removed (#253), and its users' own secrets (#587). It only deletes the row in the `apps`
  * table that Console reads for "my apps." If the dev later wants the app
  * back on their dashboard, re-running provision (idempotent) re-inserts it.
  *
@@ -230,6 +230,9 @@ appsRoutes.delete('/apps/:id', wrap(async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM app_connector_installations WHERE app_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM app_connectors WHERE app_id = ?').bind(id),
+    // #587: every user's own secrets for this app, and the names it accepted.
+    c.env.DB.prepare('DELETE FROM app_user_secrets WHERE app_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id),
   ]);
   return c.json({ ok: true });

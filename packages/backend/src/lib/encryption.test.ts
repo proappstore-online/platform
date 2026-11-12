@@ -96,3 +96,24 @@ describe('envelope encryption', () => {
     await expect(sealSecret('test', shortKek)).rejects.toThrow(/must be 32 bytes/);
   });
 });
+
+// #587: associated data binds a sealed value to the row it belongs to.
+describe('envelope encryption with associated data', () => {
+  it('round-trips with the same associated data', async () => {
+    const sealed = await sealSecret('sk-user', TEST_KEK, 'appx|gh:1|OPENAI_KEY');
+    expect(await openSecret(sealed, TEST_KEK, 'appx|gh:1|OPENAI_KEY')).toBe('sk-user');
+  });
+
+  it('refuses another row: different user, app or name, or none at all', async () => {
+    const sealed = await sealSecret('sk-user', TEST_KEK, 'appx|gh:1|OPENAI_KEY');
+    for (const other of ['appx|gh:2|OPENAI_KEY', 'appy|gh:1|OPENAI_KEY', 'appx|gh:1|OTHER_KEY', undefined]) {
+      await expect(openSecret(sealed, TEST_KEK, other)).rejects.toThrow();
+    }
+  });
+
+  it('a value sealed without associated data does not open with some', async () => {
+    const sealed = await sealSecret('sk-app', TEST_KEK);
+    await expect(openSecret(sealed, TEST_KEK, 'appx|gh:1|OPENAI_KEY')).rejects.toThrow();
+    expect(await openSecret(sealed, TEST_KEK)).toBe('sk-app');
+  });
+});

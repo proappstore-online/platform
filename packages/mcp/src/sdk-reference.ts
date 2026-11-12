@@ -165,7 +165,17 @@ const res = await app.proxy.fetch('api.example.com/v1/data')
 \`\`\`
 Requires \`initPro({ appId, authMode: 'platform-cookie' })\`. The proxy spends the app's
 secrets, so it only answers calls mediated through the app's own origin; a
-legacy-bearer call gets 403.`,
+legacy-bearer call gets 403.
+
+### Per-user secrets (BYO keys)
+Declare names in mcp.json \`"user_secrets": [{ "name": "OPENAI_KEY", "label": "…", "description": "…" }]\`, add a rule with
+\`pas proxy allow <pattern> --inject bearer --user-secret OPENAI_KEY\`, then:
+\`\`\`tsx
+await app.userSecrets.set('OPENAI_KEY', keyTheUserPasted)   // write-only
+await app.userSecrets.list()                                // [{ name, updatedAt, lastUsedAt }], never values
+await app.userSecrets.delete('OPENAI_KEY')
+\`\`\`
+The rule injects the calling user's own key; a user without one gets 412 user_secret_missing, never the app secret.`,
     db: `## Per-app SQL Database (D1)
 
 ### Schema lives in migrations.json (canonical — applied on every deploy)

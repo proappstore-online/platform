@@ -82,6 +82,11 @@ app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
 // bound to the app's own origin; a legacy-bearer call gets 403)
 app.proxy.fetch(url, opts)
 
+// The signed-in user's own keys for this app (BYO keys, #587) — platform-cookie only.
+// Names must be declared in mcp.json `user_secrets`; values are write-only and only
+// leave the platform injected by a proxy rule with secretScope 'user'.
+app.userSecrets.set(name, value) / .delete(name) / .list()   // list: names + times, never values
+
 // Per-app SQL database (D1)
 app.db.query(sql, params) / .execute(sql, params) / .batch([...]) / .tables()
 

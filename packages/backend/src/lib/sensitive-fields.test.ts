@@ -10,6 +10,7 @@ export const SENSITIVE_FAMILIES: Record<string, string[]> = {
   hash: ['hash', 'password_hash', 'pin_hashed'],
   salt: ['salt', 'password_salt'],
   credential: ['credential', 'credentials', 'aws_credentials', 'credentialid'],
+  envelope: ['key_ciphertext', 'dek_wrapped', 'ciphertext', 'userSecretCiphertext'],
   _internal: ['_internal', '_internal_notes', '_internalScore'],
   // #335: a digit glued to the word, and one-word compounds ending in secret/token or a listed …key.
   digits: ['token2', 'secret1', 'client_secret2', 'api_key2', 'Token2Fa', 'password1'],

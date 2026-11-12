@@ -15,6 +15,7 @@ interface PutAllowlistBody {
   secretName?: unknown;
   secretName2?: unknown;
   tokenUrl?: unknown;
+  secretScope?: unknown;
   methods?: unknown;
 }
 
@@ -24,7 +25,7 @@ export function registerAllowlistCrudRoutes(secretsRoutes: Hono<{ Bindings: Env 
     wrap(async (c) => {
       await requireAppOwner(c, c.req.param('appId')!);
       const result = await c.env.DB.prepare(
-        `SELECT pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, methods, created_at
+        `SELECT pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, secret_scope, methods, created_at
          FROM app_proxy_allowlist WHERE app_id = ? ORDER BY pattern`,
       )
         .bind(c.req.param('appId')!)
@@ -35,6 +36,7 @@ export function registerAllowlistCrudRoutes(secretsRoutes: Hono<{ Bindings: Env 
           injectKind: r.inject_kind,
           injectName: r.inject_name,
           secretName: r.secret_name,
+          secretScope: r.secret_scope ?? 'app',
           ...(r.secret_name_2 ? { secretName2: r.secret_name_2 } : {}),
           ...(r.token_url ? { tokenUrl: r.token_url } : {}),
           methods: r.methods.split(',').filter(Boolean),
@@ -57,18 +59,29 @@ export function registerAllowlistCrudRoutes(secretsRoutes: Hono<{ Bindings: Env 
         secretName: String(body.secretName ?? ''),
         secretName2: body.secretName2 ? String(body.secretName2) : '',
         tokenUrl: body.tokenUrl ? String(body.tokenUrl) : '',
+        secretScope: body.secretScope === undefined ? 'app' : String(body.secretScope),
         methods: Array.isArray(body.methods) ? (body.methods as string[]) : [],
       });
 
       // Secret(s) must exist before we let an allowlist rule reference them —
-      // otherwise the proxy will silently 404 every call.
-      const secretExists = await c.env.DB.prepare(
-        'SELECT 1 FROM app_secrets WHERE app_id = ? AND name = ?',
-      )
-        .bind(appId, rule.secretName)
-        .first();
-      if (!secretExists) {
-        throw new HttpError(`secret '${rule.secretName}' not found for this app`, 400);
+      // otherwise the proxy will silently 404 every call. A user-scoped rule (#587)
+      // names a declared user secret instead: each caller supplies their own.
+      if (rule.secretScope === 'user') {
+        const declared = await c.env.DB.prepare('SELECT 1 FROM app_user_secret_decls WHERE app_id = ? AND name = ?')
+          .bind(appId, rule.secretName)
+          .first();
+        if (!declared) {
+          throw new HttpError(`user secret '${rule.secretName}' is not declared in this app's mcp.json user_secrets`, 400);
+        }
+      } else {
+        const secretExists = await c.env.DB.prepare(
+          'SELECT 1 FROM app_secrets WHERE app_id = ? AND name = ?',
+        )
+          .bind(appId, rule.secretName)
+          .first();
+        if (!secretExists) {
+          throw new HttpError(`secret '${rule.secretName}' not found for this app`, 400);
+        }
       }
       if (rule.secretName2) {
         const secret2Exists = await c.env.DB.prepare(
@@ -103,15 +116,16 @@ export function registerAllowlistCrudRoutes(secretsRoutes: Hono<{ Bindings: Env 
 
       await c.env.DB.prepare(
         `INSERT INTO app_proxy_allowlist
-           (app_id, pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, methods, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           (app_id, pattern, inject_kind, inject_name, secret_name, secret_name_2, token_url, methods, created_at, secret_scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(app_id, pattern) DO UPDATE SET
            inject_kind   = excluded.inject_kind,
            inject_name   = excluded.inject_name,
            secret_name   = excluded.secret_name,
            secret_name_2 = excluded.secret_name_2,
            token_url     = excluded.token_url,
-           methods       = excluded.methods`,
+           methods       = excluded.methods,
+           secret_scope  = excluded.secret_scope`,
       )
         .bind(
           appId,
@@ -123,6 +137,7 @@ export function registerAllowlistCrudRoutes(secretsRoutes: Hono<{ Bindings: Env 
           rule.tokenUrl || null,
           rule.methods.join(','),
           Date.now(),
+          rule.secretScope,
         )
         .run();
 

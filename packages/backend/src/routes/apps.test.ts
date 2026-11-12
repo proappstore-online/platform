@@ -245,11 +245,13 @@ describe('DELETE /v1/apps/:id', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    // #378: the app's connectors and their installation bindings go with it, in one batch.
+    // #378: the app's connectors and their installation bindings go with it, in one batch; #587: so do its users' own secrets.
     const deleted = db.prepare.mock.calls.map(([q]) => String(q)).filter((q) => q.startsWith('DELETE'));
     expect(deleted).toEqual([
       'DELETE FROM app_connector_installations WHERE app_id = ?',
       'DELETE FROM app_connectors WHERE app_id = ?',
+      'DELETE FROM app_user_secrets WHERE app_id = ?',
+      'DELETE FROM app_user_secret_decls WHERE app_id = ?',
       'DELETE FROM apps WHERE id = ?',
     ]);
     expect(db.batch).toHaveBeenCalledTimes(1);

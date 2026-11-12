@@ -193,6 +193,31 @@ const response = await app.proxy.fetch('/openai/chat/completions', {
 })
 ```
 
+### User secrets (bring-your-own keys)
+
+Let each signed-in user store their own API key for your app. Declare the names in
+`mcp.json`, add a proxy rule that injects the caller's own key, and call the proxy as usual:
+
+```jsonc
+// mcp.json
+"user_secrets": [{ "name": "OPENAI_KEY", "label": "OpenAI admin key", "description": "Reads your organization's costs" }]
+```
+
+```bash
+pas proxy allow https://api.openai.com/v1/organization/ --inject bearer --user-secret OPENAI_KEY
+```
+
+```ts
+await app.userSecrets.set('OPENAI_KEY', keyTheUserPasted)
+const costs = await app.proxy.fetch('api.openai.com/v1/organization/costs')
+await app.userSecrets.list()   // [{ name, updatedAt, lastUsedAt }] — never values
+await app.userSecrets.delete('OPENAI_KEY')
+```
+
+Requires `authMode: 'platform-cookie'`. Values are encrypted per (app, user, name) and never
+returned. A rule with `--user-secret` injects only the calling user's key: a user who has not
+set one gets `412 user_secret_missing`, never the app's secret.
+
 ### Database (Per-app SQL)
 
 Each Pro app gets its own D1 SQL database accessed through a dedicated data worker at `data-{appId}.proappstore.online`.

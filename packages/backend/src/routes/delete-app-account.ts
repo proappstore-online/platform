@@ -14,7 +14,8 @@ import { wrap } from '../lib/route-wrap.js';
  *   - R2: private files {app}/{uid}/, public uploads {app}/_public/u/{uid}/
  *     (including ones the app no longer references) and review uploads
  *     {app}/_review/u/{uid}/
- *   - D1: kv, app_roles, app_group_admin_grants, push_subscriptions, user_app_tokens
+ *   - D1: kv, app_roles, app_group_admin_grants, push_subscriptions, user_app_tokens,
+ *     app_user_secrets (#587)
  *   - Connectors: this app's Google authorizations, pending consent and calendar grants
  * Kept: billing, usage, log and audit rows (retention is stash#29), and the
  * app's own per-app database, whose rows only the app understands — the app
@@ -60,7 +61,7 @@ deleteAppAccountRoutes.delete('/apps/:appId/users/:userId/account', wrap(async (
   const db = c.env.DB;
   const scoped = (table: string) => db.prepare(`DELETE FROM ${table} WHERE app_id = ? AND user_id = ?`).bind(appId, userId);
   await db.batch([
-    ...['kv', 'app_roles', 'app_group_admin_grants', 'push_subscriptions', 'user_app_tokens'].map(scoped),
+    ...['kv', 'app_roles', 'app_group_admin_grants', 'push_subscriptions', 'user_app_tokens', 'app_user_secrets'].map(scoped),
     ...['google_calendar_app_authorizations', 'google_calendar_oauth_states', 'google_calendar_grants'].map(scoped),
     db.prepare(
       `INSERT INTO per_app_deleted_users (app_id, user_id, deleted_by, deleted_at) VALUES (?, ?, ?, ?)

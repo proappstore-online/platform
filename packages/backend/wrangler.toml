@@ -270,6 +270,14 @@ type = "ratelimit"
 namespace_id = "1005"
 simple = { limit = 1, period = 60 }
 
+# Per-user secret writes (#587): PUT/DELETE /v1/apps/:id/user-secrets, 30 per 60 s per
+# (app, user), key `${appId}:${userId}`. PAS holds 1000-1006.
+[[unsafe.bindings]]
+name = "USER_SECRET_RATE_LIMIT"
+type = "ratelimit"
+namespace_id = "1006"
+simple = { limit = 30, period = 60 }
+
 [[routes]]
 pattern = "api.proappstore.online/*"
 zone_name = "proappstore.online"

@@ -26,6 +26,8 @@ export const SENSITIVE_FIELD_TERMS = [
   'key', 'keys', 'apikey',
   'hash', 'hashed', 'salt',
   'credential', 'credentials',
+  // Envelope-encrypted secret columns (app_secrets, app_user_secrets #587): key_ciphertext, dek_wrapped.
+  'ciphertext', 'dek',
 ] as const;
 
 /** Endings that mark a one-word compound (`clientsecret`, `sessiontoken`, `idtokens`) (#335). */

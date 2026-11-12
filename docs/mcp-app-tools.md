@@ -810,6 +810,47 @@ Two more manifest keys configure server-side code (prototype; see
 Both are replaced with the manifest on every registration, like `operator`.
 Removing one from `mcp.json` removes its schedules or hooks.
 
+## Per-user secrets (`user_secrets`)
+
+`user_secrets` lists the names under which each signed-in user may store their
+own secret for this app, such as their own API key (#587):
+
+```json
+"user_secrets": [
+  { "name": "OPENAI_KEY", "label": "OpenAI admin key", "description": "Reads your organization's costs" }
+]
+```
+
+- At most 10 entries. `name` is uppercase with underscores (like an app
+  secret); `label` (up to 80 characters) and `description` (up to 500) are
+  required, for the consent screen and the listing.
+- The user stores a value with `app.userSecrets.set(name, value)`, which calls
+  `PUT /v1/apps/<app>/user-secrets/<name>` with `{ "value" }`. A name not
+  declared here is refused (400). `GET /v1/apps/<app>/user-secrets` returns the
+  user's names with `updatedAt` and `lastUsedAt`, never values. `DELETE …/<name>`
+  removes one, declared or not.
+- All three routes act for the signed-in user only, and only from the app's own
+  origin (`authMode: 'platform-cookie'`, as for the proxy). A direct API call
+  gets 403. Writes are limited to 30 a minute per user and app. A value is at
+  most 4096 characters.
+- Values are sealed like app secrets (envelope AES-256-GCM under the platform
+  KEK) with `app|user|name` as associated data, so a row copied to another user
+  or app does not decrypt. No route, log or error returns a value.
+- A value reaches the outside world only through the proxy. A rule added with
+  `pas proxy allow <pattern> --inject bearer --user-secret NAME`
+  (`secretScope: "user"` on `PUT /v1/apps/<app>/allowlist`) injects the
+  **calling session user's** own secret. A user who has none gets
+  `412 { "error": "user_secret_missing" }`. The rule never falls back to an app
+  secret. User-scoped rules support `query`, `header` and `bearer` injection,
+  not `oauth2_cc`.
+- The list is replaced with the manifest on every registration. Removing a name
+  stops new writes to it but keeps the values users already stored. A user's
+  values are deleted with their account in the app
+  (`DELETE /v1/apps/<app>/users/<id>/account`), and every user's are deleted
+  with the app.
+
+App workers cannot read user secrets yet.
+
 ## Rooms (`rooms`): who may join, and app-worker events
 
 Rooms are WebSocket fan-out for an app's signed-in users (`app.rooms.join(id)`).
@@ -1259,7 +1300,7 @@ between letters and digits, so `token2` is `token`) is one of:
 
 `password` `passwd` `passphrase` `pwd` `secret` `secrets` `token` `tokens`
 `jwt` `bearer` `cookie` `cookies` `key` `keys` `apikey` `hash` `hashed` `salt`
-`credential` `credentials`
+`credential` `credentials` `ciphertext` `dek`
 
 It is also sensitive when one of its words ends in `secret`, `secrets`, `token`
 or `tokens` (`clientsecret`, `webhooksecret`, `sessiontoken`, `csrftoken`), when

@@ -33,6 +33,8 @@ export interface Env {
   PUBLIC_LOG_RATE_LIMIT: RateLimit;
   /** How often one (app, client) may add to the `client_error` counter behind error-spike alerts (#438): 1 per 60 s. */
   PUBLIC_LOG_ERROR_COUNT_LIMIT: RateLimit;
+  /** Per-user secret writes (#587): 30 per 60 s per (app, user). */
+  USER_SECRET_RATE_LIMIT: RateLimit;
   /** /v1/ai/* requests: 20 per minute per user (#218). Callers fail open if absent. */
   AI_RATE_LIMIT: RateLimit;
   /** Moderation model calls: 60 per minute per user, key `mod:{userId}` (#218). Callers fail open if absent. */

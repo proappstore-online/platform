@@ -26,6 +26,7 @@ import { siteManifestFrom, validateSiteManifest, type SiteManifest } from '../li
 import { validateOperatorGate } from '../lib/manifest/operator.js';
 import { validateVisibility } from '../lib/manifest/visibility.js';
 import { validateWorkerManifest } from '../lib/manifest/worker.js';
+import { validateUserSecrets } from '../lib/manifest/user-secrets.js';
 import { validateHooks } from '../lib/manifest/hooks.js';
 import { validateConnectors } from '../lib/manifest/connectors.js';
 import { googleContractHash } from '../lib/google-calendar-policy.js';
@@ -216,6 +217,8 @@ export async function replaceAppTools(
   if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
   const workerResult = validateWorkerManifest(site.worker);
   if ('error' in workerResult) return { status: 400, payload: { error: workerResult.error } };
+  const userSecretsResult = validateUserSecrets(site.user_secrets);
+  if ('error' in userSecretsResult) return { status: 400, payload: { error: userSecretsResult.error } };
   const hooksResult = validateHooks(site.hooks, tools as ToolManifest[]);
   if ('error' in hooksResult) return { status: 400, payload: { error: hooksResult.error } };
   const connectorsResult = validateConnectors(site.connectors, hooksResult.hooks);
@@ -331,6 +334,12 @@ export async function replaceAppTools(
     ...(workerResult.worker
       ? [db.prepare('INSERT INTO app_worker_manifest (app_id, secrets, created_at) VALUES (?, ?, ?)').bind(appId, JSON.stringify(workerResult.worker.secrets), now)]
       : []),
+    // Per-user secret names (#587), replaced with the manifest. Stored values stay
+    // (they are the user's); a name no longer declared just takes no new writes.
+    db.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(appId),
+    ...userSecretsResult.userSecrets.map((d) =>
+      db.prepare('INSERT INTO app_user_secret_decls (app_id, name, label, description, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(appId, d.name, d.label, d.description, now)),
     // Worker schedules (#255) are replaced with the manifest too. Their run
     // history and breaker state live in scheduled_action_runs/_state under
     // 'worker:<name>' (source 'code'), reset by the DELETE above like actions'.
@@ -424,6 +433,7 @@ export async function replaceAppTools(
         : null,
       visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
       worker: workerResult.worker,
+      user_secrets: userSecretsResult.userSecrets.map((d) => d.name),
       hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       connectors: connectorsResult.connectors.map((k) => ({ name: k.name, kind: k.kind, modes: k.modes })),
       rooms: roomsResult.rules.map((r) => ({ pattern: `${r.prefix}*`, authorize: r.authorize })),

@@ -3,6 +3,7 @@
  * Extracted verbatim from secrets.ts.
  */
 import { type Context } from 'hono';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { HttpError } from '../lib/auth.js';
 import { AllowlistError } from '../lib/proxy-allowlist.js';
 import type { Env } from '../types.js';
@@ -13,6 +14,10 @@ import type { Env } from '../types.js';
  */
 export const MAX_SECRETS_PER_APP = 5;
 export const MAX_ALLOWLIST_PER_APP = 5;
+/** User-secret names one app may declare in mcp.json `user_secrets` (#587). */
+export const MAX_USER_SECRETS_PER_APP = 10;
+/** Longest secret value, app or user. */
+export const MAX_SECRET_VALUE_CHARS = 4096;
 export const DAILY_PROXY_REQUESTS = 10_000;
 /**
  * Per-caller share of an app's daily proxy budget (#80).
@@ -49,6 +54,21 @@ export function wrap(handler: (c: Ctx) => Promise<Response>) {
       throw err;
     }
   };
+}
+
+/**
+ * Refuse a call that did not come through the app's own origin (#80, #587).
+ * X-PAS-App is set by the host from the resolved route and stripped from any
+ * direct call (lib/app-context.ts), so it is the host's word, never the caller's.
+ * A mismatch is another app's page driving this app; absence is a direct call.
+ */
+export function requireMediatedApp(c: Ctx, appId: string, what: string): void {
+  const mediatedApp = c.req.header(APP_CONTEXT_HEADER);
+  if (mediatedApp === appId) return;
+  throw new HttpError(
+    mediatedApp ? 'app context mismatch' : `${what} is only callable from the app's own origin — use initPro({ authMode: 'platform-cookie' })`,
+    403,
+  );
 }
 
 export function requireKek(c: Ctx): string {

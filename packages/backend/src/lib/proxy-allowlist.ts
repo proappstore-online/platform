@@ -14,7 +14,9 @@ export interface AllowlistRule {
   pattern: string; // URL prefix, no globs
   injectKind: 'query' | 'header' | 'bearer' | 'oauth2_cc';
   injectName: string; // ignored for 'bearer' and 'oauth2_cc'
-  secretName: string; // FK to app_secrets.name (client_id for oauth2_cc)
+  secretName: string; // FK to app_secrets.name (client_id for oauth2_cc), or a declared user-secret name
+  /** Whose secret is injected (#587): the app's, or the calling user's own (never falling back to the app's). */
+  secretScope: 'app' | 'user';
   secretName2: string; // FK to app_secrets.name for client_secret (oauth2_cc only)
   tokenUrl: string; // token endpoint URL (oauth2_cc only)
   methods: string[]; // upper-case HTTP verbs
@@ -46,6 +48,7 @@ export function validateRule(input: {
   secretName: string;
   secretName2?: string;
   tokenUrl?: string;
+  secretScope?: string;
   methods: string[];
 }): AllowlistRule {
   const { pattern, injectKind, injectName, secretName, methods } = input;
@@ -73,6 +76,13 @@ export function validateRule(input: {
   }
   if (!secretName) {
     throw new AllowlistError('secretName is required');
+  }
+  const secretScope = input.secretScope || 'app';
+  if (secretScope !== 'app' && secretScope !== 'user') {
+    throw new AllowlistError("secretScope must be 'app' or 'user'");
+  }
+  if (secretScope === 'user' && injectKind === 'oauth2_cc') {
+    throw new AllowlistError("secretScope 'user' supports query, header and bearer injection, not oauth2_cc");
   }
 
   // OAuth2 client_credentials requires a second secret (client_secret) and a token URL
@@ -121,6 +131,7 @@ export function validateRule(input: {
     injectKind: injectKind as AllowlistRule['injectKind'],
     injectName,
     secretName,
+    secretScope,
     secretName2,
     tokenUrl,
     methods: upperMethods,

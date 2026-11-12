@@ -42,6 +42,7 @@ export function makeEnv(overrides: Record<string, unknown> = {}, db?: ReturnType
     // Permissive by default; the log ingest tests pass tight limiters (#438).
     PUBLIC_LOG_RATE_LIMIT: { limit: async () => ({ success: true }) },
     PUBLIC_LOG_ERROR_COUNT_LIMIT: { limit: async () => ({ success: true }) },
+    USER_SECRET_RATE_LIMIT: { limit: async () => ({ success: true }) },
     STRIPE_SECRET_KEY: 'sk_test',
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
     SESSION_SIGNING_KEY: TEST_SK,
