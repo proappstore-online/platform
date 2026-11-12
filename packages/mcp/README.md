@@ -83,12 +83,23 @@ fetched over HTTPS without credentials or redirects. Other clients use `/registe
 
 ## Tools
 
-71 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
+87 tools on the shared endpoint (the count is pinned in `src/tool-count.ts` and
 checked against `server.json` by `src/server-json.test.ts`). Tools marked
 **confirm** refuse unless called with `confirm: true`; **dry_run** tools accept
 `dry_run: true` to return the plan without changing anything.
 
 ### Connection
+
+Managed test principals and bounded CI grants are available on the shared endpoint:
+`list_test_principals`, `read_test_principal`, `create_test_principal`,
+`update_test_principal`, `disable_test_principal`, `enable_test_principal`,
+`list_principal_grants`, `read_oidc_session_grant`, `preview_principal_grant`,
+`create_principal_grant`, `revoke_principal_grant`, and `list_test_principal_events`.
+Mutation tools preview by default and require `confirm: true`; `dry_run: true`
+always prevents application. Schemas are discoverable through `tools/list`.
+Legacy user-backed grant tools remain available unchanged. See the
+[Leads operational sequence](../../docs/managed-test-principals-mcp.md) for examples,
+authorization, approval boundaries, and authenticated E2E verification.
 
 | Tool | Description |
 |---|---|

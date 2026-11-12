@@ -314,6 +314,54 @@
     {
       "name": "revoke_oidc_session_grant",
       "description": "Platform admins only: revoke an OIDC e2e session grant so future exchanges are denied; confirm: true; dry_run."
+    },
+    {
+      "name": "list_test_principals",
+      "description": "Platform admins only: List managed test principals. Follow next_cursor for additional pages."
+    },
+    {
+      "name": "read_test_principal",
+      "description": "Platform admins only: Read a principal and its latest 100 grants. Use list_principal_grants to paginate all grants."
+    },
+    {
+      "name": "create_test_principal",
+      "description": "Platform admins only: Create an isolated test:<slug> subject with no interactive login. Example slug: leads-e2e. Preview first; confirm to apply."
+    },
+    {
+      "name": "update_test_principal",
+      "description": "Platform admins only: Update description only; identity and status are immutable here. Preview first; confirm to apply."
+    },
+    {
+      "name": "disable_test_principal",
+      "description": "Platform admins only: Disable a principal and revoke all its live grants. Existing sessions last until expiry. Preview first; confirm to apply."
+    },
+    {
+      "name": "enable_test_principal",
+      "description": "Platform admins only: Reactivate a disabled principal. Revoked grants remain revoked; enabling restores no grant. Preview first; confirm to apply."
+    },
+    {
+      "name": "list_principal_grants",
+      "description": "Platform admins only: List a principal's OIDC grants, including revoked grants and mint counters. Follow next_cursor."
+    },
+    {
+      "name": "read_oidc_session_grant",
+      "description": "Platform admins only: Read one legacy or principal-backed OIDC grant and its mint counters."
+    },
+    {
+      "name": "create_principal_grant",
+      "description": "Platform admins only: Create a bounded principal-backed OIDC grant. Requires workflow and future expiry; defaults to user scope and one hour. Never substitutes a human account. Preview first; confirm to apply."
+    },
+    {
+      "name": "preview_principal_grant",
+      "description": "Platform admins only: Validate and preview the exact principal-backed grant request locally. No backend call: does not verify caller admin authority, principal existence or effective app access; apply is authorized by the backend."
+    },
+    {
+      "name": "revoke_principal_grant",
+      "description": "Platform admins only: Revoke an OIDC grant by id with an audit reason. Existing sessions last until expiry. Preview first; confirm to apply."
+    },
+    {
+      "name": "list_test_principal_events",
+      "description": "Platform admins only: Read durable secret-free lifecycle/grant audit events, optionally filtered by principal and grant. Follow next_cursor."
     }
   ],
   "remotes": [

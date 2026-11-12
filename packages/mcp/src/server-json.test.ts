@@ -20,7 +20,11 @@ function registeredTools(): string[] {
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
     const src = readFileSync(`${dir}/${file}`, 'utf8');
-    for (const m of src.matchAll(/server\.tool\(\s*['"]([a-z_]+)['"]/g)) names.add(m[1]!);
+    // OIDC's typed helper registers its validated request wrappers via register().
+    const pattern = file === 'oidc-session-tools.ts'
+      ? /(?:server\.tool|register)\(\s*['"]([a-z_]+)['"]/g
+      : /server\.tool\(\s*['"]([a-z_]+)['"]/g;
+    for (const m of src.matchAll(pattern)) names.add(m[1]!);
   }
   return [...names].sort();
 }
