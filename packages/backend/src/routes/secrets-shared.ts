@@ -35,7 +35,8 @@ export const DAILY_PROXY_REQUESTS = 10_000;
  */
 export const DAILY_PROXY_REQUESTS_PER_USER = DAILY_PROXY_REQUESTS / 10;
 export const MAX_REQUEST_BODY_BYTES = 100 * 1024;
-export const MAX_RESPONSE_BODY_BYTES = 100 * 1024;
+// 1 MB: billing/usage APIs return a whole cycle in one unpaginated reply (#598).
+export const MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/; // uppercase + underscore convention
 
 export type Ctx = Context<{ Bindings: Env }>;
