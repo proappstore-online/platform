@@ -16,6 +16,7 @@ const runtimeRequire = createRequire(join(root, 'packages/runtime-tests/package.
 const { Miniflare } = runtimeRequire('miniflare');
 const { readD1Migrations } = runtimeRequire('@cloudflare/vitest-pool-workers/config');
 const appId = process.env.PAS_REFERRAL_APP || 'dating';
+const signInLabel = process.env.PAS_REFERRAL_SIGN_IN_LABEL || 'Continue with Google';
 assert.match(appId, /^[a-z0-9-]+$/);
 assert.ok(process.env.PAS_REFERRAL_DIST, 'PAS_REFERRAL_DIST must identify the exact uploaded build');
 const dist = resolve(process.env.PAS_REFERRAL_DIST);
@@ -185,11 +186,11 @@ try {
    assert.equal((await counts()).confirmed,0);
    const referred=await (await context('gh:referee')).newPage();
    await referred.goto(local.app+'/?ref='+promoter.code);
-   await expect(referred.getByRole('button',{name:'Continue with Google'})).toBeVisible();
+   await expect(referred.getByRole('button',{name:signInLabel,exact:true})).toBeVisible();
    assert.equal(await referred.evaluate(()=>JSON.parse(localStorage.getItem('pas_referral')).code),promoter.code);
    await referred.reload();
    assert.equal((await counts()).confirmed,0);
-   await referred.getByRole('button',{name:'Continue with Google'}).click();
+   await referred.getByRole('button',{name:signInLabel,exact:true}).click();
    await expect.poll(async()=> (await counts()).confirmed).toBe(1);
    for(let i=0;i<2;i++) {await referred.reload(); await expect.poll(async()=> (await counts()).confirmed).toBe(1);}
    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM app_referral_attributions').first()).n,1);
@@ -219,7 +220,7 @@ try {
    await db.prepare("INSERT INTO app_visibility (app_id,mode,roles,created_at) VALUES (?,'private','[]',1)").bind(appId).run();
    const privatePage=await (await context('gh:private')).newPage();
    await privatePage.goto(local.app+'/?ref='+promoter.code);
-   await privatePage.getByRole('button',{name:'Continue with Google'}).click();
+   await privatePage.getByRole('button',{name:signInLabel,exact:true}).click();
    await expect.poll(async()=>privatePage.evaluate(()=>localStorage.getItem('pas_referral'))).toBeNull();
    assert.equal((await counts()).confirmed,1);
    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM app_referral_attributions').first()).n,1);

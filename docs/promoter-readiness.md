@@ -123,7 +123,11 @@ existing promoter, erase a credit, or backfill historical attribution.
 ## Exact-build browser check
 
 `scripts/test-referral-browser.mjs` takes an absolute `PAS_REFERRAL_DIST` and
-`PAS_REFERRAL_APP` (Dating by default). It serves those unchanged build bytes,
+`PAS_REFERRAL_APP` (Dating by default). `PAS_REFERRAL_SIGN_IN_LABEL` selects the
+app's exact accessible sign-in button name (default: `Continue with Google`).
+Both Google and GitHub provider callbacks use the isolated provider boundary;
+the referral capture, cookie exchange and credit assertions stay the same.
+It serves those unchanged build bytes,
 uses real host cookie handlers and HostApi with the backend in workerd and real
 D1 migrations, and writes hashes and engine results under
 `artifacts/referral-browser/`. The synthetic provider and identities exist only
