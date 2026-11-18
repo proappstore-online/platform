@@ -472,12 +472,9 @@ export async function addToRegistry(env: Env, req: PublishRequest): Promise<Step
       iconBg: req.iconBg || "#7c3aed",
       description: req.description,
       appUrl: `https://${req.id}.${env.APPS_DOMAIN_BASE}`,
-      repo: `${env.PUBLISHERS_ORG}/${req.id}`,
       hostedOn: "r2",
       type: "connected",
-      developer: "ProAppStore",
       ...(req.proFeatures?.length ? { proFeatures: req.proFeatures } : {}),
-      ...(req.creatorGithub ? { creatorGithub: req.creatorGithub } : {}),
     });
     content.apps = apps;
 

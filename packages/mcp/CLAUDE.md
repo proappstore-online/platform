@@ -26,7 +26,7 @@ stop and report it. See `platform/CLAUDE.md` § Delivery mode.
 | `list_apps` | Connection | List apps you own or belong to |
 | `deploy_status` | None | Check GitHub Actions deploy status |
 | `schema_status` | Connection | Show an app's D1 migration status (#33) — recent migrate attempts + whether the latest applied or FAILED (surfaces schema drift). Owner-only |
-| `app_info` | None | Get app URLs, repo, data worker, status |
+| `app_info` | Optional connection | Get route health and app URLs. Storefront publication is verified through the connected account's directory; without evidence, the listing is unknown rather than an invented URL |
 | `find_apps` | Connection | Read-only app directory (#424): every app you reach plus your drafts, searchable by id, name, live/store/repo URL or custom domain, filtered by lifecycle (`status`) and access; an exact id reports `yours` / `accessible` / `unclaimed` / `reserved` / `exists_inaccessible` (never the holder). `check_health` adds live `routeHealth` for the first 25 |
 | `list_templates` | None | Approved-template catalogue + selection contract (#178) — read-only; the same data as https://docs.proappstore.online/templates/catalogue.json. Pass an id as `template_repo` to `provision_pas_app`; unknown/withdrawn ids are refused, deprecated ones warn, and the copied source commit is recorded on the app |
 | `platform_guide` | None | Fetch skills.md (full platform guide), with the current build-on-AppShell block appended (#237) |

@@ -1116,7 +1116,7 @@ describe('publish_app', () => {
     const out = getText(result);
     expect(out).toContain('Published: **Chess Academy**');
     expect(out).toContain('chess-academy.proappstore.online');
-    expect(out).toContain('https://proappstore.online/app/chess-academy');
+    expect(out).toContain('Listing: https://proappstore.online/apps/chess-academy/');
     expect(out).toContain('+ GitHub repo: created');
     expect(out).toContain('+ Registry: Added Chess Academy');
 
@@ -1128,7 +1128,7 @@ describe('publish_app', () => {
         headers: expect.objectContaining({
           'Content-Type': 'application/json',
           'X-Internal-Token': 'internal-secret',
-          'X-PAS-Login': 'alice',
+          Authorization: 'Bearer tok-1',
         }),
       }),
     );
@@ -1153,6 +1153,15 @@ describe('publish_app', () => {
     expect(body.icon).toBe('&#9822;');
     expect(body.iconBg).toBe('#fef3c7');
     expect(body.proFeatures).toEqual(['Real-time games', 'Swiss tournaments']);
+  });
+
+  it('forwards the Google owner session instead of inventing a GitHub collaborator', async () => {
+    userCtx = { userId: 'google:123', login: 'Serge Ivy', token: 'google-session' };
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true, steps: [] }) });
+    await tools.get('publish_app')!(publishArgs);
+    expect(adminCall()[1].headers).toMatchObject({ 'X-Internal-Token': 'internal-secret', Authorization: 'Bearer google-session' });
+    expect(adminCall()[1].headers).not.toHaveProperty('X-PAS-Login');
+    expect(JSON.parse(adminCall()[1].body)).not.toHaveProperty('creatorGithub');
   });
 
   it('uses default icon and iconBg when not provided', async () => {
@@ -1184,6 +1193,8 @@ describe('publish_app', () => {
     const out = getText(result);
     expect(out).toContain('Publish failed');
     expect(out).toContain('! Validation: name is required');
+    expect(out).toContain('Listing: unknown (publish did not complete; check find_apps)');
+    expect(out).not.toContain('https://proappstore.online/apps/');
   });
 
   it('handles admin error response', async () => {

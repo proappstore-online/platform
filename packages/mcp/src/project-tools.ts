@@ -526,7 +526,7 @@ export function registerProjectTools(
       if ('content' in auth) return auth;
       const preview = await dry("publish_app",
         dry_run,
-        `- provision infra for ${app_id} (route + D1 + data worker, idempotent)\n- add "${name}" to the public storefront registry (category: ${category})\n- invite you as a push-collaborator on ${org}/${app_id}`,
+        `- provision infra for ${app_id} (route + D1 + data worker, idempotent)\n- add "${name}" to the public storefront registry (category: ${category})\n- grant repository collaborator access only for a verified GitHub identity`,
         { app_id, name, category });
       if (preview) return text(preview);
       if (confirm !== true)
@@ -562,12 +562,12 @@ export function registerProjectTools(
       }
       try {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (env.INTERNAL_TOKEN && auth.login) {
+        if (env.INTERNAL_TOKEN) {
           headers["X-Internal-Token"] = env.INTERNAL_TOKEN;
-          headers["X-PAS-Login"] = auth.login;
-        } else {
-          headers.Authorization = `Bearer ${auth.token}`;
         }
+        // Forward the signed identity, never a provider's display name as a
+        // GitHub collaborator. Admin rechecks the current immutable app owner.
+        headers.Authorization = `Bearer ${auth.token}`;
         const res = await env.ADMIN.fetch(`${adminBase.origin}/api/publish-app`, {
           method: "POST",
           headers,
@@ -600,7 +600,9 @@ export function registerProjectTools(
       return text([
         data.success ? `Published: **${name}** (${app_id})` : `Publish failed for ${app_id}`,
         `Live: https://${app_id}.proappstore.online`,
-        visibility === "private" ? "Listing: none (private app)" : `Listing: https://proappstore.online/app/${app_id}`,
+        visibility === "private" ? "Listing: none (private app)"
+          : data.success ? `Listing: https://proappstore.online/apps/${app_id}/`
+          : "Listing: unknown (publish did not complete; check find_apps)",
         "",
         steps,
       ].join("\n"), data.success !== true);

@@ -1,4 +1,4 @@
-import { internalTokenOk, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifyTurnstile } from "@proappstore/build-core";
+import { appClaim, internalTokenOk, turnstileEnabled, turnstileFailure, turnstileTokenFrom, verifySession as verifyPasSession, verifyTurnstile } from "@proappstore/build-core";
 import { AccessKeysUnavailable, isValidTeamDomain, verifyAccessJwt } from "./access-jwt.js";
 import { handleAuthMe, verifyGitHubPublishSession } from "./auth.js";
 import type { Env } from "./env.js";
@@ -102,6 +102,7 @@ async function publishBotCheck(request: Request, env: Env, body: unknown, intern
 
 type PublishPrincipal =
   | { kind: "internal"; creatorGithub: string }
+  | { kind: "internal-owner"; userId: string; creatorGithub: string | undefined }
   | { kind: "session"; userId: string; creatorGithub: string };
 
 /**
@@ -111,6 +112,18 @@ type PublishPrincipal =
  */
 async function verifyPublishPrincipal(request: Request, env: Env): Promise<PublishPrincipal | null> {
   if (internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN)) {
+    // MCP forwards the verified user's session as well as its service identity.
+    // Google names are never GitHub logins. This path only publishes existing
+    // apps whose immutable owner is rechecked below, not unclaimed app ids.
+    const bearer = request.headers.get("Authorization");
+    if (bearer !== null) {
+      if (!bearer.startsWith("Bearer ")) return null;
+      const identity = await verifyPasSession(bearer.slice(7), env.SESSION_SIGNING_KEY);
+      if (!identity || !/^(?:gh|google):\d+$/.test(identity.uid)) return null;
+      const creatorGithub = identity.uid.startsWith("gh:") ? safeGitHubLogin(identity.login ?? null) : undefined;
+      if (creatorGithub === null) return null;
+      return { kind: "internal-owner", userId: identity.uid, creatorGithub };
+    }
     const creatorGithub = safeGitHubLogin(request.headers.get("X-PAS-Login"));
     return creatorGithub ? { kind: "internal", creatorGithub } : null;
   }
@@ -122,6 +135,20 @@ async function verifyPublishPrincipal(request: Request, env: Env): Promise<Publi
   return identity && creatorGithub
     ? { kind: "session", userId: identity.uid, creatorGithub }
     : null;
+}
+
+async function checkInternalPublishOwner(principal: PublishPrincipal, appId: string, env: Env): Promise<Response | null> {
+  if (principal.kind !== "internal-owner") return null;
+  const app = await appClaim(env.DB, appId, env.APPS_DOMAIN_BASE);
+  // Match MCP's effective owner role, including an explicitly granted team
+  // owner. A viewer/editor/admin membership alone does not authorize publish.
+  const owns = app && !app.alias_reserved && (app.creator_id === principal.userId || await env.DB.prepare(
+    "SELECT 1 FROM team_members WHERE app_id = ? AND user_id = ? AND role = 'owner'",
+  ).bind(appId, principal.userId).first());
+  if (!owns) {
+    return Response.json({ error: "publishing requires the current owner of an existing app" }, { status: 403 });
+  }
+  return null;
 }
 
 export default {
@@ -153,7 +180,8 @@ export default {
     if (url.pathname === "/api/publish-app" && request.method === "POST") {
       // Authenticated publish. Public callers use an Admin/PAS Bearer session;
       // sibling workers that have already authenticated and owner-gated the
-      // caller may use INTERNAL_TOKEN + X-PAS-Login. A user session must name
+      // caller may forward its user's session with INTERNAL_TOKEN, or use the
+      // legacy trusted X-PAS-Login contract. A direct user session must name
       // an immutable GitHub uid; Google/credential and legacy login-only
       // sessions cannot satisfy this GitHub-backed publishing contract (#327).
       const principal = await verifyPublishPrincipal(request, env);
@@ -167,6 +195,8 @@ export default {
         return Response.json({ error: "invalid JSON body" }, { status: 400 });
       }
       if (!body?.id) return Response.json({ error: "id required" }, { status: 400 });
+      const ownerRefusal = await checkInternalPublishOwner(principal, body.id, env);
+      if (ownerRefusal) return ownerRefusal;
       const bot = await publishBotCheck(request, env, body, internalTokenOk(request.headers.get("X-Internal-Token"), env.INTERNAL_TOKEN));
       if (bot) return bot;
 
@@ -252,6 +282,8 @@ export default {
       }
       const body = await request.json<PublishRequest>();
       if (!body?.id) return Response.json({ error: "id required" }, { status: 400 });
+      const ownerRefusal = await checkInternalPublishOwner(principal, body.id, env);
+      if (ownerRefusal) return ownerRefusal;
       if (principal.kind === "session") {
         const guard = await guardProvisionRequest({
           db: env.DB,

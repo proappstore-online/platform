@@ -168,14 +168,15 @@ export function registerPlatformTools(server: McpServer, env: Env, getConnection
       const org = env.GITHUB_ORG;
       const liveUrl = `https://${app_id}.${domain}`;
       const repoUrl = `https://github.com/${org}/${app_id}`;
-      const listingUrl = `https://${domain}/apps/${app_id}/`;
       const dataUrl = `https://data-${app_id}.${domain}`;
 
       let status: string;
+      let isPrivate = false;
       try {
         // App hostnames are served by the route-mapped host worker — a plain
         // same-zone fetch would bypass it and report a false status.
         const check = await env.HOST.fetch(liveUrl, { method: "HEAD" });
+        isPrivate = check.headers.get("X-PAS-Visibility") === "private";
         // A private app (#259) refuses an anonymous HEAD by design: the host marks
         // that refusal, so it reads as live-and-private, not down.
         status = check.ok
@@ -187,6 +188,27 @@ export function registerPlatformTools(server: McpServer, env: Env, getConnection
         status = "Down (unreachable)";
       }
 
+      // Route health does not imply storefront publication. Use the same
+      // caller-scoped publication evidence as find_apps; never invent a link
+      // when the directory is unavailable or the caller cannot see the app.
+      let listing = isPrivate ? "none (private app)" : "unknown (publication not verified)";
+      const token = requireToken();
+      if (!isPrivate && token) {
+        try {
+          const query = new URLSearchParams({ q: liveUrl, limit: "1" });
+          const directory = await pasApi(env.API, env.API_BASE, `/v1/apps/directory?${query}`, token) as {
+            items?: Array<{ id: string; links?: { storePage?: string | null } }>;
+          };
+          const app = directory.items?.find((item) => item.id === app_id);
+          if (app?.links && "storePage" in app.links) {
+            listing = typeof app.links.storePage === "string" && /^https:\/\/proappstore\.online\/apps\/[a-z][a-z0-9-]*\/$/.test(app.links.storePage) ? app.links.storePage
+              : app.links.storePage === null ? "none (not published to the storefront)" : listing;
+          }
+        } catch {
+          // Preserve useful route diagnostics without claiming publication.
+        }
+      }
+
       return {
         content: [{
           type: "text" as const,
@@ -195,7 +217,7 @@ export function registerPlatformTools(server: McpServer, env: Env, getConnection
             `Status: ${status}`,
             `Live: ${liveUrl}`,
             `Repo: ${repoUrl}`,
-            `Listing: ${listingUrl}`,
+            `Listing: ${listing}`,
             `Data worker: ${dataUrl}`,
             `Deploy: push to main → auto-deploy via GitHub Actions`,
           ].join("\n"),

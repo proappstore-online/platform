@@ -1016,6 +1016,14 @@ describe("storefront registry: private apps (#259)", () => {
   };
   const REQ = { id: "diary", name: "Diary", category: "x", icon: "d", iconBg: "#000", description: "d" };
 
+  it("publishes anonymous catalogue entries without developer, source or collaborator identity", async () => {
+    const puts = registryMock([]);
+    const step = await addToRegistry({ ...ENV, DB: dbWith("public") }, { ...REQ, creatorGithub: "real-owner" });
+    expect(step.status).toBe("ok");
+    expect(puts[0]!.apps[0]).toMatchObject({ id: "diary", name: "Diary", appUrl: "https://diary.proappstore.online" });
+    for (const field of ["developer", "repo", "creatorGithub"]) expect(puts[0]!.apps[0]).not.toHaveProperty(field);
+  });
+
   it("never adds an app the publish request declares private", async () => {
     const puts = registryMock([]);
     const step = await addToRegistry({ ...ENV, DB: dbWith(null) }, { ...REQ, visibility: "private" });

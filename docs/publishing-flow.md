@@ -111,6 +111,20 @@ laptop runs.
 
 ## Storefront listing copy
 
+Provisioning and deploying an app do not add it to the storefront. Use the
+MCP `publish_app` tool to add the approved catalogue entry, then verify with
+`find_apps`: a published app has a `storePage` link and lifecycle `live`.
+`app_info` checks route health separately and only reports a listing link when
+the connected account's directory confirms publication; an unavailable lookup
+is reported as unknown.
+
+MCP publishing supports existing apps owned by Google or GitHub accounts. It
+forwards the signed PAS session through the trusted service connection; the
+admin worker verifies that session and rechecks the app's current immutable
+owner. Only a verified GitHub identity receives a GitHub collaborator invitation.
+A Google display name is never used as a GitHub login. Direct browser/CLI calls
+to the admin publish endpoint retain their GitHub-session requirement.
+
 The existing storefront detail page is separate from the proposed templated
 one-page marketing website. See [App marketing websites](./app-marketing-sites.md)
 for the Astro investigation, proposed publish lifecycle and delivery gates.
