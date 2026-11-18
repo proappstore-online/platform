@@ -18,7 +18,7 @@ import { enqueueHookDelivery } from './app-event-queue.js';
 import { hookLeaseMs, STALE_RECEIVED_SQL } from '../routes/hooks.js';
 import * as resend from './resend.js';
 
-export const EMAIL_HOOKS = {
+const EMAIL_HOOKS = {
   inbound: 'pas.email.inbound',
   delivered: 'pas.email.delivered',
   bounced: 'pas.email.bounced',
@@ -26,7 +26,7 @@ export const EMAIL_HOOKS = {
 } as const;
 
 /** Each text/html body of an inbound event is cut here; `truncated` says so. */
-export const MAX_INBOUND_BODY_CHARS = 200_000;
+const MAX_INBOUND_BODY_CHARS = 200_000;
 
 interface ProviderEvent { type?: unknown; created_at?: unknown; data?: Record<string, unknown> }
 
@@ -46,7 +46,7 @@ const toMs = (v: unknown, fallback: number): number => {
  * `app_hook_deliveries` the queue consumer owns, unique per (app, hook, key), so repeating a
  * key never delivers twice, while a delivery that failed is queued again.
  */
-export async function deliverAppEmailEvent(env: Env, appId: string, hook: string, key: string, payload: Record<string, unknown>, now: number): Promise<void> {
+async function deliverAppEmailEvent(env: Env, appId: string, hook: string, key: string, payload: Record<string, unknown>, now: number): Promise<void> {
   const rowId = crypto.randomUUID();
   const attemptToken = crypto.randomUUID();
   const leaseUntil = now + hookLeaseMs('worker');

@@ -61,7 +61,7 @@ const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,
 /** The platform's own domain: an app cannot claim it. */
 const RESERVED_DOMAIN = /(^|\.)proappstore\.online$/;
 
-export const normalizeAddress = (a: string): string => a.trim().toLowerCase();
+const normalizeAddress = (a: string): string => a.trim().toLowerCase();
 const hasLineBreak = (s: string) => /[\r\n]/.test(s);
 
 const requireKey = (env: Pick<Env, 'RESEND_API_KEY'>): string => {

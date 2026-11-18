@@ -9,7 +9,7 @@
 const API = 'https://api.resend.com';
 const TIMEOUT_MS = 15_000;
 /** Svix replay window for webhook timestamps. */
-export const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
+const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
 export interface ResendDnsRecord {
   record: string;
