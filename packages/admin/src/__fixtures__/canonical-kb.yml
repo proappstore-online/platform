@@ -47,9 +47,9 @@ jobs:
           rm -rf kb-src && mkdir -p kb-src/assets kb-src/stylesheets
           cp KNOWLEDGE.md kb-src/index.md
           if [ -d docs ]; then cp -r docs/. kb-src/; fi
-          # ── ProAppStore brand: logo + favicon (purple gradient "A" mark) ──
+          # ── ProAppStore brand: logo + favicon (canonical Apps symbol) ──
           cat > kb-src/assets/logo.svg <<'SVG'
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#bg)"/><text x="256" y="346" font-family="Manrope, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="800" font-size="300" fill="white" text-anchor="middle">A</text></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ProAppStore"><defs><linearGradient id="brand-pas" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#brand-pas)"/><g fill="#ffffff" color="#ffffff"><rect x="17" y="18" width="13" height="13" rx="3.5"/><rect x="35" y="15" width="13" height="13" rx="3.5"/><rect x="17" y="36" width="13" height="13" rx="3.5"/><rect x="35" y="33" width="13" height="13" rx="3.5"/></g></svg>
           SVG
           cp kb-src/assets/logo.svg kb-src/assets/favicon.svg
           # ── ProAppStore brand: accent purple (#7c3aed light / #a78bfa dark) ──

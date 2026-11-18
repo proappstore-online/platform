@@ -121,10 +121,12 @@ export default withMermaid(
     description:
       "Architecture and developer documentation for ProAppStore — distribution and monetization for AI-first apps",
     cleanUrls: true,
+    head: [["link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }]],
     lastUpdated: true,
     mermaid: {},
     themeConfig: {
       siteTitle: "ProAppStore Docs",
+      logo: "/favicon.svg",
       outline: { level: [2, 3] },
       nav: [
         { text: "Guide", link: "/getting-started" },
