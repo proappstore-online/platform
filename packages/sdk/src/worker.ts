@@ -102,6 +102,19 @@ export interface PasClient {
      */
     publish(roomId: string, data: unknown): Promise<{ delivered: number }>;
   };
+  apps: {
+    /**
+     * Run another app's public, read-only action (#599), with exactly the rules an anonymous
+     * HTTP caller of `POST /v1/apps/<appId>/actions/<action>` has: same param validation, row
+     * and size limits and rate limit (per target app, per calling app). Never runs as
+     * `system:worker`, never as a user. Resolves the action's raw answer, `{ rows, meta }`.
+     * Rejects with Forbidden for anything but a public query action of a published, non-private
+     * app (one answer for unknown, non-public, write, scheduled, staged and private alike),
+     * BadRequest (bad names or params), RateLimited, or Failed. One PAS call, recorded as
+     * `apps.query` / `<appId>/<action>`.
+     */
+    query(appId: string, action: string, params?: Record<string, unknown>): Promise<{ rows: unknown[]; meta?: Record<string, unknown> }>;
+  };
   /** Append to the app's logs (category `worker`). Resolves false when the app's log quota is spent. */
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>): Promise<boolean>;
 }
@@ -136,6 +149,7 @@ interface PasBinding {
   connectors: { token(name: string, opts: unknown, ctx: CallCtx): Promise<string | null>; googleCalendar(name: string, request: GoogleCalendarRequest, ctx: CallCtx): Promise<Record<string, unknown>> };
   storage: { put(key: string, body: unknown, opts: unknown, ctx: CallCtx): Promise<unknown>; get(key: string, ctx: CallCtx): Promise<unknown> };
   rooms: { publish(roomId: string, data: unknown, ctx: CallCtx): Promise<unknown> };
+  apps: { query(appId: string, action: string, params: unknown, ctx: CallCtx): Promise<unknown> };
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
 }
 
@@ -163,6 +177,8 @@ export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 
       get: (key) => pas.storage.get(key, ctx) as Promise<{ body: ArrayBuffer; contentType: string } | null>,
     },
     rooms: { publish: (roomId, data) => pas.rooms.publish(roomId, data, ctx) as Promise<{ delivered: number }> },
+    // ctx, not actionCtx: a caller grant never applies to another app's public action.
+    apps: { query: (appId, action, params) => pas.apps.query(appId, action, params ?? {}, ctx) as Promise<{ rows: unknown[]; meta?: Record<string, unknown> }> },
     log: (level, message, fields) => pas.log(level, message, fields, ctx),
   };
 }

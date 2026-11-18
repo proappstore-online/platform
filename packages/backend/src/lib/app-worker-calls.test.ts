@@ -31,6 +31,10 @@ let sent: { url: string; body: unknown }[];
 let points: unknown[];
 let appRoles: Map<string, string[]>;
 let audits: unknown[][];
+let toolState: Map<string, string>;
+let visibility: { mode: string; roles: string | null } | null;
+let rateLimit: number;
+let limiterKeys: string[];
 
 const tool = (m: Row) => tools.set(String(m.name), m);
 const workerTool = (name: string, extra: Row = {}) => tool({
@@ -51,6 +55,10 @@ function fakeDb(): D1Database {
     if (s.startsWith('SELECT status FROM app_worker_invocations')) {
       const inv = invocations.get(String(args[0]));
       return { first: inv && inv.app_id === args[1] ? { status: inv.status } : null };
+    }
+    if (s.startsWith('SELECT t.manifest, t.state, v.mode')) {
+      const m = tools.get(String(args[1]));
+      return { first: m ? { manifest: JSON.stringify(m), state: toolState.get(String(args[1])) ?? 'live', visibility_mode: visibility?.mode ?? null, visibility_roles: visibility?.roles ?? null } : null };
     }
     if (s.startsWith('SELECT manifest FROM app_tools')) {
       const m = tools.get(String(args[1]));
@@ -114,9 +122,14 @@ beforeEach(async () => {
   points = [];
   appRoles = new Map();
   audits = [];
+  toolState = new Map();
+  visibility = null;
+  rateLimit = 120;
+  limiterKeys = [];
   env = {
     DB: fakeDb(), STORAGE: fakeR2(), APP_SECRET_KEK: KEK, DATA_WORKER_HOST: 'test.workers.dev', INTERNAL_TOKEN: 'internal', SESSION_SIGNING_KEY: 'sk',
     APP_WORKER_CALLS: { writeDataPoint: (p: unknown) => points.push(p) },
+    PUBLIC_ACTION_RATE_LIMIT: { limit: async ({ key }: { key: string }) => { limiterKeys.push(key); return { success: limiterKeys.filter((k) => k === key).length <= rateLimit }; } },
   } as unknown as Env;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
@@ -354,5 +367,75 @@ describe('actions as the caller of an http request (#260)', () => {
         expect(await code(authorizeWorkerCall(env, 't', ctx({ as: g }))), status).toBe('Unauthorized');
       }
     });
+  });
+});
+
+describe('apps.query: another app\'s public read-only actions (#599)', () => {
+  const api = (props: unknown = { appId: 't' }) => new AppWorkerApi({ props, waitUntil: () => {} } as never, env);
+  const publicFeed = (name = 'feed', extra: Row = {}) => tool({
+    name, description: name, operation: 'query', requires_auth: false, params: { n: { type: 'integer', default: 5 } },
+    sql: 'SELECT id FROM jobs WHERE n > :n LIMIT 50', callers: ['user'], ...extra,
+  });
+  const query = (appId: string, action: string, params?: Row) => api().apps.query(appId, action, params, ctx());
+
+  it('runs a public query action as the anonymous caller and returns the data worker answer', async () => {
+    publicFeed();
+    expect(await query('hiring', 'feed', { n: 3 })).toEqual({ rows: [{ ok: 1 }], meta: { changes: 1 } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toContain('/query');
+    expect(sent[0]!.body).toMatchObject({ params: expect.anything() });
+    expect(limiterKeys).toEqual(['hiring:worker:t']);
+    expect(points).toEqual([{ indexes: ['t'], blobs: ['apps.query', 'hiring/feed', 'ok'], doubles: [1] }]);
+    expect(invocations.get('e1:1')!.pas_calls).toBe(1);
+  });
+
+  it('refuses non-public, write, scheduled, unknown, private and unpublished alike, with one message', async () => {
+    tool({ name: 'secret_read', operation: 'query', requires_auth: true, sql: 'SELECT 1 LIMIT 1', callers: ['user'] });
+    tool({ name: 'worker_only', operation: 'query', requires_auth: false, sql: 'SELECT 1 LIMIT 1', callers: ['worker'] });
+    tool({ name: 'write_it', operation: 'execute', requires_auth: false, sql: 'INSERT INTO t VALUES (1) -- LIMIT 1', callers: ['user'] });
+    publicFeed('cron', { schedule: '* * * * *' });
+    publicFeed('staged'); toolState.set('staged', 'staged');
+    const messages = new Set<string>();
+    for (const name of ['secret_read', 'worker_only', 'write_it', 'cron', 'staged', 'nope']) {
+      const err = await query('hiring', name).catch((e) => e as WorkerCallError);
+      expect(err).toBeInstanceOf(WorkerCallError);
+      expect((err as WorkerCallError).code).toBe('Forbidden');
+      messages.add((err as WorkerCallError).message.replace(name, '<n>'));
+    }
+    expect(messages.size).toBe(1);
+    publicFeed('private_feed'); visibility = { mode: 'private', roles: null };
+    expect(await code(query('hiring', 'private_feed'))).toBe('Forbidden');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('ignores a caller grant: runs anonymously, and a user-scoped action stays refused', async () => {
+    tool({ name: 'mine', operation: 'query', requires_auth: true, sql: 'SELECT 1 WHERE u = :__user_id LIMIT 1', callers: ['user'] });
+    publicFeed();
+    const as = await mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'e1', attempt: 1 });
+    expect(await code(api().apps.query('hiring', 'mine', {}, ctx({ as })))).toBe('Forbidden');
+    await api().apps.query('hiring', 'feed', {}, ctx({ as }));
+    expect(JSON.stringify(sent)).not.toContain('gh:42');
+  });
+
+  it('refuses bad params and bad app or action names', async () => {
+    publicFeed();
+    expect(await code(query('hiring', 'feed', { n: 'abc' }))).toBe('BadRequest');
+    expect(await code(api().apps.query('hiring', 'feed', [] as never, ctx()))).toBe('BadRequest');
+    expect(await code(query('Bad App', 'feed'))).toBe('BadRequest');
+    expect(await code(query('hiring', ''))).toBe('BadRequest');
+  });
+
+  it('applies the anonymous rate limit', async () => {
+    publicFeed();
+    rateLimit = 1;
+    expect(await code(query('hiring', 'feed'))).toBe('ok');
+    expect(await code(query('hiring', 'feed'))).toBe('RateLimited');
+    expect(points.at(-1)).toEqual({ indexes: ['t'], blobs: ['apps.query', 'hiring/feed', 'RateLimited'], doubles: [1] });
+  });
+
+  it('needs the worker token', async () => {
+    publicFeed();
+    expect(await code(api().apps.query('hiring', 'feed', {}, ctx({ token: 'bad' })))).toBe('Unauthorized');
+    expect(sent).toHaveLength(0);
   });
 });

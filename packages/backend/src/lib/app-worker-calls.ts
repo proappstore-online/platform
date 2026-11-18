@@ -21,7 +21,8 @@ import { connectorConfigured, installationToken } from './github-app.js';
 import { checkWorkerLogQuota } from './app-worker-usage.js';
 import { LEVELS, normalizeEntry, type NormalizedEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
-import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
+import { actionRoutes, enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
+import { Hono } from 'hono';
 import { verifyCallerGrant } from './caller-grant.js';
 import { asAppId } from './accounts/contract.js';
 import { CREDENTIAL_CONTEXT_VERSION } from '@proappstore/build-core';
@@ -264,6 +265,63 @@ export async function workerActionBatch(env: Env, appId: string, calls: unknown,
     at += p.statements.length;
     return { name: p.name, results: mine };
   });
+}
+
+// ── another app's public actions ───────────────────────────────────────────
+
+const PUBLIC_ACTION_ORIGIN = 'https://api.proappstore.online';
+
+/** The public anonymous action route, alone: its own errors answer as their status. */
+const anonymousActions = new Hono<{ Bindings: Env }>()
+  .route('/', actionRoutes)
+  .onError((err) => err instanceof HttpError
+    ? Response.json({ error: err.message }, { status: err.status })
+    : Response.json({ error: 'failed' }, { status: 500 }));
+
+/**
+ * #599: run another app's public, read-only action with exactly the anonymous
+ * HTTP caller's rules, by sending the request `POST /v1/apps/<app>/actions/<name>`
+ * handles through that same route (no Authorization, so its anonymous path: public
+ * action, no roles, literal LIMIT <= 500, visibility, published state, the
+ * anonymous rate limit, the response cache). Returns the data worker's answer
+ * (`{ rows, meta }`). The rate limit is per (target app, calling app).
+ *
+ * Every refusal of the gate - unknown app or action, a non-public or write
+ * action, a private or unpublished app - answers the same `Forbidden`, so a
+ * worker learns nothing an anonymous visitor could not.
+ */
+export async function workerAppsQuery(
+  env: Env, callerAppId: string, appId: unknown, action: unknown, params: unknown, waitUntil: (p: Promise<unknown>) => void,
+): Promise<unknown> {
+  if (typeof appId !== 'string' || !appId) throw new WorkerCallError('BadRequest', 'app id is required');
+  if (typeof action !== 'string' || !action) throw new WorkerCallError('BadRequest', 'action name is required');
+  if (params !== undefined && (params === null || typeof params !== 'object' || Array.isArray(params))) {
+    throw new WorkerCallError('BadRequest', `params of "${action}" must be an object`);
+  }
+  const res = await anonymousActions.fetch(
+    new Request(`${PUBLIC_ACTION_ORIGIN}/apps/${encodeURIComponent(appId)}/actions/${encodeURIComponent(action)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-connecting-ip': `worker:${callerAppId}` },
+      body: JSON.stringify({ params: params ?? {} }),
+    }),
+    env,
+    { waitUntil, passThroughOnException() {} } as unknown as ExecutionContext,
+  );
+  const text = await res.text();
+  if (res.status === 429) throw new WorkerCallError('RateLimited', 'rate limit exceeded for public action calls');
+  if (res.status === 400) throw new WorkerCallError('BadRequest', `"${action}": ${errorText(text)}`);
+  // A stale public manifest that is not a bounded read-only query is a refusal like any other, not a fault.
+  if (res.status >= 500 && !/^public action manifest is invalid/.test(errorText(text))) throw new WorkerCallError('Failed', `${appId}/${action} failed`);
+  if (res.status !== 200) throw new WorkerCallError('Forbidden', `"${action}" is not a public read-only action of a published app`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new WorkerCallError('Failed', 'the data worker returned an invalid response');
+  }
+}
+
+function errorText(body: string): string {
+  try { return String((JSON.parse(body) as { error?: unknown }).error ?? 'bad request').slice(0, 300); } catch { return 'bad request'; }
 }
 
 // ── secrets ─────────────────────────────────────────────────────────────────

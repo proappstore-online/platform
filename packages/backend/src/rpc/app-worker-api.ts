@@ -10,6 +10,7 @@
  *   env.PAS.storage.put(key, body, opts, ctx)    env.PAS.storage.get(key, ctx)
  *   env.PAS.connectors.token(name, { repo?, mode? }, ctx)   (#258)
  *   env.PAS.rooms.publish(roomId, data, ctx)     → { delivered }   (#351)
+ *   env.PAS.apps.query(appId, action, params, ctx)   → { rows, meta }   (#599: another app's public read-only action, as an anonymous caller)
  *
  * with ctx = { token: env.PAS_WORKER_TOKEN, invocation: '<envelope id>:<attempt>' }.
  * The SDK's `defineAppWorker` (@proappstore/sdk/worker) fills ctx in.
@@ -22,7 +23,7 @@ import { RpcTarget, WorkerEntrypoint } from 'cloudflare:workers';
 import type { Env } from '../types.js';
 import {
   authorizeWorkerCall, recordWorkerCall, workerActionBatch, workerActionCall, workerLog,
-  workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
+  workerAppsQuery, workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
 import { workerRoomPublish } from '../lib/room-access.js';
 import { workerGoogleCalendar } from '../lib/google-calendar-worker.js';
@@ -108,6 +109,18 @@ class RoomsApi extends RpcTarget {
   }
 }
 
+class AppsApi extends RpcTarget {
+  readonly #run: Run;
+  readonly #env: Env;
+  readonly #waitUntil: (p: Promise<unknown>) => void;
+  constructor(run: Run, env: Env, waitUntil: (p: Promise<unknown>) => void) { super(); this.#run = run; this.#env = env; this.#waitUntil = waitUntil; }
+  /** Another app's public, read-only action, under the anonymous HTTP caller's rules (#599). Never runs as `system:worker`, never takes `ctx.as`. */
+  query(appId: string, action: string, params: Record<string, unknown> | undefined, ctx: unknown): Promise<unknown> {
+    return this.#run('apps.query', `${String(appId ?? '').slice(0, 64)}/${String(action ?? '').slice(0, 64)}`, ctx,
+      (callerApp) => workerAppsQuery(this.#env, callerApp, appId, action, params, this.#waitUntil));
+  }
+}
+
 export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   #runner(): Run {
     return runner(this.env, (this.ctx as { props?: { appId?: string } }).props?.appId);
@@ -117,6 +130,7 @@ export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   get connectors(): ConnectorsApi { return new ConnectorsApi(this.#runner(), this.env); }
   get storage(): StorageApi { return new StorageApi(this.#runner(), this.env); }
   get rooms(): RoomsApi { return new RoomsApi(this.#runner(), this.env); }
+  get apps(): AppsApi { return new AppsApi(this.#runner(), this.env, (p) => this.ctx.waitUntil(p)); }
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown> | undefined, ctx: unknown): Promise<boolean> {
     // The runner has authorised ctx, so its invocation is a string naming this app's running invocation.
     return this.#runner()('log', '', ctx, (appId) => workerLog(this.env, appId, level, message, fields, (ctx as { invocation: string }).invocation));

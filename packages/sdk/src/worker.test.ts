@@ -11,6 +11,7 @@ function envWithPas() {
     storage: { put: vi.fn(async () => ({ key: 'k', size: 1 })), get: vi.fn(async () => null) },
     log: vi.fn(async () => true),
     rooms: { publish: vi.fn(async () => ({ delivered: 2 })) },
+    apps: { query: vi.fn(async () => ({ rows: [{ id: 'j1' }], meta: {} })) },
     connectors: { token: vi.fn(async () => null), googleCalendar: vi.fn(async () => ({ connected: false })) },
   };
   return { pas, env: { PAS: pas, PAS_WORKER_TOKEN: 'tok', APP_ID: 'demo' } as unknown as AppWorkerEnv };
@@ -71,6 +72,16 @@ describe('pasClient', () => {
     expect(pas.storage.put).toHaveBeenCalledWith('k', 'v', {}, ctx);
     expect(pas.storage.get).toHaveBeenCalledWith('k', ctx);
     expect(pas.log).toHaveBeenCalledWith('info', 'hi', { n: 1 }, ctx);
+  });
+
+  // #599: another app's public action is anonymous: the bare ctx, never a caller grant; params default to {}.
+  it('apps.query passes the app, action, params and the bare ctx, even with a caller grant', async () => {
+    const { env, pas } = envWithPas();
+    const p = pasClient(env, { id: 'e1', attempt: 1 }, 'grant');
+    expect(await p.apps.query('hiring', 'list_syndication_feed', { limit: 5 })).toEqual({ rows: [{ id: 'j1' }], meta: {} });
+    expect(pas.apps.query).toHaveBeenCalledWith('hiring', 'list_syndication_feed', { limit: 5 }, { token: 'tok', invocation: 'e1:1' });
+    await p.apps.query('hiring', 'feed');
+    expect(pas.apps.query).toHaveBeenLastCalledWith('hiring', 'feed', {}, { token: 'tok', invocation: 'e1:1' });
   });
 
   // #351: a publish carries the worker token and invocation, never a caller grant (it is always system:worker).

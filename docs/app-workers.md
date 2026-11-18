@@ -425,6 +425,7 @@ Every handler receives the event, plus a `pas` client bound to this invocation:
 | `pas.secrets.get(name)` | Returns a secret listed in `worker.secrets`, otherwise `null`. |
 | `pas.storage.put(key, body, { contentType? })` / `get(key)` | Reads and writes worker files, at most 10 MB each. |
 | `pas.rooms.publish(roomId, data)` | Sends `data` as an event to every client connected to that room of your app, as `system:worker` (#351). Resolves `{ delivered }`. See [Rooms](#rooms-notify-connected-clients). |
+| `pas.apps.query(appId, action, params?)` | Reads another app's **public, read-only** action (#599) with exactly an anonymous HTTP caller's rules (same validation, row limit, response cache and rate limit, counted per target app and calling app). Resolves the raw answer `{ rows, meta }`. Never runs as `system:worker` or a user. Rejects `Forbidden` for anything that is not a public query action of a published, non-private app, with one answer whether or not the action exists; `BadRequest`, `RateLimited` or `Failed` otherwise. Outbound `fetch` to `*.proappstore.online` stays blocked; use this instead. |
 | `pas.log(level, message, fields?)` | Appends to the app's logs. Resolves `false` when the worker's daily log budget is spent (the line is dropped; the invocation carries on). |
 
 `event` is `{ id, type, name, attempt, issuedAt, payload }`. For a hook it also
@@ -520,6 +521,7 @@ a replay inside the signature window. **Make every handler idempotent on
 | Run now | one manual run per schedule per minute; it is queued at once (status `queued`) |
 | Browser requests (`/.pas/worker`) | request and response bodies ≤ 11 MiB each |
 | Hooks | ≤ 10 per app, body ≤ 5 MB |
+| `pas.apps.query` | the public anonymous limit: 120 calls a minute per (target app, calling app); each call is one `PAS` call |
 | `pas.rooms.publish` | `data` is JSON, ≤ 4 KB serialized; 60 publishes a minute per app; each publish is one `PAS` call |
 | Worker files | 10 MB per object |
 | Invocation history | 30 days; hook deliveries 14 days |
