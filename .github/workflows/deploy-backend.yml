@@ -102,6 +102,22 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # #566: Cloudflare Email Service. Off until the owner has enabled it on the account and set the
+      # repository variable EMAIL_SERVICE_ENABLED=true; then the `send_email` binding and the
+      # pas-email-events consumer (wrangler.email.toml) are appended for this deploy, with the queue.
+      - name: Add Cloudflare Email Service bindings (when enabled)
+        if: ${{ vars.EMAIL_SERVICE_ENABLED == 'true' }}
+        working-directory: packages/backend
+        run: |
+          if ! pnpm exec wrangler queues info pas-email-events >/dev/null 2>&1; then
+            pnpm exec wrangler queues create pas-email-events
+          fi
+          printf '\n' >> wrangler.toml
+          cat wrangler.email.toml >> wrangler.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy Worker
         working-directory: packages/backend
         run: pnpm exec wrangler deploy

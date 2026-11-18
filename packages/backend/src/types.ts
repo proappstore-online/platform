@@ -192,8 +192,8 @@ export interface Env {
   AI_GATEWAY_ID?: string;
   /** Resend API key for transactional email. If unset, /v1/email/send returns 503. */
   RESEND_API_KEY?: string;
-  /** Svix signing secret (`whsec_...`) of the Resend webhook; verifies /v1/email/provider-events. If unset, that route returns 503. */
-  RESEND_WEBHOOK_SECRET?: string;
+  /** Cloudflare Email Service `send_email` binding (#566). Absent until Email Service is enabled; verified app email then answers `email_not_configured`. */
+  EMAIL?: EmailSendingBinding;
   /** Anthropic API key for Managed Agents. If unset, /v1/agent/* returns 503. */
   ANTHROPIC_API_KEY?: string;
   /**
@@ -326,4 +326,19 @@ export interface SubmissionRow {
   rejection_reason: string | null;
   created_at: number;
   reviewed_at: number | null;
+}
+
+/** What `env.EMAIL.send()` takes, as verified app email uses it. */
+export interface EmailSendMessage {
+  from: string | { email: string; name: string };
+  to: string[];
+  subject: string;
+  html: string;
+  text: string;
+  replyTo?: string;
+}
+
+/** The Cloudflare Email Service `send_email` binding. */
+export interface EmailSendingBinding {
+  send(message: EmailSendMessage): Promise<{ messageId: string }>;
 }

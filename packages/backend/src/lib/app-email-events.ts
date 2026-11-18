@@ -1,9 +1,11 @@
 /**
- * Provider webhook events for verified app email (#566, slice 3): delivery, bounce,
- * complaint and inbound mail.
+ * Cloudflare Email Service events for verified app email (#566, slice 3): delivery, bounce
+ * and complaint events from the Email Sending events queue, and inbound mail from the
+ * backend worker's `email()` handler (Email Routing).
  *
- * The route verifies the Svix signature (lib/resend.ts) before anything here runs. Then:
- *  - the provider event id de-duplicates, so a provider retry applies once;
+ * Nothing here is reachable from the internet: the queue and the routing handler are
+ * Cloudflare-internal, so there is no signature to verify. Then:
+ *  - the event id de-duplicates, so a queue redelivery applies once;
  *  - a send event is mapped by provider message id to the send record and so to its app;
  *    an inbound message is mapped by recipient address to an approved, verified identity;
  *  - the send record's history is appended to (email_send_events), never rewritten;
@@ -16,7 +18,10 @@ import type { Env } from '../types.js';
 import { activeAppWorker } from './app-worker-host.js';
 import { enqueueHookDelivery } from './app-event-queue.js';
 import { hookLeaseMs, STALE_RECEIVED_SQL } from '../routes/hooks.js';
-import * as resend from './resend.js';
+import PostalMime from 'postal-mime';
+import { cloudflareAuthResults } from './cf-email.js';
+
+export const EMAIL_EVENTS_QUEUE = 'pas-email-events';
 
 const EMAIL_HOOKS = {
   inbound: 'pas.email.inbound',
@@ -28,14 +33,24 @@ const EMAIL_HOOKS = {
 /** Each text/html body of an inbound event is cut here; `truncated` says so. */
 const MAX_INBOUND_BODY_CHARS = 200_000;
 
-interface ProviderEvent { type?: unknown; created_at?: unknown; data?: Record<string, unknown> }
+/** One message of the Email Sending events queue (`cf.email.sending.message.*`). */
+export interface EmailSendingEvent {
+  type?: unknown;
+  payload?: {
+    eventId?: unknown; messageId?: unknown; recipient?: unknown; terminal?: unknown;
+    bounce?: { type?: unknown; classification?: unknown; reason?: unknown } | null;
+  };
+  metadata?: { eventTimestamp?: unknown };
+}
+
+/** Cloudflare refuses to deliver a message over this; so does the handler. */
+const MAX_INBOUND_RAW_BYTES = 25 * 1024 * 1024;
 
 const addressOf = (v: unknown): string => {
   const s = String(v ?? '').trim();
   const m = /<([^<>]+)>\s*$/.exec(s);
   return (m ? m[1]! : s).trim().toLowerCase();
 };
-const addressesOf = (v: unknown): string[] => (Array.isArray(v) ? v : v ? [v] : []).map(addressOf).filter(Boolean);
 const toMs = (v: unknown, fallback: number): number => {
   const t = typeof v === 'string' ? Date.parse(v) : NaN;
   return Number.isNaN(t) ? fallback : t;
@@ -83,98 +98,126 @@ async function deliverAppEmailEvent(env: Env, appId: string, hook: string, key: 
 }
 
 /**
- * Apply one verified provider event. Returns false when it was already applied. Throws when
- * processing could not finish, so the route answers 5xx and the provider retries; every step
- * is safe to repeat.
+ * Apply one Email Sending event. Returns false when it was already applied. Throws when
+ * processing could not finish, so the queue retries; every step is safe to repeat.
  */
-export async function applyProviderEvent(env: Env, providerEventId: string, event: ProviderEvent, now = Date.now()): Promise<boolean> {
+export async function applyProviderEvent(env: Env, event: EmailSendingEvent, now = Date.now()): Promise<boolean> {
   const type = typeof event.type === 'string' ? event.type.slice(0, 100) : 'unknown';
-  await env.DB.prepare('INSERT OR IGNORE INTO email_provider_events (provider_event_id, type, received_at) VALUES (?, ?, ?)').bind(providerEventId, type, now).run();
-  const seen = await env.DB.prepare('SELECT processed_at FROM email_provider_events WHERE provider_event_id = ?').bind(providerEventId).first<{ processed_at: number | null }>();
+  const p = event.payload ?? {};
+  const eventId = typeof p.eventId === 'string' ? p.eventId : '';
+  if (!eventId) return false; // not an event this feature understands
+  await env.DB.prepare('INSERT OR IGNORE INTO email_provider_events (provider_event_id, type, received_at) VALUES (?, ?, ?)').bind(eventId, type, now).run();
+  const seen = await env.DB.prepare('SELECT processed_at FROM email_provider_events WHERE provider_event_id = ?').bind(eventId).first<{ processed_at: number | null }>();
   if (seen?.processed_at) return false;
 
-  const data = event.data ?? {};
-  if (type === 'email.received') await applyInbound(env, providerEventId, data, event, now);
-  else if (type === 'email.delivered' || type === 'email.bounced' || type === 'email.complained') await applySendEvent(env, providerEventId, type, data, event, now);
-  // Other types (sent, delivery_delayed, ...) are acknowledged and not recorded.
+  const kind = /^cf\.email\.sending\.message\.(delivered|deferred|bounced|failed|rejected|complained)$/.exec(type)?.[1];
+  if (kind) await applySendEvent(env, eventId, kind, event, now);
 
-  await env.DB.prepare('UPDATE email_provider_events SET processed_at = ? WHERE provider_event_id = ?').bind(now, providerEventId).run();
+  await env.DB.prepare('UPDATE email_provider_events SET processed_at = ? WHERE provider_event_id = ?').bind(now, eventId).run();
   return true;
 }
 
 interface SendLookup { id: string; app_id: string; identity_id: string; from_address: string; to_json: string }
 
-async function applySendEvent(env: Env, eventId: string, type: string, data: Record<string, unknown>, event: ProviderEvent, now: number): Promise<void> {
-  const providerId = typeof data.email_id === 'string' ? data.email_id : '';
+async function applySendEvent(env: Env, eventId: string, kind: string, event: EmailSendingEvent, now: number): Promise<void> {
+  const p = event.payload ?? {};
+  const providerId = typeof p.messageId === 'string' ? p.messageId : '';
   // Mail the platform did not send through this feature (e.g. the legacy sender) has no record: nothing to attribute.
   const send = providerId ? await env.DB.prepare('SELECT id, app_id, identity_id, from_address, to_json FROM email_sends WHERE provider_id = ?').bind(providerId).first<SendLookup>() : null;
   if (!send) return;
-  const occurredAt = toMs(event.created_at, now);
-  const bounce = (data.bounce ?? null) as { type?: unknown; subType?: unknown; message?: unknown } | null;
-  const permanent = type === 'email.bounced' && String(bounce?.type ?? '').toLowerCase() === 'permanent';
+  const occurredAt = toMs(event.metadata?.eventTimestamp, now);
+  const bounce = p.bounce ?? null;
+  const bounceType = String(bounce?.type ?? '');
+  const permanent = kind === 'bounced' && (/hard|permanent/i.test(bounceType) || (bounceType === '' && p.terminal === true));
   const sentTo = JSON.parse(send.to_json) as string[];
-  // Only addresses this send went to: a provider event cannot suppress an address the app never mailed.
-  const affected = addressesOf(data.to).filter((a) => sentTo.includes(a));
-  const suppress = type === 'email.complained' || permanent;
-  const detail = type === 'email.bounced' && bounce
-    ? { bounce: { type: String(bounce.type ?? ''), subType: String(bounce.subType ?? ''), message: String(bounce.message ?? '').slice(0, 300) } }
+  // Cloudflare reports per recipient. Only an address this send went to can be affected.
+  const recipient = addressOf(p.recipient);
+  const affected = sentTo.includes(recipient) ? [recipient] : [];
+  const suppress = kind === 'complained' || permanent;
+  const detail = kind === 'bounced' && bounce
+    ? { bounce: { type: bounceType, subType: String(bounce.classification ?? ''), message: String(bounce.reason ?? '').slice(0, 300) } }
     : null;
+  const type = `email.${kind}`;
 
   await env.DB.prepare('INSERT OR IGNORE INTO email_send_events (id, send_id, app_id, type, detail, occurred_at, provider_event_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(crypto.randomUUID(), send.id, send.app_id, type, detail ? JSON.stringify(detail) : null, occurredAt, eventId).run();
-  const column = type === 'email.delivered' ? 'delivered_at' : type === 'email.bounced' ? 'bounced_at' : 'complained_at';
-  await env.DB.prepare(`UPDATE email_sends SET ${column} = COALESCE(${column}, ?) WHERE id = ?`).bind(occurredAt, send.id).run();
+  const column = kind === 'delivered' ? 'delivered_at' : kind === 'bounced' ? 'bounced_at' : kind === 'complained' ? 'complained_at' : null;
+  if (column) await env.DB.prepare(`UPDATE email_sends SET ${column} = COALESCE(${column}, ?) WHERE id = ?`).bind(occurredAt, send.id).run();
   if (suppress) {
     for (const address of affected) {
       await env.DB.prepare('INSERT OR IGNORE INTO email_suppressions (app_id, address, reason, send_id, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(send.app_id, address, type === 'email.complained' ? 'complained' : 'bounced', send.id, now).run();
+        .bind(send.app_id, address, kind === 'complained' ? 'complained' : 'bounced', send.id, now).run();
     }
   }
-  const name = type === 'email.delivered' ? EMAIL_HOOKS.delivered : type === 'email.bounced' ? EMAIL_HOOKS.bounced : EMAIL_HOOKS.complained;
+  // History only for the rest (deferred, failed, rejected): the app is told about delivery, bounce and complaint.
+  const name = kind === 'delivered' ? EMAIL_HOOKS.delivered : kind === 'bounced' ? EMAIL_HOOKS.bounced : kind === 'complained' ? EMAIL_HOOKS.complained : null;
+  if (!name) return;
   await deliverAppEmailEvent(env, send.app_id, name, eventId, {
     type: name, id: eventId, sendId: send.id, providerId, from: send.from_address, to: affected.length ? affected : sentTo, occurredAt,
-    ...(detail ?? {}), ...(type === 'email.bounced' ? { permanent } : {}), suppressed: suppress,
+    ...(detail ?? {}), ...(kind === 'bounced' ? { permanent } : {}), suppressed: suppress && affected.length > 0,
   }, now);
+}
+
+/** The queue() entry for `pas-email-events`: apply each event; a failure retries that message only. */
+export async function handleEmailEventBatch(batch: MessageBatch<EmailSendingEvent>, env: Env): Promise<void> {
+  await Promise.allSettled(batch.messages.map(async (message) => {
+    try {
+      await applyProviderEvent(env, message.body);
+      message.ack();
+    } catch (e) {
+      console.error(`[app-email] event failed: ${String((e as Error)?.message ?? e).slice(0, 300)}`);
+      message.retry({ delaySeconds: Math.min(2 ** message.attempts * 10, 600) });
+    }
+  }));
 }
 
 interface InboundTarget { id: string; app_id: string; address: string }
 
-async function applyInbound(env: Env, eventId: string, data: Record<string, unknown>, event: ProviderEvent, now: number): Promise<void> {
-  const providerId = typeof data.email_id === 'string' ? data.email_id : '';
-  if (!providerId) return;
-  const recipients = [...new Set([...addressesOf(data.to), ...addressesOf(data.cc), ...addressesOf(data.received_for)])];
-  if (!recipients.length) return;
-  // Only an approved, unsuspended identity on a verified domain of an app that is not suspended receives mail.
-  const targets = (await env.DB.prepare(
+/**
+ * Email Routing's `email()` handler. Mail for an approved, unsuspended identity on a verified
+ * domain of an app that is not suspended is parsed and handed to that app as `pas.email.inbound`;
+ * anything else is rejected at the SMTP door, so the sender is told and nothing is dropped
+ * silently. Any other failure throws: Email Routing then reports a temporary failure and the
+ * sender retries, so a message is never lost to an app that is down.
+ */
+export async function handleInboundEmail(env: Env, message: ForwardableEmailMessage, now = Date.now()): Promise<void> {
+  const recipient = addressOf(message.to);
+  const target = await env.DB.prepare(
     `SELECT i.id, i.app_id, i.address FROM email_identities i
        JOIN email_domains d ON d.domain = i.domain AND d.app_id = i.app_id AND d.status = 'verified'
-      WHERE i.status = 'approved' AND i.suspended = 0 AND i.address IN (${recipients.map(() => '?').join(',')})
+      WHERE i.status = 'approved' AND i.suspended = 0 AND i.address = ?
         AND NOT EXISTS (SELECT 1 FROM email_app_settings s WHERE s.app_id = i.app_id AND s.suspended = 1)`,
-  ).bind(...recipients).all<InboundTarget>()).results ?? [];
-  if (!targets.length) return; // not for any live identity: acknowledged, nothing to route
-
-  const apiKey = env.RESEND_API_KEY;
-  if (!apiKey) throw new Error('RESEND_API_KEY is not set');
-  const mail = await resend.getReceivedEmail(apiKey, providerId);
-  const cap = (s: string | null) => (s && s.length > MAX_INBOUND_BODY_CHARS ? s.slice(0, MAX_INBOUND_BODY_CHARS) : s);
-  const truncated = (mail.text?.length ?? 0) > MAX_INBOUND_BODY_CHARS || (mail.html?.length ?? 0) > MAX_INBOUND_BODY_CHARS;
-  const keep = ['in-reply-to', 'references', 'reply-to', 'date'] as const;
-  const headers = Object.fromEntries(keep.filter((k) => mail.headers[k] !== undefined).map((k) => [k, mail.headers[k]!.slice(0, 1000)]));
-  const receivedAt = toMs(data.created_at ?? event.created_at, now);
-
-  for (const t of targets) {
-    await env.DB.prepare('INSERT OR IGNORE INTO email_inbound (id, app_id, identity_id, provider_id, from_address, subject, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(crypto.randomUUID(), t.app_id, t.id, providerId, addressOf(mail.from || data.from), String(mail.subject ?? data.subject ?? '').slice(0, 500), receivedAt).run();
-    const key = `${eventId}:${t.id}`;
-    await deliverAppEmailEvent(env, t.app_id, EMAIL_HOOKS.inbound, key, {
-      type: EMAIL_HOOKS.inbound, id: key, receivedAt, identity: { id: t.id, address: t.address }, providerId,
-      messageId: mail.message_id ?? (typeof data.message_id === 'string' ? data.message_id : null),
-      from: mail.from || String(data.from ?? ''), to: mail.to.length ? mail.to : addressesOf(data.to), subject: mail.subject,
-      text: cap(mail.text), html: cap(mail.html), truncated, headers,
-      // The provider's own SPF/DKIM/DMARC verdicts. A display name or From header proves nothing.
-      authentication: mail.authentication,
-      // Attachment bytes are never delivered: metadata only, quarantined until a later slice defines their handling.
-      attachments: mail.attachments.map((a) => ({ id: a.id, filename: a.filename, contentType: a.content_type, size: a.size, quarantined: true })),
-    }, now);
+  ).bind(recipient).first<InboundTarget>();
+  if (!target) {
+    message.setReject('550 5.1.1 no such mailbox');
+    return;
   }
+  if (message.rawSize > MAX_INBOUND_RAW_BYTES) {
+    message.setReject('552 5.3.4 message too large');
+    return;
+  }
+  const raw = await new Response(message.raw).arrayBuffer();
+  const mail = await PostalMime.parse(raw);
+  // Identity of this message: its content, so SMTP redelivery of the same message routes once.
+  const providerId = [...new Uint8Array(await crypto.subtle.digest('SHA-256', raw))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const cap = (s: string | undefined) => (s && s.length > MAX_INBOUND_BODY_CHARS ? s.slice(0, MAX_INBOUND_BODY_CHARS) : (s ?? null));
+  const truncated = (mail.text?.length ?? 0) > MAX_INBOUND_BODY_CHARS || (mail.html?.length ?? 0) > MAX_INBOUND_BODY_CHARS;
+  const header = (name: string) => mail.headers.find((h) => h.key === name)?.value;
+  const headers = Object.fromEntries((['in-reply-to', 'references', 'reply-to', 'date'] as const)
+    .flatMap((k) => { const v = header(k); return v ? [[k, v.slice(0, 1000)] as const] : []; }));
+  const from = mail.from ? (mail.from.name ? `${mail.from.name} <${mail.from.address}>` : String(mail.from.address)) : message.from;
+  const receivedAt = toMs(header('date'), now) || now;
+
+  await env.DB.prepare('INSERT OR IGNORE INTO email_inbound (id, app_id, identity_id, provider_id, from_address, subject, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(crypto.randomUUID(), target.app_id, target.id, providerId, addressOf(from), String(mail.subject ?? '').slice(0, 500), now).run();
+  const key = `inbound:${providerId}:${target.id}`;
+  await deliverAppEmailEvent(env, target.app_id, EMAIL_HOOKS.inbound, key, {
+    type: EMAIL_HOOKS.inbound, id: key, receivedAt, identity: { id: target.id, address: target.address }, providerId,
+    messageId: mail.messageId ?? null, from, to: (mail.to ?? []).map((a) => String(a.address)).filter(Boolean), subject: mail.subject ?? '',
+    text: cap(mail.text), html: cap(mail.html), truncated, headers,
+    // Email Routing's own SPF/DKIM/DMARC verdicts. A display name or From header proves nothing.
+    authentication: cloudflareAuthResults(message.headers),
+    // Attachment bytes are never delivered: metadata only, quarantined until a later slice defines their handling.
+    attachments: mail.attachments.map((a, i) => ({ id: String(i), filename: a.filename ?? '', contentType: a.mimeType, size: typeof a.content === 'string' ? a.content.length : a.content.byteLength, quarantined: true as const })),
+  }, now);
 }

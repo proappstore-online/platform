@@ -329,7 +329,7 @@ function errorText(body: string): string {
 
 const EMAIL_CALL_CODE: Partial<Record<EmailErrorCode, WorkerCallCode>> = {
   email_not_configured: 'Unavailable', invalid_request: 'BadRequest', idempotency_conflict: 'BadRequest', not_found: 'NotFound',
-  quota_app_daily: 'RateLimited', quota_identity_daily: 'RateLimited', quota_burst: 'RateLimited', provider_error: 'Failed',
+  quota_app_daily: 'RateLimited', quota_identity_daily: 'RateLimited', quota_burst: 'RateLimited',
 };
 
 /** Every refusal reaches the worker as `<Code>: <stable email code>[: detail]`. */

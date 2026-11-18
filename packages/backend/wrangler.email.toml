@@ -1,0 +1,18 @@
+# Cloudflare Email Service bindings for verified app email (#566).
+#
+# NOT part of wrangler.toml on purpose: declaring them before Email Service is enabled on the
+# account could fail the whole deploy. deploy-backend.yml appends this file to wrangler.toml, and
+# creates the queue, only when the repository variable EMAIL_SERVICE_ENABLED is "true". Until then
+# the backend deploys as before and verified app email answers `email_not_configured`.
+#
+# EMAIL: `env.EMAIL.send()`, no API key. Sending as any onboarded domain needs Workers Paid.
+# pas-email-events: the Email Sending event subscription (delivered, bounced, complained) is
+# pointed at this queue in the dashboard; the backend's queue() applies each event.
+[[send_email]]
+name = "EMAIL"
+
+[[queues.consumers]]
+queue = "pas-email-events"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5

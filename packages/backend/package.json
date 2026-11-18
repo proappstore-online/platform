@@ -23,6 +23,7 @@
     "@proappstore/qa-spec": "workspace:*",
     "chess.js": "^1.4.0",
     "hono": "^4.12.27",
+    "postal-mime": "^4.2.1",
     "web-push": "^3.6.0"
   },
   "devDependencies": {

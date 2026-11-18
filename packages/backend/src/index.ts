@@ -64,6 +64,7 @@ import { runScheduledActions } from './lib/scheduled-actions.js';
 import { reapReviewUploads } from './lib/review-storage-reaper.js';
 import { handleAppEventBatch } from './lib/app-event-consumer.js';
 import type { AppEventMessage } from './lib/app-event-queue.js';
+import { EMAIL_EVENTS_QUEUE, handleEmailEventBatch, handleInboundEmail, type EmailSendingEvent } from './lib/app-email-events.js';
 import { checkAccountCeiling } from './lib/app-worker-usage.js';
 import type { AppWorkerExports } from './lib/app-worker-host.js';
 import { tokenUserFor } from './lib/app-tokens.js';
@@ -436,7 +437,10 @@ export default {
   // arrives here, so a caller's X-PAS-App / X-PAS-Host never reach a route. Only HostApi above keeps them.
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(withoutHostContext(request), env, ctx),
   // #257: pas-app-events (deliver to the app worker, retry) and pas-app-events-dlq (fail the row). ctx carries exports.AppWorkerApi, the PAS binding of invoked app workers (#254).
-  queue: (batch: MessageBatch<AppEventMessage>, env: Env, ctx: ExecutionContext) => handleAppEventBatch(batch, env, ctx as AppWorkerExports),
+  // #566: pas-email-events carries Cloudflare Email Sending events (delivered, bounced, complained); email() is Email Routing's inbound mail.
+  queue: (batch: MessageBatch<AppEventMessage | EmailSendingEvent>, env: Env, ctx: ExecutionContext) =>
+    batch.queue === EMAIL_EVENTS_QUEUE ? handleEmailEventBatch(batch as MessageBatch<EmailSendingEvent>, env) : handleAppEventBatch(batch as MessageBatch<AppEventMessage>, env, ctx as AppWorkerExports),
+  email: (message: ForwardableEmailMessage, env: Env) => handleInboundEmail(env, message),
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(pruneNativeData(env.DB, event.scheduledTime ?? Date.now()).catch(() => console.error('[native] retention cleanup failed')));
     // #123 runs on the five-minute platform tick. It is durable and has no

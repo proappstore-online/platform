@@ -2,8 +2,8 @@
  * Verified app email routes (#566).
  *
  *   GET    /v1/apps/:appId/email                              owner  - domains (with the DNS records to add), identities, limits, usage
- *   POST   /v1/apps/:appId/email/domains                      owner  - { domain, receiving? } claim a domain; returns the DNS records
- *   POST   /v1/apps/:appId/email/domains/:domain/verify       owner  - re-check DNS with the provider (proof of control)
+ *   POST   /v1/apps/:appId/email/domains                      owner  - { domain } claim a domain (pending until an administrator attests it)
+ *   POST   /v1/apps/:appId/email/domains/:domain/verify       owner  - the claim's current status (verification is the administrator's)
  *   DELETE /v1/apps/:appId/email/domains/:domain              owner
  *   POST   /v1/apps/:appId/email/identities                   owner|editor - { address, displayName?, replyTo? } declare a sender (pending)
  *   POST   /v1/apps/:appId/email/identities/:id/approve       owner  - { allowExternal? } the owner's approval
@@ -11,9 +11,9 @@
  *   POST   /v1/apps/:appId/email/send                         owner|editor - { identity, to, subject, text?, html?, replyTo?, idempotencyKey }
  *   GET    /v1/apps/:appId/email/sends[/:id]                  owner|editor - the platform's send records
  *   GET    /v1/apps/:appId/email/suppressions                 owner
+ *   POST   /v1/admin/email/domains/:domain                    admin  - { verified } attest (or withdraw) that the domain is an onboarded Cloudflare zone
  *   POST   /v1/admin/email/apps/:appId                        admin  - kill switch + quota overrides
  *   POST   /v1/admin/email/apps/:appId/identities/:id/suspend admin  - kill switch for one identity
- *   POST   /v1/email/provider-events                          public - the provider's signed webhook (Svix); 401 unless the signature verifies
  *
  * Every refusal is `{ error, code }` with a stable `code` (lib/app-email.ts). `send`
  * has no `from`: the sender is the app's registered identity.
@@ -24,16 +24,13 @@ import type { Env } from '../types.js';
 import { HttpError, requireAdmin, requireAppOwner, requireUser } from '../lib/auth.js';
 import { appEmailAccess } from '../lib/app-email-access.js';
 import {
-  EmailError, approveIdentity, assertNoServerDecidedFields, claimDomain, declareIdentity, emailStatus, getSend, listSends, listSuppressions, removeDomain,
-  revokeIdentity, sendAppEmail, setAppEmailControls, suspendIdentity, verifyDomainClaim,
+  EmailError, approveIdentity, assertNoServerDecidedFields, claimDomain, declareIdentity, domainClaim, emailStatus, getSend, listSends, listSuppressions, removeDomain,
+  revokeIdentity, sendAppEmail, setAppEmailControls, setDomainVerified, suspendIdentity,
 } from '../lib/app-email.js';
-import { applyProviderEvent } from '../lib/app-email-events.js';
-import { verifyWebhook } from '../lib/resend.js';
 
 export const appEmailRoutes = new Hono<{ Bindings: Env }>();
 
 type Ctx = Context<{ Bindings: Env }>;
-const MAX_EVENT_BYTES = 1024 * 1024;
 
 /** An EmailError becomes an HttpError carrying its stable code. */
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
@@ -74,13 +71,13 @@ appEmailRoutes.post('/apps/:appId/email/domains', async (c) => {
   const user = await requireAppOwner(c, appId);
   const body = await jsonBody(c);
   if (typeof body.domain !== 'string') throw new HttpError('domain is required', 400, { code: 'invalid_request' });
-  return c.json(await guard(() => claimDomain(c.env, appId, body.domain as string, { receiving: body.receiving === true, isAdmin: user.roles.includes('admin') })), 201);
+  return c.json(await guard(() => claimDomain(c.env, appId, body.domain as string, { isAdmin: user.roles.includes('admin') })), 201);
 });
 
 appEmailRoutes.post('/apps/:appId/email/domains/:domain/verify', async (c) => {
   const appId = c.req.param('appId');
   await requireAppOwner(c, appId);
-  return c.json(await guard(() => verifyDomainClaim(c.env, appId, c.req.param('domain'))));
+  return c.json(await guard(() => domainClaim(c.env, appId, c.req.param('domain'))));
 });
 
 appEmailRoutes.delete('/apps/:appId/email/domains/:domain', async (c) => {
@@ -148,6 +145,12 @@ appEmailRoutes.get('/apps/:appId/email/suppressions', async (c) => {
 
 // ── administrator kill switch ───────────────────────────────────────────────
 
+appEmailRoutes.post('/admin/email/domains/:domain', async (c) => {
+  await requireAdmin(c);
+  const body = await jsonBody(c);
+  return c.json(await guard(() => setDomainVerified(c.env, c.req.param('domain'), body.verified === true)));
+});
+
 appEmailRoutes.post('/admin/email/apps/:appId', async (c) => {
   const admin = await requireAdmin(c);
   const appId = c.req.param('appId');
@@ -163,26 +166,4 @@ appEmailRoutes.post('/admin/email/apps/:appId/identities/:id/suspend', async (c)
   await requireAdmin(c);
   const body = await jsonBody(c);
   return c.json(await guard(() => suspendIdentity(c.env, c.req.param('appId'), c.req.param('id'), body.suspended !== false, typeof body.reason === 'string' ? body.reason.slice(0, 300) : null)));
-});
-
-// ── provider webhook ────────────────────────────────────────────────────────
-
-/**
- * The provider's signed event stream. Unsigned, forged and stale requests are 401 and touch
- * nothing; a repeat of an applied event is 200 `{ duplicate: true }`; a failure while applying
- * is 500 so the provider retries (every step is safe to repeat).
- */
-appEmailRoutes.post('/email/provider-events', async (c) => {
-  const secret = c.env.RESEND_WEBHOOK_SECRET;
-  if (!secret) return c.text('email events are not configured', 503);
-  if (Number(c.req.header('content-length') ?? 0) > MAX_EVENT_BYTES) return c.text('body too large', 413);
-  const raw = await c.req.text();
-  if (raw.length > MAX_EVENT_BYTES) return c.text('body too large', 413);
-  const eventId = await verifyWebhook(secret, raw, c.req.raw.headers);
-  if (!eventId) return c.text('signature verification failed', 401);
-  let event: unknown;
-  try { event = JSON.parse(raw); } catch { return c.text('not JSON', 400); }
-  if (!event || typeof event !== 'object') return c.text('not an event', 400);
-  const applied = await applyProviderEvent(c.env, eventId, event as Record<string, unknown>);
-  return c.json(applied ? { ok: true } : { ok: true, duplicate: true });
 });

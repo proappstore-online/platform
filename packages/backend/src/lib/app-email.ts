@@ -10,28 +10,32 @@
  *    timestamp. An identity that is missing, not approved, revoked, suspended, or
  *    whose domain is not verified refuses with a stable code and ZERO provider
  *    calls. There is no fallback to another sender.
- *  - A domain is proved by the provider's DNS verification (`verifyDomainClaim`).
- *  - A retry with the same idempotency key never sends twice.
+ *  - A domain is usable only once a platform administrator has attested that it is a zone in
+ *    the platform's Cloudflare account and onboarded to Email Sending (`setDomainVerified`).
+ *    Cloudflare itself lets any worker of the account send from any onboarded domain, so the
+ *    provider alone cannot stop one app claiming another's domain.
+ *  - A retry with the same idempotency key never sends twice. Cloudflare has no idempotency
+ *    key, so an unknown outcome is not re-sent; only "not sent" errors are retried.
  *  - Quotas and the per-app suppression list are checked before the provider is called.
  *
  * `accepted` means the provider took the message, never that it was delivered.
  */
-import type { Env } from '../types.js';
+import type { Env, EmailSendingBinding, EmailSendMessage } from '../types.js';
 import { isLikelyEmail } from './email.js';
 import { sha256Hex } from './app-tokens.js';
-import * as resend from './resend.js';
+import { EmailProviderError, sendMessage } from './cf-email.js';
 
 export type EmailErrorCode =
   | 'email_not_configured' | 'invalid_request' | 'sender_not_found' | 'sender_not_approved' | 'sender_revoked'
   | 'sender_suspended' | 'sender_domain_unverified' | 'app_suspended' | 'external_recipient_not_allowed'
   | 'recipient_suppressed' | 'quota_app_daily' | 'quota_identity_daily' | 'quota_burst' | 'idempotency_conflict'
-  | 'domain_not_claimed' | 'domain_taken' | 'domain_reserved' | 'address_taken' | 'not_found' | 'provider_error';
+  | 'domain_not_claimed' | 'domain_taken' | 'domain_reserved' | 'address_taken' | 'not_found';
 
 const STATUS: Record<EmailErrorCode, number> = {
   email_not_configured: 503, invalid_request: 400, sender_not_found: 404, sender_not_approved: 403, sender_revoked: 403,
   sender_suspended: 403, sender_domain_unverified: 403, app_suspended: 403, external_recipient_not_allowed: 403,
   recipient_suppressed: 422, quota_app_daily: 429, quota_identity_daily: 429, quota_burst: 429, idempotency_conflict: 409,
-  domain_not_claimed: 400, domain_taken: 409, domain_reserved: 403, address_taken: 409, not_found: 404, provider_error: 502,
+  domain_not_claimed: 400, domain_taken: 409, domain_reserved: 403, address_taken: 409, not_found: 404,
 };
 
 /** A refusal with a stable `code`. */
@@ -64,46 +68,34 @@ const RESERVED_DOMAIN = /(^|\.)proappstore\.online$/;
 const normalizeAddress = (a: string): string => a.trim().toLowerCase();
 const hasLineBreak = (s: string) => /[\r\n]/.test(s);
 
-const requireKey = (env: Pick<Env, 'RESEND_API_KEY'>): string => {
-  if (!env.RESEND_API_KEY) throw new EmailError('email_not_configured', 'verified app email is not configured on this deployment');
-  return env.RESEND_API_KEY;
+const requireSender = (env: Pick<Env, 'EMAIL'>): EmailSendingBinding => {
+  if (!env.EMAIL) throw new EmailError('email_not_configured', 'Cloudflare Email Service is not enabled on this deployment');
+  return env.EMAIL;
 };
 
 // ── domains ─────────────────────────────────────────────────────────────────
 
 export interface EmailDomain {
-  id: string; domain: string; status: 'pending' | 'verified' | 'failed'; receiving: boolean;
-  records: resend.ResendDnsRecord[]; createdAt: number; verifiedAt: number | null; checkedAt: number | null;
+  id: string; domain: string; status: 'pending' | 'verified'; createdAt: number; verifiedAt: number | null;
+  /** Cloudflare adds the SPF, DKIM and DMARC records itself when the domain is onboarded: nothing for the owner to add. */
+  records: never[];
 }
 interface DomainRow {
-  id: string; app_id: string; domain: string; provider_domain_id: string; status: string; receiving: number;
-  records: string; created_at: number; verified_at: number | null; checked_at: number | null;
+  id: string; app_id: string; domain: string; status: string; created_at: number; verified_at: number | null;
 }
 const domainOut = (r: DomainRow): EmailDomain => ({
-  id: r.id, domain: r.domain, status: r.status as EmailDomain['status'], receiving: r.receiving === 1,
-  records: JSON.parse(r.records) as resend.ResendDnsRecord[], createdAt: r.created_at, verifiedAt: r.verified_at, checkedAt: r.checked_at,
+  id: r.id, domain: r.domain, status: r.status === 'verified' ? 'verified' : 'pending', createdAt: r.created_at, verifiedAt: r.verified_at, records: [],
 });
-const providerStatus = (s: string): EmailDomain['status'] => (s === 'verified' ? 'verified' : s === 'failed' ? 'failed' : 'pending');
-
-async function providerCall<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof resend.ResendError) throw new EmailError('provider_error', `the email provider answered ${e.status || 'no response'}`);
-    throw e;
-  }
-}
 
 /**
- * An app claims a domain to send from. Returns the DNS records the owner must add; the domain
- * is usable only after `verifyDomainClaim` sees the provider confirm them (proof of control).
- * One app per domain: a domain verified by another app is refused; an UNVERIFIED claim by
- * another app is displaced, so squatting a domain you cannot prove blocks nobody.
+ * An app claims a domain to send from. It stays `pending` until a platform administrator
+ * attests it (`setDomainVerified`). One app per domain: a domain verified for another app is
+ * refused; an UNVERIFIED claim by another app is displaced, so squatting blocks nobody.
  */
 export async function claimDomain(
-  env: Env, appId: string, domainInput: string, opts: { receiving?: boolean; isAdmin?: boolean; now?: number } = {},
+  env: Pick<Env, 'DB' | 'EMAIL'>, appId: string, domainInput: string, opts: { isAdmin?: boolean; now?: number } = {},
 ): Promise<EmailDomain> {
-  const apiKey = requireKey(env);
+  requireSender(env);
   const domain = normalizeAddress(domainInput);
   if (!DOMAIN_RE.test(domain)) throw new EmailError('invalid_request', 'domain is not a valid domain name');
   if (RESERVED_DOMAIN.test(domain) && !opts.isAdmin) throw new EmailError('domain_reserved', 'the platform domain cannot be claimed');
@@ -112,41 +104,45 @@ export async function claimDomain(
   if (existing) {
     if (existing.app_id === appId) return domainOut(existing);
     if (existing.status === 'verified') throw new EmailError('domain_taken', 'another app has verified this domain');
-    await providerCall(() => resend.deleteDomain(apiKey, existing.provider_domain_id)).catch(() => undefined);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM email_identities WHERE app_id = ? AND domain = ?').bind(existing.app_id, domain),
       env.DB.prepare('DELETE FROM email_domains WHERE id = ?').bind(existing.id),
     ]);
   }
-  const created = await providerCall(() => resend.createDomain(apiKey, domain, opts.receiving === true));
   const id = crypto.randomUUID();
+  // provider_domain_id is a legacy NOT NULL column from the first design; the domain name fills it.
   await env.DB.prepare(
-    `INSERT INTO email_domains (id, app_id, domain, provider_domain_id, status, receiving, records, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(id, appId, domain, created.id, providerStatus(created.status), opts.receiving ? 1 : 0, JSON.stringify(created.records), now).run();
+    `INSERT INTO email_domains (id, app_id, domain, provider_domain_id, status, receiving, records, created_at) VALUES (?, ?, ?, ?, 'pending', 0, '[]', ?)`,
+  ).bind(id, appId, domain, domain, now).run();
   return domainOut((await env.DB.prepare('SELECT * FROM email_domains WHERE id = ?').bind(id).first<DomainRow>())!);
 }
 
-/** Ask the provider to re-check the DNS records and record the result. */
-export async function verifyDomainClaim(env: Env, appId: string, domainInput: string, now = Date.now()): Promise<EmailDomain> {
-  const apiKey = requireKey(env);
+/** The app's own claim, as the owner's `verify` poll sees it. Verification is the administrator's, not the owner's. */
+export async function domainClaim(env: Pick<Env, 'DB'>, appId: string, domainInput: string): Promise<EmailDomain> {
   const row = await env.DB.prepare('SELECT * FROM email_domains WHERE app_id = ? AND domain = ?').bind(appId, normalizeAddress(domainInput)).first<DomainRow>();
   if (!row) throw new EmailError('not_found', 'this app has not claimed that domain');
-  const checked = await providerCall(() => resend.verifyDomain(apiKey, row.provider_domain_id));
-  const status = providerStatus(checked.status);
-  await env.DB.prepare(
-    `UPDATE email_domains SET status = ?, records = ?, checked_at = ?, verified_at = CASE WHEN ? = 'verified' THEN COALESCE(verified_at, ?) ELSE NULL END WHERE id = ?`,
-  ).bind(status, JSON.stringify(checked.records.length ? checked.records : JSON.parse(row.records)), now, status, now, row.id).run();
+  return domainOut(row);
+}
+
+/**
+ * Administrator attestation: the domain is a zone in the platform Cloudflare account and is
+ * onboarded to Email Sending. This is the proof of control; nothing else sets `verified`.
+ * Withdrawing it (`verified: false`) makes every identity on the domain refuse to send.
+ */
+export async function setDomainVerified(env: Pick<Env, 'DB'>, domainInput: string, verified: boolean, now = Date.now()): Promise<EmailDomain> {
+  const domain = normalizeAddress(domainInput);
+  const row = await env.DB.prepare('SELECT * FROM email_domains WHERE domain = ?').bind(domain).first<DomainRow>();
+  if (!row) throw new EmailError('not_found', 'no app has claimed that domain');
+  await env.DB.prepare('UPDATE email_domains SET status = ?, verified_at = ?, checked_at = ? WHERE id = ?')
+    .bind(verified ? 'verified' : 'pending', verified ? (row.verified_at ?? now) : null, now, row.id).run();
   return domainOut((await env.DB.prepare('SELECT * FROM email_domains WHERE id = ?').bind(row.id).first<DomainRow>())!);
 }
 
-/** Release a domain: its identities are revoked and the provider domain is deleted. */
-export async function removeDomain(env: Env, appId: string, domainInput: string, now = Date.now()): Promise<void> {
-  const apiKey = requireKey(env);
+/** Release a domain: its identities are revoked. */
+export async function removeDomain(env: Pick<Env, 'DB'>, appId: string, domainInput: string, now = Date.now()): Promise<void> {
   const domain = normalizeAddress(domainInput);
   const row = await env.DB.prepare('SELECT * FROM email_domains WHERE app_id = ? AND domain = ?').bind(appId, domain).first<DomainRow>();
   if (!row) throw new EmailError('not_found', 'this app has not claimed that domain');
-  await providerCall(() => resend.deleteDomain(apiKey, row.provider_domain_id));
   await env.DB.batch([
     env.DB.prepare("UPDATE email_identities SET status = 'revoked', revoked_at = ?, revoked_by = 'system:domain-removed' WHERE app_id = ? AND domain = ? AND status != 'revoked'").bind(now, appId, domain),
     env.DB.prepare('DELETE FROM email_domains WHERE id = ?').bind(row.id),
@@ -256,7 +252,7 @@ const settingsOf = (env: Pick<Env, 'DB'>, appId: string) =>
   env.DB.prepare('SELECT suspended, suspended_reason, daily_limit, identity_daily_limit, burst_limit FROM email_app_settings WHERE app_id = ?').bind(appId).first<SettingsRow>();
 
 /** Owner-readable state. Never a secret: provider keys and webhook secrets are not in the database. */
-export async function emailStatus(env: Pick<Env, 'DB' | 'RESEND_API_KEY'>, appId: string, now = Date.now()) {
+export async function emailStatus(env: Pick<Env, 'DB' | 'EMAIL'>, appId: string, now = Date.now()) {
   const [domains, identities, settings, counts] = await Promise.all([
     env.DB.prepare('SELECT * FROM email_domains WHERE app_id = ? ORDER BY domain').bind(appId).all<DomainRow>(),
     env.DB.prepare(`${IDENTITY_SELECT} WHERE i.app_id = ? ORDER BY i.address`).bind(appId).all<IdentityRow>(),
@@ -265,7 +261,7 @@ export async function emailStatus(env: Pick<Env, 'DB' | 'RESEND_API_KEY'>, appId
       .bind(appId, now - MINUTE_MS, now - DAY_MS).first<{ day: number; minute: number | null }>(),
   ]);
   return {
-    configured: Boolean(env.RESEND_API_KEY),
+    configured: Boolean(env.EMAIL),
     suspended: settings?.suspended === 1,
     suspendedReason: settings?.suspended === 1 ? settings.suspended_reason : null,
     limits: { daily: settings?.daily_limit ?? EMAIL_LIMITS.appDaily, identityDaily: settings?.identity_daily_limit ?? EMAIL_LIMITS.identityDaily, burstPerMinute: settings?.burst_limit ?? EMAIL_LIMITS.burst },
@@ -342,8 +338,8 @@ const sendOut = (r: SendRow, replayed: boolean): SendResult => ({
   to: JSON.parse(r.to_json) as string[], createdAt: r.created_at, acceptedAt: r.accepted_at, errorCode: r.error_code, replayed,
 });
 
-function formatFrom(i: IdentityRow): string {
-  return i.display_name ? `"${i.display_name}" <${i.address}>` : i.address;
+function formatFrom(i: IdentityRow): string | { email: string; name: string } {
+  return i.display_name ? { email: i.address, name: i.display_name } : i.address;
 }
 
 /** Recipients that already have a relationship to the app: its creator, team members and app-role holders. */
@@ -384,17 +380,18 @@ function validateInput(input: SendAppEmailInput): { to: string[]; subject: strin
   return { to, subject: input.subject.trim(), replyTo, bodies: renderBodies(input) };
 }
 
-async function callProvider(env: Env, apiKey: string, row: SendRow, message: resend.ResendSend, now: number): Promise<SendRow> {
+async function callProvider(env: Env, sender: EmailSendingBinding, row: SendRow, message: EmailSendMessage, now: number): Promise<SendRow> {
   let providerId: string | null = null;
   let status: 'accepted' | 'refused' | 'unknown';
   let errorCode: string | null = null;
   try {
-    providerId = await resend.sendMessage(apiKey, message, `pas-${row.id}`);
+    providerId = await sendMessage(sender, message);
     status = 'accepted';
   } catch (e) {
-    if (!(e instanceof resend.ResendError)) throw e;
-    status = e.retryable ? 'unknown' : 'refused';
-    errorCode = e.retryable ? 'provider_unavailable' : 'provider_rejected';
+    if (!(e instanceof EmailProviderError)) throw e;
+    // `busy`: Cloudflare did not send, so a retry under the same key may. `unknown`: it may have sent, so nothing retries it.
+    status = e.kind === 'busy' || e.kind === 'unknown' ? 'unknown' : 'refused';
+    errorCode = e.kind === 'busy' ? 'provider_busy' : e.kind === 'unknown' ? 'provider_unavailable' : e.kind === 'suppressed' ? 'recipient_suppressed' : 'provider_rejected';
     console.error(`[app-email] send ${row.id} (${row.app_id}) ${status}: ${e.message}`);
   }
   await env.DB.prepare(
@@ -409,7 +406,7 @@ async function callProvider(env: Env, apiKey: string, row: SendRow, message: res
  * outcome is a `SendResult` status instead.
  */
 export async function sendAppEmail(env: Env, input: SendAppEmailInput, now = Date.now()): Promise<SendResult> {
-  const apiKey = requireKey(env);
+  const sender = requireSender(env);
   const { to, subject, replyTo, bodies } = validateInput(input);
   const { appId } = input;
 
@@ -425,13 +422,13 @@ export async function sendAppEmail(env: Env, input: SendAppEmailInput, now = Dat
   if (identity.domain_status !== 'verified') throw new EmailError('sender_domain_unverified', identity.domain);
 
   const requestHash = await sha256Hex(JSON.stringify([identity.id, to, subject, input.text ?? null, input.html ?? null, replyTo]));
-  const message: resend.ResendSend = {
+  const message: EmailSendMessage = {
     from: formatFrom(identity), to, subject, html: bodies.html, text: bodies.text,
-    ...((replyTo ?? identity.reply_to) ? { reply_to: (replyTo ?? identity.reply_to)! } : {}),
+    ...((replyTo ?? identity.reply_to) ? { replyTo: (replyTo ?? identity.reply_to)! } : {}),
   };
 
   const prior = await env.DB.prepare('SELECT * FROM email_sends WHERE app_id = ? AND idem_key = ?').bind(appId, input.idempotencyKey).first<SendRow>();
-  if (prior) return replay(env, apiKey, prior, requestHash, message, now);
+  if (prior) return replay(env, sender, prior, requestHash, message, now);
 
   if (!identity.allow_external) {
     const related = await relatedAddresses(env, appId, to);
@@ -458,7 +455,7 @@ export async function sendAppEmail(env: Env, input: SendAppEmailInput, now = Dat
   } catch (e) {
     if (/UNIQUE/i.test(String((e as Error)?.message))) {
       const raced = await env.DB.prepare('SELECT * FROM email_sends WHERE app_id = ? AND idem_key = ?').bind(appId, input.idempotencyKey).first<SendRow>();
-      if (raced) return replay(env, apiKey, raced, requestHash, message, now);
+      if (raced) return replay(env, sender, raced, requestHash, message, now);
     }
     throw e;
   }
@@ -472,14 +469,15 @@ export async function sendAppEmail(env: Env, input: SendAppEmailInput, now = Dat
     throw new EmailError('quota_burst', `${limits.burst} emails per minute for this app`);
   }
   const row = (await env.DB.prepare('SELECT * FROM email_sends WHERE id = ?').bind(id).first<SendRow>())!;
-  return sendOut(await callProvider(env, apiKey, row, message, now), false);
+  return sendOut(await callProvider(env, sender, row, message, now), false);
 }
 
 /** The same idempotency key again: the same request returns its record; a different one is a conflict. */
-async function replay(env: Env, apiKey: string, prior: SendRow, requestHash: string, message: resend.ResendSend, now: number): Promise<SendResult> {
+async function replay(env: Env, sender: EmailSendingBinding, prior: SendRow, requestHash: string, message: EmailSendMessage, now: number): Promise<SendResult> {
   if (prior.request_hash !== requestHash) throw new EmailError('idempotency_conflict', 'this idempotency key was used for a different message');
-  // Not yet answered by the provider: ask again under the provider's own idempotency key, which cannot double-send.
-  if (prior.status === 'sending' || prior.status === 'unknown') return sendOut(await callProvider(env, apiKey, prior, message, now), true);
+  // Only a send Cloudflare reported as NOT sent is tried again. Anything with an unknown outcome is returned as it is:
+  // Cloudflare has no idempotency key, so another attempt could deliver the message twice.
+  if (prior.status === 'unknown' && prior.error_code === 'provider_busy') return sendOut(await callProvider(env, sender, prior, message, now), true);
   return sendOut(prior, true);
 }
 
