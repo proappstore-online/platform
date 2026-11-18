@@ -87,6 +87,7 @@ const mainSidebar = [
       { text: "Admin Console Migration", link: "/admin-console-migration" },
       { text: "Agent Onboarding: Admin Console", link: "/agent-onboarding" },
       { text: "App Workers", link: "/app-workers" },
+      { text: "Verified App Email", link: "/verified-app-email" },
       { text: "App billing", link: "/app-billing" },
       { text: "Public team and join enquiries", link: "/public-team-projection" },
       { text: "Promoters (app-scoped enrollment)", link: "/promoters" },

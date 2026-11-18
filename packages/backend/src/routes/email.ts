@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
-import { roleSubjects } from '../lib/role-subject.js';
+import { appEmailAccess } from '../lib/app-email-access.js';
 import { sendEmail, isLikelyEmail } from '../lib/email.js';
 
 export const emailRoutes = new Hono<{ Bindings: Env }>();
@@ -38,34 +38,9 @@ emailRoutes.post('/email/send', wrap(async (c) => {
   if (body.length > MAX_BODY) return c.text(`body too large (max ${MAX_BODY / 1024}KB)`, 400);
   if (replyTo && !isLikelyEmail(replyTo)) return c.text('invalid replyTo address', 400);
 
-  // Verify caller owns app or has editor role
-  const app = await c.env.DB.prepare('SELECT creator_id FROM apps WHERE id = ?1').bind(appId).first<{ creator_id: string }>();
-  if (!app) return c.text('app not found', 404);
-  const isOwner = app.creator_id === user.id;
-  const isAdmin = user.roles.includes('admin');
-
-  // #121: this used to read `user.appRoles[appId]`, a session claim nothing
-  // ever populated — so the editor branch was dead and a user granted
-  // `editor` (via /apps/:appId/roles or an invite) got a 403 here while
-  // showing as an editor everywhere else.
-  //
-  // The grant lives in `app_roles`, so read it there. Only when the cheaper
-  // checks miss, and note the (user_id = ? OR user_id = ?) shape: rows may be
-  // keyed by user id OR a GitHub login — roleSubjects (#272) binds the login
-  // for GitHub sessions only, never a credential/Google display name.
-  let isEditor = false;
-  if (!isOwner && !isAdmin) {
-    const row = await c.env.DB.prepare(
-      `SELECT 1 FROM app_roles
-        WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = 'editor'
-        LIMIT 1`,
-    ).bind(appId, ...roleSubjects(user)).first();
-    isEditor = row !== null;
-  }
-
-  if (!isOwner && !isAdmin && !isEditor) {
-    return c.text('not authorized to send email for this app', 403);
-  }
+  const access = await appEmailAccess(c.env, user, appId);
+  if (access === 'not_found') return c.text('app not found', 404);
+  if (access === 'forbidden') return c.text('not authorized to send email for this app', 403);
 
   // Rate limit: 100 emails per day per app. The slot is reserved BEFORE sending,
   // and (#376) the cap is checked inside the same INSERT: a separate COUNT then

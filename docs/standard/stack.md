@@ -767,6 +767,8 @@ await OneSignal.init({ appId: 'onesignal-app-id' })
 
 **Recommended implementation.** `app.email.send(to, subject, body, { replyTo })`; `app.sms.send(to, message)` (creator-only); `app.webhooks.register(event, url)` returns a signing secret the receiver verifies.
 
+**Verified sender addresses (#566).** An app that must send from its own address (a shared inbox, candidate mail) MUST NOT work around the platform sender: it claims its domain, declares an address, has the owner approve it, and sends with `pas.email.send` from its worker. The platform pins the From, enforces quotas and suppression, and delivers replies and bounces back as `pas.email.*` hook events. See [Verified app email](../verified-app-email.md).
+
 **Conforming example.**
 
 ```ts

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { defineAppWorker, hookBody, pasClient, type AppWorkerEnv } from './worker.js';
+import { defineAppWorker, emailEventOf, hookBody, pasClient, type AppWorkerEnv } from './worker.js';
 
 // #254: defineAppWorker dispatches the platform's envelope and binds every PAS
 // call to the worker token and the invocation id `<event id>:<attempt>`.
@@ -12,12 +12,38 @@ function envWithPas() {
     log: vi.fn(async () => true),
     rooms: { publish: vi.fn(async () => ({ delivered: 2 })) },
     apps: { query: vi.fn(async () => ({ rows: [{ id: 'j1' }], meta: {} })) },
+    mail: { send: vi.fn(async () => ({ id: 's1', status: 'accepted' })), get: vi.fn(async () => ({ id: 's1' })), identities: vi.fn(async () => []) },
     connectors: { token: vi.fn(async () => null), googleCalendar: vi.fn(async () => ({ connected: false })) },
   };
   return { pas, env: { PAS: pas, PAS_WORKER_TOKEN: 'tok', APP_ID: 'demo' } as unknown as AppWorkerEnv };
 }
 const envelope = (type: string, extra: Record<string, unknown> = {}) =>
   new Request('https://w/', { method: 'POST', body: JSON.stringify({ v: 1, id: 'e9', app_id: 'demo', type, name: 'sync', attempt: 2, issued_at: 5, payload: { a: 1 }, ...extra }) });
+
+describe('pas.email (#566)', () => {
+  it('binds send, get and identities to the bare ctx, even with a caller grant, over the platform `mail` binding', async () => {
+    const { env, pas } = envWithPas();
+    const p = pasClient(env, { id: 'e1', attempt: 1 }, { sub: 'user' });
+    const input = { identity: 'careers@betabuilders.org', to: 'a@example.com', subject: 'Hi', text: 'Hello', idempotencyKey: 'k1' };
+    expect(await p.email.send(input)).toEqual({ id: 's1', status: 'accepted' });
+    expect(pas.mail.send).toHaveBeenCalledWith(input, { token: 'tok', invocation: 'e1:1' });
+    await p.email.get('s1');
+    expect(pas.mail.get).toHaveBeenCalledWith('s1', { token: 'tok', invocation: 'e1:1' });
+    await p.email.identities();
+    expect(pas.mail.identities).toHaveBeenCalledWith({ token: 'tok', invocation: 'e1:1' });
+  });
+
+  it('emailEventOf parses a pas.email.* hook body and ignores any other hook', async () => {
+    const { env } = envWithPas();
+    let seen: unknown = 'unset';
+    let other: unknown = 'unset';
+    const body = JSON.stringify({ type: 'pas.email.bounced', id: 'ev1', sendId: 's1', suppressed: true });
+    await defineAppWorker({ webhook: (e) => { seen = emailEventOf(e); } }).fetch(envelope('hook', { name: 'pas.email.bounced', payload: { headers: {}, body } }), env, {});
+    await defineAppWorker({ webhook: (e) => { other = emailEventOf(e); } }).fetch(envelope('hook', { name: 'github', payload: { headers: {}, body } }), env, {});
+    expect(seen).toMatchObject({ type: 'pas.email.bounced', id: 'ev1', suppressed: true });
+    expect(other).toBeNull();
+  });
+});
 
 describe('defineAppWorker (#254)', () => {
   it('runs scheduled for a schedule event with the event and a bound client', async () => {

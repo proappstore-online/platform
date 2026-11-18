@@ -192,6 +192,8 @@ export interface Env {
   AI_GATEWAY_ID?: string;
   /** Resend API key for transactional email. If unset, /v1/email/send returns 503. */
   RESEND_API_KEY?: string;
+  /** Svix signing secret (`whsec_...`) of the Resend webhook; verifies /v1/email/provider-events. If unset, that route returns 503. */
+  RESEND_WEBHOOK_SECRET?: string;
   /** Anthropic API key for Managed Agents. If unset, /v1/agent/* returns 503. */
   ANTHROPIC_API_KEY?: string;
   /**

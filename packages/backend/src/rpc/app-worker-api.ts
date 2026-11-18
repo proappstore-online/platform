@@ -10,6 +10,8 @@
  *   env.PAS.storage.put(key, body, opts, ctx)    env.PAS.storage.get(key, ctx)
  *   env.PAS.connectors.token(name, { repo?, mode? }, ctx)   (#258)
  *   env.PAS.rooms.publish(roomId, data, ctx)     → { delivered }   (#351)
+ *   env.PAS.mail.send(input, ctx)                → send record   (#566: SDK `pas.email.send`; the binding name `email` is a reserved handler)
+ *   env.PAS.mail.get(id, ctx) / .identities(ctx)
  *   env.PAS.apps.query(appId, action, params, ctx)   → { rows, meta }   (#599: another app's public read-only action, as an anonymous caller)
  *
  * with ctx = { token: env.PAS_WORKER_TOKEN, invocation: '<envelope id>:<attempt>' }.
@@ -23,7 +25,7 @@ import { RpcTarget, WorkerEntrypoint } from 'cloudflare:workers';
 import type { Env } from '../types.js';
 import {
   authorizeWorkerCall, recordWorkerCall, workerActionBatch, workerActionCall, workerLog,
-  workerAppsQuery, workerConnectorToken, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
+  workerAppsQuery, workerConnectorToken, workerEmailGet, workerEmailIdentities, workerEmailSend, workerSecretGet, workerStorageGet, workerStoragePut, WorkerCallError, type CallerIdentity,
 } from '../lib/app-worker-calls.js';
 import { workerRoomPublish } from '../lib/room-access.js';
 import { workerGoogleCalendar } from '../lib/google-calendar-worker.js';
@@ -109,6 +111,22 @@ class RoomsApi extends RpcTarget {
   }
 }
 
+class EmailApi extends RpcTarget {
+  readonly #run: Run;
+  readonly #env: Env;
+  constructor(run: Run, env: Env) { super(); this.#run = run; this.#env = env; }
+  /** Send as one of this app's verified identities (#566). The action is the identity named, for the call record. */
+  send(input: Record<string, unknown>, ctx: unknown): Promise<unknown> {
+    return this.#run('email.send', String((input as { identity?: unknown } | null)?.identity ?? '').slice(0, 128), ctx, (appId) => workerEmailSend(this.#env, appId, input));
+  }
+  get(id: string, ctx: unknown): Promise<unknown> {
+    return this.#run('email.get', String(id ?? '').slice(0, 64), ctx, (appId) => workerEmailGet(this.#env, appId, id));
+  }
+  identities(ctx: unknown): Promise<unknown> {
+    return this.#run('email.identities', '', ctx, (appId) => workerEmailIdentities(this.#env, appId));
+  }
+}
+
 class AppsApi extends RpcTarget {
   readonly #run: Run;
   readonly #env: Env;
@@ -130,6 +148,8 @@ export class AppWorkerApi extends WorkerEntrypoint<Env, { appId: string }> {
   get connectors(): ConnectorsApi { return new ConnectorsApi(this.#runner(), this.env); }
   get storage(): StorageApi { return new StorageApi(this.#runner(), this.env); }
   get rooms(): RoomsApi { return new RoomsApi(this.#runner(), this.env); }
+  /** Named `mail`, not `email`: `email` is a reserved WorkerEntrypoint handler. The SDK still exposes `pas.email`. */
+  get mail(): EmailApi { return new EmailApi(this.#runner(), this.env); }
   get apps(): AppsApi { return new AppsApi(this.#runner(), this.env, (p) => this.ctx.waitUntil(p)); }
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: Record<string, unknown> | undefined, ctx: unknown): Promise<boolean> {
     // The runner has authorised ctx, so its invocation is a string naming this app's running invocation.

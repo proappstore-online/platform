@@ -41,6 +41,19 @@ export function hookBody(payload: { body?: unknown; body_encoding?: unknown }): 
   return bytes;
 }
 
+/**
+ * The verified-email event a `webhook` handler received, parsed from its body; null when `event`
+ * is not one of the `pas.email.*` hooks. The platform has verified and signed it; de-duplicate on `id`.
+ */
+export function emailEventOf(event: AppWorkerEvent): EmailInboundEvent | EmailDeliveryEvent | null {
+  if (event.type !== 'hook' || !event.hook || !event.name?.startsWith('pas.email.')) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(event.hook.body)) as EmailInboundEvent | EmailDeliveryEvent;
+  } catch {
+    return null;
+  }
+}
+
 export type GoogleCalendarRequest = {
   operation: 'status' | 'start' | 'complete' | 'calendars' | 'grant' | 'disconnect_account' | 'disconnect_app' | 'revoke_grant' | 'grant_status' | 'events' | 'instances' | 'event' | 'conferences' | 'participants' | 'sessions';
   /** Subset of the app's declared capabilities; start opens PAS-owned consent first. */
@@ -63,7 +76,92 @@ export type GoogleCalendarRequest = {
   receipt?: string;
 };
 
+/** `pas.email.send` input (#566). There is no `from`: the sender is the app's registered, approved identity. */
+export interface EmailSendInput {
+  /** The id or registered address of one of the app's identities (see `pas.email.identities()`). */
+  identity: string;
+  /** 1-10 recipients. Recipients unrelated to the app need an identity the owner approved for external recipients. */
+  to: string | string[];
+  /** One line, at most 200 characters. */
+  subject: string;
+  /** Plain text. Sent as the text part; when `html` is absent it is escaped into the HTML part. */
+  text?: string;
+  /** The app's own markup for the HTML part. Without `text`, the text part is this with tags stripped. */
+  html?: string;
+  replyTo?: string;
+  /** Required. A retry with the same key and message never sends twice; a different message under it is refused. */
+  idempotencyKey: string;
+}
+
+/** The platform's record of a send. `accepted` means the provider took it, not that it was delivered. */
+export interface EmailSendResult {
+  id: string;
+  status: 'accepted' | 'refused' | 'unknown';
+  providerId: string | null;
+  from: string;
+  to: string[];
+  /** Server time, epoch ms. */
+  createdAt: number;
+  acceptedAt: number | null;
+  errorCode: string | null;
+  replayed: boolean;
+}
+
+export interface EmailIdentity {
+  id: string; address: string; displayName: string | null; replyTo: string | null;
+  status: 'pending' | 'approved' | 'revoked'; allowExternal: boolean; suspended: boolean; domainVerified: boolean;
+  /** Approved, not suspended, and its domain verified: the only state that can send. */
+  usable: boolean;
+}
+
+export interface EmailSendRecord extends EmailSendResult {
+  subject: string; actor: string; deliveredAt: number | null; bouncedAt: number | null; complainedAt: number | null;
+  events: { type: string; at: number; detail: unknown }[];
+}
+
+/** The `pas.email.*` hook events (`event.name`) and the JSON in `event.hook.body`. */
+export type EmailHookName = 'pas.email.inbound' | 'pas.email.delivered' | 'pas.email.bounced' | 'pas.email.complained';
+
+export interface EmailDeliveryEvent {
+  type: 'pas.email.delivered' | 'pas.email.bounced' | 'pas.email.complained';
+  /** Stable across retries: de-duplicate on it. */
+  id: string;
+  sendId: string; providerId: string; from: string; to: string[]; occurredAt: number;
+  /** Bounces only. A permanent bounce suppresses the recipient. */
+  permanent?: boolean; bounce?: { type: string; subType: string; message: string };
+  /** True when the platform added the recipient(s) to the app's suppression list. */
+  suppressed: boolean;
+}
+
+export interface EmailInboundEvent {
+  type: 'pas.email.inbound';
+  id: string;
+  receivedAt: number;
+  identity: { id: string; address: string };
+  providerId: string; messageId: string | null;
+  from: string; to: string[]; subject: string;
+  text: string | null; html: string | null; truncated: boolean;
+  headers: Record<string, string>;
+  /** The provider's SPF/DKIM/DMARC verdicts (`pass`, `fail`, ...); null when it gave none. Trust these, never the From header. */
+  authentication: { spf: string; dkim: string; dmarc: string } | null;
+  /** Metadata only; attachment bytes are quarantined and not delivered. */
+  attachments: { id: string; filename: string; contentType: string; size: number; quarantined: true }[];
+}
+
 export interface PasClient {
+  email: {
+    /**
+     * Send from one of the app's verified identities (#566). Never takes a From, provider id or
+     * timestamp. Resolves the send record; rejects, before any provider call, with a stable code
+     * after the class: `Forbidden: sender_revoked`, `Forbidden: recipient_suppressed`,
+     * `RateLimited: quota_burst`, `Unavailable: email_not_configured`, `BadRequest: idempotency_conflict`, ...
+     */
+    send(input: EmailSendInput): Promise<EmailSendResult>;
+    /** One of this app's send records, with its delivery events. NotFound for any other app's id. */
+    get(id: string): Promise<EmailSendRecord>;
+    /** The app's sender identities. */
+    identities(): Promise<EmailIdentity[]>;
+  };
   actions: {
     /** Run a registered action whose `callers` include "worker", as `system:worker`. */
     call(name: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -150,6 +248,8 @@ interface PasBinding {
   storage: { put(key: string, body: unknown, opts: unknown, ctx: CallCtx): Promise<unknown>; get(key: string, ctx: CallCtx): Promise<unknown> };
   rooms: { publish(roomId: string, data: unknown, ctx: CallCtx): Promise<unknown> };
   apps: { query(appId: string, action: string, params: unknown, ctx: CallCtx): Promise<unknown> };
+  /** `email` is a reserved WorkerEntrypoint handler name, so the platform binding calls it `mail`. */
+  mail: { send(input: unknown, ctx: CallCtx): Promise<unknown>; get(id: string, ctx: CallCtx): Promise<unknown>; identities(ctx: CallCtx): Promise<unknown> };
   log(level: string, message: string, fields: unknown, ctx: CallCtx): Promise<boolean>;
 }
 
@@ -177,6 +277,11 @@ export function pasClient(env: AppWorkerEnv, event: Pick<AppWorkerEvent, 'id' | 
       get: (key) => pas.storage.get(key, ctx) as Promise<{ body: ArrayBuffer; contentType: string } | null>,
     },
     rooms: { publish: (roomId, data) => pas.rooms.publish(roomId, data, ctx) as Promise<{ delivered: number }> },
+    email: {
+      send: (input) => pas.mail.send(input, ctx) as Promise<EmailSendResult>,
+      get: (id) => pas.mail.get(id, ctx) as Promise<EmailSendRecord>,
+      identities: () => pas.mail.identities(ctx) as Promise<EmailIdentity[]>,
+    },
     // ctx, not actionCtx: a caller grant never applies to another app's public action.
     apps: { query: (appId, action, params) => pas.apps.query(appId, action, params ?? {}, ctx) as Promise<{ rows: unknown[]; meta?: Record<string, unknown> }> },
     log: (level, message, fields) => pas.log(level, message, fields, ctx),

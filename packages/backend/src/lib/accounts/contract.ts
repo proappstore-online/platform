@@ -229,6 +229,8 @@ const OWNER_ONLY = 'requireAppOwner: owner-level publisher action';
 /** Keys are repo-relative paths. A test fails when a source file using an ownership gate is missing here. */
 export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/auth.ts': live('the gate itself: creator_id, team_members, platform-admin bypass'),
+  'packages/backend/src/lib/app-email-access.ts': live('creator_id === user.id decides who may send app email (shared by /email/send and the verified-email routes)'),
+  'packages/backend/src/lib/app-email.ts': proj('the app creator counts as related to the app when deciding which recipients need the external-recipients capability; not an access gate'),
   'packages/backend/src/lib/app-worker-host.ts': live('disableAppWorker persists the administrator kill switch; callers establish owner/admin authority before invoking it'),
   'packages/backend/src/lib/google-calendar-policy.ts': live('reads the publisher identity for the consent snapshot; this grants no publisher-management permission'),
   'packages/backend/src/lib/google-calendar-oauth.ts': live('atomically refuses a pending personal consent request after its publisher changes; this is a lifecycle guard, not an owner-role grant'),
@@ -245,6 +247,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/analytics.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/app-billing-account.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/app-directory.ts': proj('directory is_owner and owned-app list'),
+  'packages/backend/src/routes/app-email.ts': live(OWNER_ONLY + '; owner approves identities and domains, owner or editor sends'),
   'packages/backend/src/routes/app-workers.ts': live('owner and verified repository deployment gates; self-service eligibility, administrator kill switch, and prototype fallback when disabled'),
   'packages/backend/src/routes/apps.ts': proj('owned/team app lists; the PUT owner check at ~214 is live authorization'),
   'packages/backend/src/routes/connectors.ts': live(OWNER_ONLY),
@@ -252,7 +255,6 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/delete-app-account.ts': live('requireAppAccess for acting on another user; end-user erasure itself is end_user_business'),
   'packages/backend/src/routes/deploy.ts': live('owner gate; the creator_id SELECT at ~446 is deploy provenance (historical)'),
   'packages/backend/src/routes/domains.ts': live(OWNER_ONLY),
-  'packages/backend/src/routes/email.ts': live('creator_id === user.id decides who may send app email'),
   'packages/backend/src/routes/endpoints.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/engagements.ts': pers('dev_profiles.creator_id: a developer-marketplace profile keyed by user'),
   'packages/backend/src/routes/enquiries.ts': live(OWNER_ONLY),

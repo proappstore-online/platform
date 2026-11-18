@@ -27,6 +27,7 @@ import { verifyCallerGrant } from './caller-grant.js';
 import { asAppId } from './accounts/contract.js';
 import { CREDENTIAL_CONTEXT_VERSION } from '@proappstore/build-core';
 import { fileQuotaRefusal } from '../routes/storage.js';
+import { EmailError, assertNoServerDecidedFields, getSend, listIdentities, sendAppEmail, type EmailErrorCode } from './app-email.js';
 
 export const SYSTEM_WORKER_USER = 'system:worker';
 /** ADR-009 §4: `PAS` calls per invocation, counted on the invocation record. */
@@ -322,6 +323,51 @@ export async function workerAppsQuery(
 
 function errorText(body: string): string {
   try { return String((JSON.parse(body) as { error?: unknown }).error ?? 'bad request').slice(0, 300); } catch { return 'bad request'; }
+}
+
+// ── email (#566) ────────────────────────────────────────────────────────────
+
+const EMAIL_CALL_CODE: Partial<Record<EmailErrorCode, WorkerCallCode>> = {
+  email_not_configured: 'Unavailable', invalid_request: 'BadRequest', idempotency_conflict: 'BadRequest', not_found: 'NotFound',
+  quota_app_daily: 'RateLimited', quota_identity_daily: 'RateLimited', quota_burst: 'RateLimited', provider_error: 'Failed',
+};
+
+/** Every refusal reaches the worker as `<Code>: <stable email code>[: detail]`. */
+async function emailCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof EmailError) throw new WorkerCallError(EMAIL_CALL_CODE[e.code] ?? 'Forbidden', e.message);
+    throw e;
+  }
+}
+
+/**
+ * `PAS.email.send` (#566): the one send primitive, as the app named by the binding and as
+ * `system:worker`. The app comes from the binding only; `from`, a provider id or a timestamp in
+ * the input is refused. Resolves the send record; see `sendAppEmail`.
+ */
+export async function workerEmailSend(env: Env, appId: string, input: unknown): Promise<unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new WorkerCallError('BadRequest', 'invalid_request: the send input must be an object');
+  const body = input as Record<string, unknown>;
+  return emailCall(async () => {
+    assertNoServerDecidedFields(body);
+    return sendAppEmail(env, {
+      appId, identity: body.identity as string, to: body.to as string | string[], subject: body.subject as string,
+      text: body.text as string | undefined, html: body.html as string | undefined, replyTo: body.replyTo as string | undefined,
+      idempotencyKey: body.idempotencyKey as string, actor: SYSTEM_WORKER_USER,
+    });
+  });
+}
+
+/** `PAS.email.get`: one of this app's send records with its delivery events. */
+export function workerEmailGet(env: Env, appId: string, id: unknown): Promise<unknown> {
+  return emailCall(() => getSend(env, appId, String(id ?? '')));
+}
+
+/** `PAS.email.identities`: this app's sender identities and whether each is usable. */
+export function workerEmailIdentities(env: Env, appId: string): Promise<unknown> {
+  return emailCall(() => listIdentities(env, appId));
 }
 
 // ── secrets ─────────────────────────────────────────────────────────────────
