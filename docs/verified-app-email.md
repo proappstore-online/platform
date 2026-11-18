@@ -1,3 +1,7 @@
+---
+description: "Send and receive mail from an app's own verified domain through the platform: sender identities, pas.email.send, quotas and suppression, delivery, bounce and inbound events."
+---
+
 # Verified app email
 
 An app sends and receives mail on **its own domain** through the platform (#566). The platform
