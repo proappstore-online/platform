@@ -66,6 +66,13 @@ describe('marketing-content (#498)', () => {
     expect(marketingFindings(WRITTEN.replace(/heroImage: \{.*\} as Image \| null,/, 'heroImage: null as Image | null,')).map((f) => f.what)).toEqual(['no hero image; the social preview is the app icon']);
   });
 
+  it('reads fields that share a line (#603)', () => {
+    const compact = WRITTEN.replace("name: 'Shop',", "name: 'Shop', appUrl: 'https://shop.proappstore.online/',").replace(/\n\s*/g, '');
+    expect(marketingFindings(compact)).toEqual([]);
+    expect(marketingFindings(compact.replace("'Ada Lovelace Pty Ltd'", "'The Shop team'")).map((f) => f.what)).toEqual(['operator "The Shop team" is the default']);
+    expect(marketingFindings(compact.replace(/heroImage: \{.*?\} as Image \| null,/, 'heroImage: null as Image | null,')).map((f) => f.what)).toEqual(['no hero image; the social preview is the app icon']);
+  });
+
   it('recognises only the template\'s own words: a short, honest benefit list passes', () => {
     expect(rules(WRITTEN.replace("'Know your stock'", "'Fast'").replace("'See what is left before the market opens.'", "'Quick.'"))).toEqual([]);
   });

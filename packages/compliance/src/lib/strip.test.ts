@@ -50,6 +50,12 @@ describe('stripCommentsAndStrings', () => {
 });
 
 describe('stripCommentsOnly', () => {
+  it('keeps a // inside a string, and what follows it on the line (#603)', () => {
+    const src = "a:'https://x.example/',b:'two' // note";
+    expect(stripCommentsOnly(src)).toBe("a:'https://x.example/',b:'two'        ");
+    expect(stripCommentsOnly("<p>don't</p> // note\nx")).toBe("<p>don't</p>        \nx");
+  });
+
   it('blanks comments but PRESERVES string contents', () => {
     expect(stripCommentsOnly('const x = "hello" // comment')).toBe(
       'const x = "hello"           ',

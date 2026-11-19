@@ -44,15 +44,18 @@ const TEMPLATE_BENEFIT_TITLE = /^(?:First|Second|Third) benefit$/i;
 const TEMPLATE_BENEFIT_BODY = /^(?:What someone can do with .+ that matters to them\.|Another concrete outcome, in plain words\.|A third reason to try it\.)$/;
 const TEMPLATE_STEP = /^(?:Describe the first thing a new user does\.|Go to .+ in any modern browser\. It installs like an app on phone and desktop\.|Use your GitHub or Google account\. No new password to remember\.)$/;
 
+/** Where a field may start: a new line, or after another field or the opening brace on the same line (#603). */
+const FIELD = '(?:^|[\\n,{])\\s*';
+
 /** The value of a top-level `key: 'literal'` field, or null. Escapes are kept as written. */
 function literal(src: string, key: string): string | null {
-  const m = new RegExp(`(?:^|\\n)\\s*${key}:\\s*(['"\`])((?:\\\\.|(?!\\1)[^\\\\\\n])*)\\1`).exec(src);
+  const m = new RegExp(`${FIELD}${key}:\\s*(['"\`])((?:\\\\.|(?!\\1)[^\\\\\\n])*)\\1`).exec(src);
   return m ? m[2]! : null;
 }
 
 /** The text between the brackets that follow `key: [`, or null. */
 function arrayBody(src: string, key: string): string | null {
-  const start = new RegExp(`(?:^|\\n)\\s*${key}:\\s*\\[`).exec(src);
+  const start = new RegExp(`${FIELD}${key}:\\s*\\[`).exec(src);
   if (!start) return null;
   let depth = 1;
   let i = start.index + start[0].length;
@@ -110,7 +113,7 @@ export function marketingFindings(raw: string, hasEnquiryForm = false): Finding[
   if (!hasEnquiryForm && (literal(src, 'contactEmail') ?? '').trim() === '') add('operator-contact', 'no contactEmail on the legal pages');
   if ((literal(src, 'governingLaw') ?? '').trim() === '') add('operator-contact', 'no governing law in the Terms');
 
-  const hero = /(?:^|\n)\s*heroImage:\s*null\b/.test(src) || !/(?:^|\n)\s*heroImage:/.test(src);
+  const hero = new RegExp(`${FIELD}heroImage:\\s*null\\b`).test(src) || !new RegExp(`${FIELD}heroImage:`).test(src);
   const screenshots = arrayBody(src, 'screenshots');
   const noShots = screenshots === null || screenshots.trim() === '';
   if (hero && noShots) add('imagery', 'no hero image and no screenshots; the social preview is the app icon');

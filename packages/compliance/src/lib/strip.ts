@@ -164,6 +164,19 @@ function stripCode(src: string, opts: { strings: boolean }): string {
       i++; // skip closing quote
       continue;
     }
+    if (c === '"' || c === "'" || c === '`') {
+      // Comments only: step over a string so a `//` inside it (a URL) is not read as a
+      // comment (#603). A quote with no partner on its line is JSX text, not a string.
+      let j = i + 1;
+      while (j < src.length && src[j] !== c && (c === '`' || src[j] !== '\n')) {
+        if (src[j] === '\\' && j + 1 < src.length) j++;
+        j++;
+      }
+      if (src[j] === c) {
+        i = j + 1;
+        continue;
+      }
+    }
     i++;
   }
   return out.join('');
