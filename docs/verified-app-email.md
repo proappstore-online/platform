@@ -179,3 +179,24 @@ Nothing is declared in `wrangler.toml` until the owner turns it on, so the deplo
    getting the mail the moment the rule changes.
 6. As administrator, attest each domain: `POST /v1/admin/email/domains/<domain>` `{ "verified": true }`.
 7. The app owner claims the domain and approves the identity.
+
+## MCP tools
+
+An owner's AI client sets up app email through the platform MCP server (`mcp.proappstore.online`). Each
+tool calls the routes above with the connection's own session, so the same owner, editor and
+administrator checks apply for whichever account (GitHub or Google) the connection signed in with.
+Refusals come back as `API <status>: <body>` with the route's stable `code` unchanged. There is no send
+tool and no `from`: sending stays with `pas.email.send` in the app.
+
+| Tool | Params | Route | Who |
+|---|---|---|---|
+| `app_email_status` | `app_id` | `GET /apps/:appId/email` | owner |
+| `app_email_claim_domain` | `app_id`, `domain` | `POST .../email/domains` | owner |
+| `app_email_declare_identity` | `app_id`, `address`, `display_name?`, `reply_to?` | `POST .../email/identities` | owner, editor |
+| `app_email_approve_identity` | `app_id`, `identity_id`, `allow_external` | `POST .../identities/:id/approve` | owner |
+| `app_email_revoke_identity` | `app_id`, `identity_id` | `POST .../identities/:id/revoke` | owner |
+| `app_email_list_sends` | `app_id`, `limit?` (1-200, default 50) | `GET .../email/sends` | owner, editor |
+| `app_email_list_suppressions` | `app_id` | `GET .../email/suppressions` | owner |
+| `admin_email_attest_domain` | `domain`, `verified`, `forward_copy_to?` (null clears) | `POST /admin/email/domains/:domain` | platform admin |
+
+The sends and suppressions routes have no cursor: sends take `limit`, suppressions return the newest 500.

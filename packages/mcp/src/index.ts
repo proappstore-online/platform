@@ -15,6 +15,7 @@ import { handleInternalProvisioning } from "./provisioning-workflow.js";
 import { registerLoopTools } from "./loop-tools.js";
 import { registerAgentsTools } from "./agents-tools.js";
 import { registerQaTools } from "./qa-tools.js";
+import { registerAppEmailTools } from "./app-email-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerEnquiryTools } from "./enquiry-tools.js";
 import { registerTraceTools } from "./trace-tools.js";
@@ -94,6 +95,12 @@ export async function createPasMcpServer(env: Env, props: Record<string, unknown
 
     // ── QA automation tools (connect + write/run browser e2e tests) ─
     registerQaTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Verified app email setup: claim, identities, status (#605) ─
+    registerAppEmailTools(server, env, () => ({
       userId: userId,
       token: userToken,
     }));

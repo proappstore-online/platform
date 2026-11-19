@@ -199,6 +199,19 @@ found with `discover_tools` / `describe_tool` on the app endpoint).
 | `qa_flow_playwright` | Get a flow transpiled to a Playwright .spec.ts (for CI parity — run the same flow under Playwright). |
 | `qa_mint_key` | Mint a scoped QA API key for an app (owner only). |
 
+### Verified app email (owner; attest is platform admin)
+
+| Tool | Description |
+|---|---|
+| `app_email_status` | An app's email setup: domains, identities, limits, usage. |
+| `app_email_claim_domain` | Claim a domain (pending until an administrator attests it). |
+| `app_email_declare_identity` | Declare a sender address on a claimed domain (owner or editor). |
+| `app_email_approve_identity` | Approve an identity and choose `allow_external`. |
+| `app_email_revoke_identity` | Revoke an identity. |
+| `app_email_list_sends` | The platform's send records, newest first (owner or editor). |
+| `app_email_list_suppressions` | Addresses suppressed after a hard bounce or complaint. |
+| `admin_email_attest_domain` | Platform admin: attest or withdraw a domain; set the inbound copy-forward. |
+
 ### Admin console authoring (owner only)
 
 | Tool | Description |

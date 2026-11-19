@@ -276,6 +276,38 @@
       "description": "Mark a marketing-site enquiry handled (records you and the time), or handled: false to reopen it. Owner or platform admin only."
     },
     {
+      "name": "app_email_status",
+      "description": "Read-only: an app's verified email setup: configured, suspended, limits and usage, claimed domains (pending until a platform administrator attests them) and sender identities. Owner only."
+    },
+    {
+      "name": "app_email_claim_domain",
+      "description": "Claim a domain for an app's verified email; it stays pending until a platform administrator attests it. Owner only."
+    },
+    {
+      "name": "app_email_declare_identity",
+      "description": "Declare a sender identity (an address on a claimed domain) for an app; pending until the owner approves it. Owner or editor."
+    },
+    {
+      "name": "app_email_approve_identity",
+      "description": "Approve a pending sender identity and choose allow_external (may it mail people with no relationship to the app). Owner only."
+    },
+    {
+      "name": "app_email_revoke_identity",
+      "description": "Revoke a sender identity; it stops sending immediately. Owner only."
+    },
+    {
+      "name": "app_email_list_sends",
+      "description": "Read-only: the platform's records of an app's sent email, newest first, with delivery, bounce and complaint times; limit up to 200. Owner or editor."
+    },
+    {
+      "name": "app_email_list_suppressions",
+      "description": "Read-only: addresses suppressed for an app after a permanent bounce or complaint. Owner only."
+    },
+    {
+      "name": "admin_email_attest_domain",
+      "description": "Platform administrator only: attest or withdraw that a domain is an onboarded Cloudflare Email Sending zone, and optionally set or clear the inbound copy-forward mailbox."
+    },
+    {
       "name": "get_action_trace",
       "description": "Read-only: explain a failed action from the traceId in its error \u2014 which action, status, fault verdict, safe errorCode, SQLite's error text and class for a tenant fault, and when. Owner or platform admin of that app only; server-side records, no request values."
     },
