@@ -48,7 +48,7 @@ worker `Unavailable`) and makes no provider call. The older `app.email.send` (pl
 | `POST /apps/:appId/email/send` | owner, editor | see below; 201 new, 200 replay |
 | `GET /apps/:appId/email/sends[/:id]` | owner, editor | the platform's send records and their events |
 | `GET /apps/:appId/email/suppressions` | owner | |
-| `POST /admin/email/domains/:domain` `{ verified }` | admin | attest (or withdraw) that the domain is an onboarded Cloudflare zone |
+| `POST /admin/email/domains/:domain` `{ verified?, forwardCopyTo? }` | admin | attest (or withdraw) that the domain is an onboarded Cloudflare zone. `forwardCopyTo` (an email address, or `null` to clear) sets the inbound copy-forward below and leaves the attestation unchanged when `verified` is absent |
 | `POST /admin/email/apps/:appId` `{ suspended, reason?, dailyLimit?, identityDailyLimit?, burstLimit? }` | admin | kill switch and quota overrides (null = default) |
 | `POST /admin/email/apps/:appId/identities/:id/suspend` `{ suspended, reason? }` | admin | |
 
@@ -144,6 +144,15 @@ domain of an app that is not suspended; any other recipient is rejected at the S
 after that makes Email Routing report a temporary failure, so the sender retries. Trust `authentication`, never the From header or a display name. Attachment bytes are never
 delivered (metadata only, quarantined). Bodies over 200,000 characters are cut and `truncated` is true.
 
+### Copy-forward of inbound mail
+
+A domain can carry an optional `forwardCopyTo`, set by an administrator. After an inbound message is
+accepted and its `pas.email.inbound` event is queued, the handler calls `message.forward(forwardCopyTo)`,
+so a mailbox keeps receiving a copy while its address moves from forwarding to the worker. It applies to
+every identity on the domain. The address must be a **verified destination address** in Email Routing,
+or the forward fails. A failed forward is logged as the short code `forward_failed` (never an address,
+header or body) and does not reject, retry or otherwise affect the message. Clear it with `null`.
+
 ## Retention and deletion
 
 Send records, their events, suppressions and inbound metadata (no bodies) are kept until the app is
@@ -164,5 +173,9 @@ Nothing is declared in `wrangler.toml` until the owner turns it on, so the deplo
 4. Queues: subscribe Email Sending events (delivered, bounced, complained; add deferred, failed, rejected for
    history) for each domain to `pas-email-events`.
 5. Email Routing: for each inbox address, a rule with action "Send to a Worker" targeting the backend worker.
+   **Before** an address is switched from forwarding to the worker, add the owner's mailbox as a verified
+   destination address and set the copy-forward on its domain as administrator:
+   `POST /v1/admin/email/domains/<domain>` `{ "forwardCopyTo": "<mailbox>" }`. Otherwise the owner stops
+   getting the mail the moment the rule changes.
 6. As administrator, attest each domain: `POST /v1/admin/email/domains/<domain>` `{ "verified": true }`.
 7. The app owner claims the domain and approves the identity.

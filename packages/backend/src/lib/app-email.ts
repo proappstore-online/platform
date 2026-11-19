@@ -512,3 +512,17 @@ export async function listIdentities(env: Pick<Env, 'DB'>, appId: string): Promi
   const rows = await env.DB.prepare(`${IDENTITY_SELECT} WHERE i.app_id = ? ORDER BY i.address`).bind(appId).all<IdentityRow>();
   return (rows.results ?? []).map(identityOut);
 }
+
+/**
+ * Administrator: where a copy of every accepted inbound message for the domain is forwarded
+ * (an Email Routing destination address), or null to stop. Never changes verification.
+ */
+export async function setDomainForwardCopy(env: Pick<Env, 'DB'>, domainInput: string, forwardCopyTo: string | null): Promise<EmailDomain> {
+  const domain = normalizeAddress(domainInput);
+  const address = forwardCopyTo === null ? null : normalizeAddress(forwardCopyTo);
+  if (address !== null && !isLikelyEmail(address)) throw new EmailError('invalid_request', 'forwardCopyTo must be an email address or null');
+  const row = await env.DB.prepare('SELECT * FROM email_domains WHERE domain = ?').bind(domain).first<DomainRow>();
+  if (!row) throw new EmailError('not_found', 'no app has claimed that domain');
+  await env.DB.prepare('UPDATE email_domains SET forward_copy_to = ? WHERE id = ?').bind(address, row.id).run();
+  return domainOut(row);
+}

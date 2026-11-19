@@ -11,7 +11,7 @@
  *   POST   /v1/apps/:appId/email/send                         owner|editor - { identity, to, subject, text?, html?, replyTo?, idempotencyKey }
  *   GET    /v1/apps/:appId/email/sends[/:id]                  owner|editor - the platform's send records
  *   GET    /v1/apps/:appId/email/suppressions                 owner
- *   POST   /v1/admin/email/domains/:domain                    admin  - { verified } attest (or withdraw) that the domain is an onboarded Cloudflare zone
+ *   POST   /v1/admin/email/domains/:domain                    admin  - { verified?, forwardCopyTo? } attest (or withdraw) an onboarded zone; set or clear (null) the inbound copy-forward address
  *   POST   /v1/admin/email/apps/:appId                        admin  - kill switch + quota overrides
  *   POST   /v1/admin/email/apps/:appId/identities/:id/suspend admin  - kill switch for one identity
  *
@@ -25,7 +25,7 @@ import { HttpError, requireAdmin, requireAppOwner, requireUser } from '../lib/au
 import { appEmailAccess } from '../lib/app-email-access.js';
 import {
   EmailError, approveIdentity, assertNoServerDecidedFields, claimDomain, declareIdentity, domainClaim, emailStatus, getSend, listSends, listSuppressions, removeDomain,
-  revokeIdentity, sendAppEmail, setAppEmailControls, setDomainVerified, suspendIdentity,
+  revokeIdentity, sendAppEmail, setAppEmailControls, setDomainForwardCopy, setDomainVerified, suspendIdentity,
 } from '../lib/app-email.js';
 
 export const appEmailRoutes = new Hono<{ Bindings: Env }>();
@@ -148,7 +148,14 @@ appEmailRoutes.get('/apps/:appId/email/suppressions', async (c) => {
 appEmailRoutes.post('/admin/email/domains/:domain', async (c) => {
   await requireAdmin(c);
   const body = await jsonBody(c);
-  return c.json(await guard(() => setDomainVerified(c.env, c.req.param('domain'), body.verified === true)));
+  const domain = c.req.param('domain');
+  if ('forwardCopyTo' in body) {
+    if (body.forwardCopyTo !== null && typeof body.forwardCopyTo !== 'string') throw new HttpError('forwardCopyTo must be an email address or null', 400, { code: 'invalid_request' });
+    const claim = await guard(() => setDomainForwardCopy(c.env, domain, body.forwardCopyTo as string | null));
+    // Only forwardCopyTo in the body: the attestation is left as it is.
+    if (!('verified' in body)) return c.json(claim);
+  }
+  return c.json(await guard(() => setDomainVerified(c.env, domain, body.verified === true)));
 });
 
 appEmailRoutes.post('/admin/email/apps/:appId', async (c) => {

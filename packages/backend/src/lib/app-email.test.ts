@@ -5,7 +5,7 @@ import { makeEnv, testToken } from '../test-helpers.js';
 import { sqliteD1 } from '../sqlite-d1.js';
 import type { EmailSendMessage, EmailSendingBinding, Env } from '../types.js';
 import {
-  EmailError, EMAIL_LIMITS, approveIdentity, claimDomain, declareIdentity, emailStatus, getSend, removeDomain, renderBodies, revokeIdentity,
+  EmailError, EMAIL_LIMITS, setDomainForwardCopy, approveIdentity, claimDomain, declareIdentity, emailStatus, getSend, removeDomain, renderBodies, revokeIdentity,
   sendAppEmail, setAppEmailControls, setDomainVerified, suspendIdentity, type SendAppEmailInput,
 } from './app-email.js';
 import { WorkerCallError, workerEmailGet, workerEmailSend } from './app-worker-calls.js';
@@ -452,7 +452,7 @@ describe('slice 3: inbound (Email Routing email() handler)', () => {
     const bytes = new TextEncoder().encode(raw);
     const headers = new Headers();
     for (const line of raw.split('\r\n\r\n')[0]!.split('\r\n')) { const i = line.indexOf(':'); if (i > 0) headers.append(line.slice(0, i), line.slice(i + 1).trim()); }
-    return { from: 'bounce@example.com', to, headers, rawSize: bytes.byteLength, raw: new Response(bytes).body!, setReject: vi.fn() } as unknown as ForwardableEmailMessage & { setReject: ReturnType<typeof vi.fn> };
+    return { from: 'bounce@example.com', to, headers, rawSize: bytes.byteLength, raw: new Response(bytes).body!, setReject: vi.fn(), forward: vi.fn(async () => {}) } as unknown as ForwardableEmailMessage & { setReject: ReturnType<typeof vi.fn>; forward: ReturnType<typeof vi.fn> };
   };
   beforeEach(async () => { await liveIdentity('hiring', 'careers@betabuilders.org'); });
 
@@ -530,6 +530,43 @@ describe('slice 3: inbound (Email Routing email() handler)', () => {
     expect(queued()[1]!.id).toBe(queued()[0]!.id);
   });
 
+  it('forwards a copy to forward_copy_to after the event is queued', async () => {
+    await setDomainForwardCopy(env, 'betabuilders.org', 'Owner@Gmail.com');
+    const message = incoming(mime());
+    message.forward.mockImplementation(async () => { expect(queued()).toHaveLength(1); });
+    await handleInboundEmail(env, message, NOW);
+    expect(message.forward.mock.calls).toEqual([['owner@gmail.com']]);
+    expect(message.setReject).not.toHaveBeenCalled();
+  });
+
+  it('a forward that throws is logged as a short code and never fails the message', async () => {
+    await setDomainForwardCopy(env, 'betabuilders.org', 'owner@gmail.com');
+    const message = incoming(mime());
+    message.forward.mockRejectedValue(new Error('destination owner@gmail.com not verified'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(handleInboundEmail(env, message, NOW)).resolves.toBeUndefined();
+    expect(message.setReject).not.toHaveBeenCalled();
+    expect(queued()).toHaveLength(1);
+    expect(log.mock.calls).toEqual([['[email] inbound copy-forward failed code=forward_failed']]);
+    log.mockRestore();
+  });
+
+  it('does not forward when forward_copy_to is not set, or after it is cleared', async () => {
+    const plain = incoming(mime());
+    await handleInboundEmail(env, plain, NOW);
+    expect(plain.forward).not.toHaveBeenCalled();
+    await setDomainForwardCopy(env, 'betabuilders.org', 'owner@gmail.com');
+    await setDomainForwardCopy(env, 'betabuilders.org', null);
+    const cleared = incoming(mime());
+    await handleInboundEmail(env, cleared, NOW + 1000);
+    expect(cleared.forward).not.toHaveBeenCalled();
+  });
+
+  it('refuses a forward_copy_to that is not an email address, and an unclaimed domain', async () => {
+    await expect(setDomainForwardCopy(env, 'betabuilders.org', 'not-an-address')).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(setDomainForwardCopy(env, 'nobody.example', 'owner@gmail.com')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
   it('trusts only the leading mx.cloudflare.net Authentication-Results header', () => {
     expect(cloudflareAuthResults(new Headers({ 'authentication-results': 'mx.cloudflare.net; spf=pass; dkim=none; dmarc=pass' }))).toEqual({ spf: 'pass', dkim: 'none', dmarc: 'pass' });
     expect(cloudflareAuthResults(new Headers({ 'authentication-results': 'evil.example; spf=pass; dkim=pass; dmarc=pass' }))).toBeNull();
@@ -561,6 +598,11 @@ describe('verified-email routes', () => {
     expect((await call('/admin/email/domains/betabuilders.org', owner, 'POST', { verified: true })).status).toBe(403); // the owner cannot attest their own domain
     expect(await (await call('/admin/email/domains/betabuilders.org', admin, 'POST', { verified: true })).json()).toMatchObject({ status: 'verified' });
     expect(await (await call('/apps/hiring/email/domains/betabuilders.org/verify', owner, 'POST')).json()).toMatchObject({ status: 'verified' });
+    // copy-forward: administrator only, validated, and it leaves the attestation alone
+    expect((await call('/admin/email/domains/betabuilders.org', owner, 'POST', { forwardCopyTo: 'me@gmail.com' })).status).toBe(403);
+    expect((await call('/admin/email/domains/betabuilders.org', admin, 'POST', { forwardCopyTo: 'nope' })).status).toBe(400);
+    expect(await (await call('/admin/email/domains/betabuilders.org', admin, 'POST', { forwardCopyTo: 'me@gmail.com' })).json()).toMatchObject({ status: 'verified' });
+    expect(await env.DB.prepare("SELECT forward_copy_to FROM email_domains WHERE domain = 'betabuilders.org'").first()).toEqual({ forward_copy_to: 'me@gmail.com' });
     const declared = await (await call('/apps/hiring/email/identities', owner, 'POST', { address: 'careers@betabuilders.org', displayName: 'Careers' })).json() as { id: string };
     const send = { identity: 'careers@betabuilders.org', to: 'candidate@example.com', subject: 'Hello', text: 'Hi', idempotencyKey: 'r1' };
     const refused = await call('/apps/hiring/email/send', owner, 'POST', send);

@@ -171,7 +171,7 @@ export async function handleEmailEventBatch(batch: MessageBatch<EmailSendingEven
   }));
 }
 
-interface InboundTarget { id: string; app_id: string; address: string }
+interface InboundTarget { id: string; app_id: string; address: string; forward_copy_to: string | null }
 
 /**
  * Email Routing's `email()` handler. Mail for an approved, unsuspended identity on a verified
@@ -183,7 +183,7 @@ interface InboundTarget { id: string; app_id: string; address: string }
 export async function handleInboundEmail(env: Env, message: ForwardableEmailMessage, now = Date.now()): Promise<void> {
   const recipient = addressOf(message.to);
   const target = await env.DB.prepare(
-    `SELECT i.id, i.app_id, i.address FROM email_identities i
+    `SELECT i.id, i.app_id, i.address, d.forward_copy_to FROM email_identities i
        JOIN email_domains d ON d.domain = i.domain AND d.app_id = i.app_id AND d.status = 'verified'
       WHERE i.status = 'approved' AND i.suspended = 0 AND i.address = ?
         AND NOT EXISTS (SELECT 1 FROM email_app_settings s WHERE s.app_id = i.app_id AND s.suspended = 1)`,
@@ -220,4 +220,9 @@ export async function handleInboundEmail(env: Env, message: ForwardableEmailMess
     // Attachment bytes are never delivered: metadata only, quarantined until a later slice defines their handling.
     attachments: mail.attachments.map((a, i) => ({ id: String(i), filename: a.filename ?? '', contentType: a.mimeType, size: typeof a.content === 'string' ? a.content.length : a.content.byteLength, quarantined: true as const })),
   }, now);
+  // The owner's own mailbox keeps a copy while the address moves to the worker. Only after the event is queued, and a
+  // failure never rejects the message. Log a short code only: no address, header or body.
+  if (target.forward_copy_to) {
+    try { await message.forward(target.forward_copy_to); } catch { console.error('[email] inbound copy-forward failed code=forward_failed'); }
+  }
 }
