@@ -78,10 +78,15 @@ listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
   const perms = await c.env.DB.prepare('SELECT declared_json, detected_json FROM app_permissions WHERE app_id = ?')
     .bind(appId).first<{ declared_json: string; detected_json: string }>();
   const permissions = listingPermissions(perms?.declared_json, perms?.detected_json);
+  // #602: the app's own address when it has one: the operator-declared canonical host, else its
+  // earliest active domain (a wildcard row holds the base domain, which serves the app at its apex).
+  const domain = await c.env.DB.prepare(
+    "SELECT domain FROM app_custom_domains WHERE app_id = ? AND status = 'active' ORDER BY canonical DESC, added_at LIMIT 1",
+  ).bind(appId).first<{ domain: string }>();
   // Short cache: lets edits propagate quickly while still absorbing
   // bursts from popular apps.
   c.header('Cache-Control', 'public, max-age=60');
-  return c.json({ ...publicDto, permissions });
+  return c.json({ ...publicDto, permissions, customDomain: domain?.domain ?? null });
 }));
 
 /**
