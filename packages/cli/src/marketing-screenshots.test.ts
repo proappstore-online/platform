@@ -111,16 +111,30 @@ describe('captureScreenshots', () => {
       'goto http://localhost:4173/base/mower?x=1', 'shot png', 'close context',
       'close browser',
     ]);
-    expect(r.files.map((f) => f.src)).toEqual(['/assets/home.webp', '/assets/dash.webp']);
+    // The hero (first route) is the social preview image, so it stays PNG (#604).
+    expect(r.files.map((f) => f.src)).toEqual(['/assets/home.png', '/assets/dash.webp']);
     expect(readFileSync(join(app, 'marketing/public/assets/dash.webp'))).toEqual(WEBP);
   });
 
   it('writes png when asked, or when the browser cannot encode webp', async () => {
     const asked = await captureScreenshots({ cwd: app, url: 'http://localhost:4173', routes: parseRoutes('/'), format: 'png', loadChromium: fakeChromium().loadChromium });
     expect(asked.files[0]).toMatchObject({ src: '/assets/home.png', format: 'png' });
-    const fallback = await captureScreenshots({ cwd: app, url: 'http://localhost:4173', routes: parseRoutes('/a'), format: 'webp', loadChromium: fakeChromium({ webp: false }).loadChromium });
-    expect(fallback.files[0]).toMatchObject({ src: '/assets/a.png', format: 'png' });
+    const fallback = await captureScreenshots({ cwd: app, url: 'http://localhost:4173', routes: parseRoutes('/,/a'), format: 'webp', loadChromium: fakeChromium({ webp: false }).loadChromium });
+    expect(fallback.files[1]).toMatchObject({ src: '/assets/a.png', format: 'png' });
     expect(readFileSync(join(app, 'marketing/public/assets/a.png'))).toEqual(PNG);
+  });
+
+  it('--phone shoots every route at phone size as webp and prints phoneScreenshots (#604)', async () => {
+    const fake = fakeChromium();
+    const r = await captureScreenshots({ cwd: app, url: 'http://localhost:4173', routes: parseRoutes('/,/a'), format: 'webp', phone: true, loadChromium: fake.loadChromium });
+    expect(fake.contexts[0]).toEqual({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+    expect(r.files.map((f) => f.src)).toEqual(['/assets/home.webp', '/assets/a.webp']);
+    expect(siteSnippet(r.files, true)).toBe([
+      '  phoneScreenshots: [',
+      "    { src: '/assets/home.webp', alt: 'TODO: describe / (demo data)' },",
+      "    { src: '/assets/a.webp', alt: 'TODO: describe /a (demo data)' },",
+      '  ] as Image[],',
+    ].join('\n'));
   });
 
   it('runs the --setup module on each context before its route loads', async () => {

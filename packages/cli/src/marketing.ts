@@ -5,7 +5,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import { Command } from 'commander';
 import { ICON_SIZES, isTemplateDefaultIcon } from '@proappstore/compliance';
 import { exists, resolveTemplate, run } from './create.js';
-import { captureScreenshots, parseRoutes, siteSnippet, VIEWPORT } from './marketing-screenshots.js';
+import { captureScreenshots, parseRoutes, PHONE, siteSnippet, VIEWPORT } from './marketing-screenshots.js';
 import { readConfig } from './lib/config.js';
 import { readJsonIfExists } from './lib/json-file.js';
 import { toTitleCase } from './lib/title-case.js';
@@ -269,20 +269,21 @@ marketingCommand
   .requiredOption('--routes <list>', 'comma-separated routes, optionally named: /,settings=/app/settings')
   .option('--url <url>', 'the running app (default: `pnpm preview`)', 'http://localhost:4173')
   .option('--setup <file>', 'module whose default export (context, { route, url }) prepares each browser context, e.g. mocks the platform with demo data')
-  .option('--format <format>', 'webp or png', 'webp')
+  .option('--format <format>', 'webp or png (the hero is always png: it is the social preview image)', 'webp')
+  .option('--phone', `shoot at phone size (${PHONE.viewport.width}x${PHONE.viewport.height}) for phoneScreenshots`)
   .option('--allow-remote', 'allow a URL that is not localhost (it must show nothing private)')
-  .action(async (o: { routes: string; url: string; setup?: string; format: string; allowRemote?: boolean }) => {
+  .action(async (o: { routes: string; url: string; setup?: string; format: string; phone?: boolean; allowRemote?: boolean }) => {
     try {
       if (o.format !== 'webp' && o.format !== 'png') throw new Error('--format must be webp or png');
       const r = await captureScreenshots({
-        cwd: process.cwd(), url: o.url, routes: parseRoutes(o.routes), format: o.format, setup: o.setup, allowRemote: o.allowRemote,
+        cwd: process.cwd(), url: o.url, routes: parseRoutes(o.routes), format: o.format, phone: o.phone, setup: o.setup, allowRemote: o.allowRemote,
       });
       const out = (s: string) => process.stdout.write(s + '\n');
       for (const f of r.files) out(`  + marketing/public${f.src}  (${f.route})`);
-      if (r.files.some((f) => f.format !== o.format)) out('Note: this browser could not encode WebP, so PNG was written instead.');
+      if (r.files.some((f, i) => f.format !== o.format && (i > 0 || o.phone))) out('Note: this browser could not encode WebP, so PNG was written instead.');
       if (!o.setup) out('\nNo --setup given: pages were captured signed out. Use --setup to show them with demo data.');
-      out('\nPaste into marketing/src/site.ts (first route is the hero) and write real alt text:\n');
-      out(siteSnippet(r.files));
+      out(`\nPaste into marketing/src/site.ts${o.phone ? '' : ' (first route is the hero)'} and write real alt text:\n`);
+      out(siteSnippet(r.files, o.phone));
     } catch (e) {
       process.stderr.write(`pas marketing screenshots: ${(e as Error).message}\n`);
       process.exitCode = 1;

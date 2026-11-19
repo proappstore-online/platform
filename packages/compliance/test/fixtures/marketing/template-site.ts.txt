@@ -50,11 +50,30 @@ export const site = {
     { title: 'Sign in', body: 'Use your GitHub or Google account. No new password to remember.' },
     { title: 'Get started', body: 'Describe the first thing a new user does.' },
   ],
+  /** Optional feature rows: a title, a paragraph and, if you have one, a picture. Rows alternate sides. */
+  features: [] as Feature[],
+  /** Optional: who the app is for, e.g. { title: 'Market stallholders', body: 'Why it suits them.' }. */
+  audience: [] as Point[],
+  /** Optional portrait screenshots taken at phone size, shown in their own row. */
+  phoneScreenshots: [] as Image[],
+  /** Explains how to install the app on a phone or computer. Set to false to leave the section out. */
+  install: true,
+  /** Optional questions and answers. */
+  faq: [] as { question: string; answer: string }[],
 }
 
 interface Image {
   src: string
   alt: string
+}
+
+interface Point {
+  title: string
+  body: string
+}
+
+interface Feature extends Point {
+  image?: Image
 }
 
 /** How the legal pages tell people to reach you. */

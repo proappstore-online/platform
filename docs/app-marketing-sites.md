@@ -185,6 +185,12 @@ pas marketing screenshots --routes /,dashboard=/mower,/mower/streets --setup mar
   when the browser cannot encode WebP). `<name>` comes from the route
   (`/mower/streets` → `mower-streets`, `/` → `home`), or name it:
   `dashboard=/mower`. Existing files of that name are overwritten;
+- writes the first route, the hero, as PNG whatever `--format` says: the
+  template also uses it as the social preview image (`og:image`), which
+  link-preview crawlers want as PNG (#604);
+- with `--phone`, shoots every route at **390x844** (2x, mobile, touch) instead
+  and prints them as `phoneScreenshots`, the template's portrait row
+  (template-app#6). There is no hero in that mode;
 - prints the `heroImage` and `screenshots` entries to paste into
   `marketing/src/site.ts` — the first route is the hero. Replace the `TODO`
   alt text with a real description; it does not edit `site.ts` itself.

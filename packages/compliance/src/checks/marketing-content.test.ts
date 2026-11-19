@@ -63,6 +63,7 @@ describe('marketing-content (#498)', () => {
 
   it('a hero image alone or screenshots alone still warns about the other, and an owner-written site with neither names both', () => {
     expect(marketingFindings(WRITTEN.replace(/screenshots: \[.*\] as Image\[\],/, 'screenshots: [] as Image[],')).map((f) => f.what)).toEqual(['no screenshots']);
+    expect(marketingFindings(WRITTEN.replace(/screenshots: \[.*\] as Image\[\],/, "screenshots: [] as Image[],\n  phoneScreenshots: [{ src: '/assets/p.webp', alt: 'Orders on a phone' }] as Image[],"))).toEqual([]);
     expect(marketingFindings(WRITTEN.replace(/heroImage: \{.*\} as Image \| null,/, 'heroImage: null as Image | null,')).map((f) => f.what)).toEqual(['no hero image; the social preview is the app icon']);
   });
 

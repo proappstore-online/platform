@@ -16,6 +16,8 @@ import { pathToFileURL } from 'node:url';
  */
 
 export const VIEWPORT = { width: 1200, height: 900 } as const; // 4:3, the hero's 640x480 slot at ~2x
+/** `--phone` (#604): a portrait phone at 2x, for the template's `phoneScreenshots` row. */
+export const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } as const;
 const WEBP_QUALITY = 0.82; // cwebp -q 82
 const PLAYWRIGHT_PACKAGES = ['playwright', '@playwright/test', 'playwright-core'];
 /** Where an app keeps its Playwright install, relative to its root. */
@@ -32,7 +34,7 @@ interface ShotContext {
   close(): Promise<void>;
 }
 interface ShotBrowser {
-  newContext(opts: { viewport: { width: number; height: number }; serviceWorkers: 'block' }): Promise<ShotContext>;
+  newContext(opts: { viewport: { width: number; height: number }; deviceScaleFactor?: number; isMobile?: boolean; hasTouch?: boolean; serviceWorkers: 'block' }): Promise<ShotContext>;
   close(): Promise<void>;
 }
 export interface Chromium {
@@ -53,6 +55,8 @@ export interface ScreenshotOptions {
   url: string;
   routes: ShotRoute[];
   format: 'webp' | 'png';
+  /** Shoot at phone size; every file is then a phone screenshot and there is no hero. */
+  phone?: boolean | undefined;
   /** Module path (relative to cwd) whose default export is a ScreenshotSetup. */
   setup?: string | undefined;
   allowRemote?: boolean | undefined;
@@ -96,11 +100,12 @@ export function isLocalUrl(url: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]';
 }
 
-/** The `heroImage` / `screenshots` entries for marketing/src/site.ts: the first file is the hero. */
-export function siteSnippet(files: ScreenshotResult['files']): string {
+/** The `heroImage` / `screenshots` entries for marketing/src/site.ts (the first file is the hero), or `phoneScreenshots` for `--phone`. */
+export function siteSnippet(files: ScreenshotResult['files'], phone = false): string {
   const entry = (f: ScreenshotResult['files'][number]) => `{ src: '${f.src}', alt: 'TODO: describe ${f.route} (demo data)' }`;
   const [hero, ...rest] = files;
   if (!hero) return '';
+  if (phone) return ['  phoneScreenshots: [', ...files.map((f) => `    ${entry(f)},`), '  ] as Image[],'].join('\n');
   return [
     `  heroImage: ${entry(hero)} as Image | null,`,
     '  screenshots: [',
@@ -182,17 +187,19 @@ export async function captureScreenshots(opts: ScreenshotOptions): Promise<Scree
   const browser = await chromium.launch();
   try {
     await mkdir(outDir, { recursive: true });
-    for (const { slug, route } of opts.routes) {
+    for (const [index, { slug, route }] of opts.routes.entries()) {
       const url = new URL(route.replace(/^\/+/, ''), base.href.endsWith('/') ? base.href : `${base.href}/`).href;
       // A fresh context per route: no cookies or storage carried over, service workers blocked so a cached build is never shot.
-      const context = await browser.newContext({ viewport: { ...VIEWPORT }, serviceWorkers: 'block' });
+      const context = await browser.newContext(opts.phone ? { ...PHONE, viewport: { ...PHONE.viewport }, serviceWorkers: 'block' } : { viewport: { ...VIEWPORT }, serviceWorkers: 'block' });
       try {
         if (setup) await setup(context, { route, url });
         const page = await context.newPage();
         await page.goto(url, { waitUntil: 'networkidle' });
         await page.evaluate(() => (globalThis as unknown as BrowserGlobals).document.fonts.ready.then(() => undefined), undefined);
         const png = await page.screenshot({ type: 'png', animations: 'disabled' });
-        const webp = opts.format === 'webp' ? await toWebp(page, png) : null;
+        // The hero is also the social preview image (og:image), which link-preview crawlers want as PNG (#604).
+        const hero = index === 0 && !opts.phone;
+        const webp = opts.format === 'webp' && !hero ? await toWebp(page, png) : null;
         const format = webp ? 'webp' : 'png';
         const path = join(outDir, `${slug}.${format}`);
         await writeFile(path, webp ?? png);

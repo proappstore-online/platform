@@ -114,8 +114,8 @@ export function marketingFindings(raw: string, hasEnquiryForm = false): Finding[
   if ((literal(src, 'governingLaw') ?? '').trim() === '') add('operator-contact', 'no governing law in the Terms');
 
   const hero = new RegExp(`${FIELD}heroImage:\\s*null\\b`).test(src) || !new RegExp(`${FIELD}heroImage:`).test(src);
-  const screenshots = arrayBody(src, 'screenshots');
-  const noShots = screenshots === null || screenshots.trim() === '';
+  // Desktop or phone screenshots both count (template-app#6 added the phone row).
+  const noShots = ['screenshots', 'phoneScreenshots'].every((key) => (arrayBody(src, key) ?? '').trim() === '');
   if (hero && noShots) add('imagery', 'no hero image and no screenshots; the social preview is the app icon');
   else if (hero) add('imagery', 'no hero image; the social preview is the app icon');
   else if (noShots) add('imagery', 'no screenshots');
