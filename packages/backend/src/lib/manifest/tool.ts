@@ -1,4 +1,4 @@
-import { ACTION_CALLERS, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, type ToolManifest } from '../action-sql.js';
+import { ACTION_CALLERS, MAX_WORKER_ACTION_PATH, VERIFY_PARAM_PREFIX, actionCallers, literalLimit, resolveToolParams, type ToolManifest } from '../action-sql.js';
 import { ENDPOINT_NAME_PREFIX } from '../endpoint-sql.js';
 import { getVerifier, VERIFIERS } from '../verifiers/index.js';
 import { isCronSyntaxError, scheduledCronError } from './cron.js';
@@ -68,8 +68,8 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
     return `the ${ENDPOINT_NAME_PREFIX} prefix is reserved for console-defined endpoints`;
   }
   if (!tool.description || typeof tool.description !== 'string') return 'description is required';
-  if (!['query', 'execute', 'batch', 'verify'].includes(tool.operation)) {
-    return 'operation must be "query", "execute", "batch" or "verify"';
+  if (!['query', 'execute', 'batch', 'verify', 'worker'].includes(tool.operation)) {
+    return 'operation must be "query", "execute", "batch", "verify" or "worker"';
   }
   if (tool.requires_auth !== true && tool.requires_auth !== false) return 'requires_auth must be explicitly true or false';
   if (tool.verifier !== undefined && tool.operation !== 'verify') return 'only verify tools may declare a verifier';
@@ -81,9 +81,30 @@ export function validateManifest(tool: ToolManifest, opts: { source: ToolSource 
     }
   }
 
+  if (tool.operation !== 'worker') {
+    if (tool.worker !== undefined) return 'only worker tools may declare worker';
+    if (tool.read_only !== undefined) return 'only worker tools may declare read_only';
+    if (tool.sensitive !== undefined) return 'only worker tools may declare sensitive';
+  }
+
   // Every statement the tool will run, with the kind it is validated as.
   let checks: { sql: string; kind: 'query' | 'execute' }[];
-  if (tool.operation === 'verify') {
+  if (tool.operation === 'worker') {
+    // #579: no SQL. The platform POSTs { action, params } to the app's own worker, as the caller.
+    if (tool.requires_auth !== true) return 'worker tools must require auth';
+    if (tool.sql !== undefined || tool.statements !== undefined) return 'worker tools run no SQL: declare worker.path, not sql or statements';
+    const path: unknown = tool.worker?.path;
+    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) return 'worker.path is required and must start with "/"';
+    if (path.length > MAX_WORKER_ACTION_PATH) return `worker.path must be at most ${MAX_WORKER_ACTION_PATH} characters`;
+    if (!/^\/[A-Za-z0-9._~\/-]*$/.test(path) || path.split('/').some((seg) => seg === '..')) return 'worker.path may hold only letters, digits and . _ ~ - /, with no query';
+    if (tool.read_only !== undefined && typeof tool.read_only !== 'boolean') return 'read_only must be a boolean';
+    if (tool.sensitive !== undefined && typeof tool.sensitive !== 'boolean') return 'sensitive must be a boolean';
+    if (tool.schedule !== undefined) return 'worker tools cannot be scheduled';
+    if (tool.callers !== undefined && !(Array.isArray(tool.callers) && tool.callers.length === 1 && tool.callers[0] === 'user')) {
+      return 'worker tools are called by users only: callers must be omitted or ["user"]';
+    }
+    checks = [];
+  } else if (tool.operation === 'verify') {
     // A verify tool (#148): a scoped SELECT feeds a platform-vetted verifier;
     // optional writes then run with the verdict bound as :__verify_<output>.
     if (tool.requires_auth !== true) return 'verify tools must require auth';

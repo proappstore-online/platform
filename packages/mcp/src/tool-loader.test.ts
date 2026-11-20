@@ -303,6 +303,31 @@ describe('registerAppTools', () => {
       .rejects.toThrow(/read-only/i);
   });
 
+  it('worker actions (#579): a write is refused in read-only mode, a read_only one runs; annotations follow read_only', async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>>();
+    const annotations = new Map<string, unknown>();
+    const fakeServer = {
+      tool: (name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>) => {
+        handlers.set(name, handler);
+        return { update: (u: { annotations: unknown }) => annotations.set(name, u.annotations) };
+      },
+    };
+    const base = { app_id: 'bookkeeper', description: 'd', operation: 'worker' as const, params: {}, requires_auth: true };
+    globalThis.fetch = vi.fn(async () => Response.json({ tfn: 'masked' })) as unknown as typeof fetch;
+    registerAppTools(
+      fakeServer as never,
+      [{ ...base, name: 'rotate_key' }, { ...base, name: 'reveal_owner_tfn', read_only: true }],
+      () => ({ userId: 'u1', token: 'tok-1', roles: [] }),
+      api,
+      'https://api.proappstore.online',
+      { MCP_READ_ONLY: '1' },
+    );
+    await expect(handlers.get('rotate_key')!({})).rejects.toThrow(/read-only/i);
+    expect((await handlers.get('reveal_owner_tfn')!({})).content[0]!.text).toContain('masked');
+    expect(annotations.get('rotate_key')).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(annotations.get('reveal_owner_tfn')).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+  });
+
   it('rejects a mutating tool that requires a platform role the caller lacks (before hitting the backend)', async () => {
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<{ content: { text: string }[] }>>();
     const fakeServer = {

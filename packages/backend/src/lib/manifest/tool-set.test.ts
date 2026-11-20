@@ -10,12 +10,18 @@ describe('toolStatements', () => {
     expect(toolStatements({ ...scoped, operation: 'batch', sql: undefined, statements: ['A', 'B'] })).toEqual(['A', 'B']);
     expect(toolStatements({ ...scoped, operation: 'verify', sql: 'IN', statements: ['W'] })).toEqual(['IN', 'W']);
     expect(toolStatements(scoped)).toEqual([scoped.sql]);
+    expect(toolStatements({ ...scoped, operation: 'worker', sql: undefined })).toEqual([]); // #579: no SQL to lint or compile
   });
 });
 
 describe('validateToolSet', () => {
   it('accepts a scoped set without an env (no coherence check)', async () => {
     expect(await validateToolSet([scoped], undefined, 'app')).toBeNull();
+  });
+
+  it('accepts a worker action: no SQL means nothing to scope-lint or compile (#579)', async () => {
+    const tool = { name: 'invite_member', description: 'Invite', operation: 'worker', worker: { path: '/invite' }, params: {}, requires_auth: true } as ToolManifest;
+    expect(await validateToolSet([tool], undefined, 'app')).toBeNull();
   });
 
   it('prefixes a manifest error with the tool name', async () => {

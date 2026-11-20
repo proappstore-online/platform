@@ -130,3 +130,41 @@ describe('agentReachableRiskyWrite (#500)', () => {
     expect(agentReachableRiskyWrite(write('undeleted_items'))).toBe(false); // the verb is a whole word
   });
 });
+
+describe('worker actions (#579)', () => {
+  const worker = (over: Record<string, unknown> = {}): ToolManifest => ({
+    name: 'invite_member', description: 'Invite a member', operation: 'worker', worker: { path: '/actions/invite' },
+    params: { org_id: { type: 'string' } }, requires_auth: true, auth: { app_roles: ['manager'] }, ...over,
+  }) as ToolManifest;
+
+  it('accepts a worker action, with read_only, sensitive and step_up', () => {
+    expect(validateManifest(worker())).toBeNull();
+    expect(validateManifest(worker({ read_only: true, sensitive: true, step_up: true, callers: ['user'] }))).toBeNull();
+  });
+
+  it('needs a worker.path that starts with "/", is short, and carries no query or traversal', () => {
+    expect(validateManifest(worker({ worker: undefined }))).toMatch(/worker\.path is required/);
+    expect(validateManifest(worker({ worker: { path: 'actions' } }))).toMatch(/must start with "\/"/);
+    expect(validateManifest(worker({ worker: { path: '//evil' } }))).toMatch(/must start with "\/"/);
+    expect(validateManifest(worker({ worker: { path: '/a?x=1' } }))).toMatch(/no query/);
+    expect(validateManifest(worker({ worker: { path: '/a/../b' } }))).toMatch(/no query/);
+    expect(validateManifest(worker({ worker: { path: `/${'a'.repeat(200)}` } }))).toMatch(/at most 200/);
+  });
+
+  it('runs no SQL, requires auth, takes only user callers and is never scheduled', () => {
+    expect(validateManifest(worker({ sql: 'SELECT 1' }))).toMatch(/run no SQL/);
+    expect(validateManifest(worker({ statements: ['DELETE FROM t WHERE id = 1'] }))).toMatch(/run no SQL/);
+    expect(validateManifest(worker({ requires_auth: false }))).toBe('worker tools must require auth');
+    expect(validateManifest(worker({ callers: ['worker'] }))).toMatch(/callers must be omitted or \["user"\]/);
+    expect(validateManifest(worker({ callers: ['user', 'hook'] }))).toMatch(/callers must be omitted/);
+    expect(validateManifest(worker({ schedule: { cron: '0 * * * *', params: {} } }))).toBe('worker tools cannot be scheduled');
+    expect(validateManifest(worker({ read_only: 'yes' }))).toBe('read_only must be a boolean');
+    expect(validateManifest(worker({ sensitive: 1 }))).toBe('sensitive must be a boolean');
+  });
+
+  it('keeps worker, read_only and sensitive to worker tools', () => {
+    expect(validateManifest(query({ worker: { path: '/x' } }))).toBe('only worker tools may declare worker');
+    expect(validateManifest(query({ read_only: true }))).toBe('only worker tools may declare read_only');
+    expect(validateManifest(query({ sensitive: true }))).toBe('only worker tools may declare sensitive');
+  });
+});

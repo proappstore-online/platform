@@ -97,6 +97,14 @@ describe('the report, on a scripted D1', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('skips a worker action (#579): it runs no SQL', async () => {
+    const { db, ran } = scripted({});
+    const r = await testMigrationChain(db, { migrations: [], actions: [{ name: 'invite', operation: 'worker', params: {} } as never] });
+    expect(r.actions).toEqual([{ name: 'invite', operation: 'worker', outcome: 'skipped', detail: 'worker actions run no sql' }]);
+    expect(r.ok).toBe(true);
+    expect(ran).toEqual([]);
+  });
+
   it('stops at the first failing migration statement, names it, and runs no action', async () => {
     const { db, ran } = scripted({ boom: 'D1_ERROR: near "boom": syntax error: SQLITE_ERROR' });
     const r = await testMigrationChain(db, { migrations: [{ name: '0001', sql: 'CREATE TABLE a (x); boom; CREATE TABLE c (z)' }, { name: '0002', sql: 'CREATE TABLE later (y)' }], actions: [{ name: 'q', operation: 'query', sql: 'SELECT 1' }] });

@@ -22,9 +22,14 @@ function platformToolAnnotations(name: string): ToolAnnotations {
   return { readOnlyHint: read, destructiveHint: !read && DESTRUCTIVE.has(name), idempotentHint: read, openWorldHint: true };
 }
 
+/** Does the app tool only read? A query, or a worker action (#579) that declares `read_only`. */
+export function appToolReads(tool: { operation: string; read_only?: boolean }): boolean {
+  return tool.operation === "query" || (tool.operation === "worker" && tool.read_only === true);
+}
+
 /** Manifest operations, not a name like "get_*", determine app-tool behavior. */
-export function appToolAnnotations(operation: string): ToolAnnotations {
-  const read = operation === "query";
+export function appToolAnnotations(tool: { operation: string; read_only?: boolean }): ToolAnnotations {
+  const read = appToolReads(tool);
   return { readOnlyHint: read, destructiveHint: !read, idempotentHint: read, openWorldHint: false };
 }
 

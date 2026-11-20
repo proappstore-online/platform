@@ -16,6 +16,7 @@ import {
   prepareVerifyInput,
   prepareVerifyWrites,
   referencesChildFlag,
+  resolveToolParams,
   type ActionState,
   type ToolManifest,
 } from '../lib/action-sql.js';
@@ -23,6 +24,8 @@ import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyA
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { APP_HOST_HEADER } from '../lib/app-context.js';
+import { activeAppWorker, type AppWorkerExports } from '../lib/app-worker-host.js';
+import { invokeAppWorkerHttp } from '../lib/app-worker-http.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -137,6 +140,8 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   }
   let token: string | null = null;
   let userId = '';
+  // #579: who a worker action calls the worker as: the session user, or the app token's user.
+  let caller: FasUser | null = null;
 
   if (publicAction) {
     const stalePublicError = validatePublicManifestForExecution(manifest);
@@ -164,6 +169,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         throw new HttpError('token is not scoped to this action', 403);
       }
       userId = verified.user.id;
+      caller = verified.user;
       grantRole(c.req.raw, verified.user, await enforceActionAuth(c.env.DB, appId, manifest, verified.user));
       // #231: an app token has no auth_time and can never step up.
       if (manifest.step_up) throw new HttpError('this action requires a recent sign-in and cannot be called with an app token', 403);
@@ -176,6 +182,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       const user = await requireUser(c);
       await requireVisible(c.env, appId, visibility, user);
       userId = user.id;
+      caller = user;
       grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
       // not invited to re-authenticate for an action they could never run.
@@ -193,9 +200,22 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
+  // #579: a worker action is always audited (actor, time, outcome), role-gated or not. The audit row never holds params or a response.
+  if (manifest.operation === 'worker' && caller && !roleGrants.has(c.req.raw)) roleGrants.set(c.req.raw, { actorId: caller.id, role: '' });
   const dryRun = body.dry_run === true;
   if (body.dry_run !== undefined && typeof body.dry_run !== 'boolean') throw new HttpError('dry_run must be a boolean', 400);
   if (dryRun && !(team ?? await callerIsAppTeam(c, appId))) throw new HttpError("dry_run is for the app's owner and team", 403);
+  if (manifest.operation === 'worker') {
+    // #579: the same param rules as a SQL action; a dry run stops once they hold.
+    let params: Record<string, unknown>;
+    try {
+      params = resolveToolParams(manifest, input);
+    } catch (e) {
+      throw new HttpError(e instanceof Error ? e.message : String(e), 400);
+    }
+    if (dryRun) return dryRunResponse(manifest, state);
+    return runWorkerAction(c, appId, manifest, params, caller!);
+  }
   // A verify action's dry run stops after the auth checks: its input statement
   // feeds a verifier, so there is nothing to bind without running it.
   if (dryRun && manifest.operation === 'verify') return dryRunResponse(manifest, state);
@@ -242,7 +262,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
 
 /** #428: what a dry run answers: the shape of a real answer, with nothing read or written. */
 function dryRunResponse(manifest: ToolManifest, state: ActionState): Response {
-  const result = manifest.operation === 'query' || manifest.operation === 'verify' ? { rows: [] } : { changes: 0 };
+  const result = manifest.operation === 'worker' ? {} : manifest.operation === 'query' || manifest.operation === 'verify' ? { rows: [] } : { changes: 0 };
   return Response.json({ dry_run: true, state, ...result }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
@@ -290,8 +310,34 @@ async function cachedPublicQuery(
   return res;
 }
 
+/**
+ * A worker action (#579): the platform calls the app's own worker as the caller, exactly like a browser request to
+ * `/.pas/worker`: `POST <worker.path>`, `content-type: application/json`, body `{ action, params }`, with a 30 s caller
+ * grant for the user inside the envelope. The worker's answer is the action's answer, status and JSON body as it sent
+ * them; quota, timeout and a malformed reply are 429, 504 and 502.
+ */
+async function runWorkerAction(
+  c: Parameters<typeof requireUser>[0],
+  appId: string,
+  manifest: ToolManifest,
+  params: Record<string, unknown>,
+  caller: FasUser,
+): Promise<Response> {
+  if (!(await activeAppWorker(c.env, appId))) throw new HttpError('this app has no enabled, deployed app worker to run this action', 409);
+  let ctx: AppWorkerExports | undefined;
+  try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
+  return invokeAppWorkerHttp(c.env, ctx, appId, caller, {
+    method: 'POST',
+    path: manifest.worker!.path,
+    query: '',
+    headers: { 'content-type': 'application/json' },
+    body: new TextEncoder().encode(JSON.stringify({ action: manifest.name, params })),
+  });
+}
+
 function actionWrites(manifest: ToolManifest): boolean {
   if (manifest.operation === 'query') return false;
+  if (manifest.operation === 'worker') return manifest.read_only !== true;
   if (manifest.operation === 'verify') return (manifest.statements?.length ?? 0) > 0;
   return true;
 }

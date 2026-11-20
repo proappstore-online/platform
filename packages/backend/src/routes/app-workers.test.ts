@@ -3,7 +3,8 @@ import { app } from '../index.js';
 import { makeEnv, testToken } from '../test-helpers.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { MAX_WORKER_OBJECT_BYTES } from '../lib/app-worker-calls.js';
-import { parseAppWorkerCap, WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from './app-workers.js';
+import { parseAppWorkerCap } from './app-workers.js';
+import { WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from '../lib/app-worker-http.js';
 
 // #385: the worker HTTP plane takes a full-size worker document (10 MiB) plus
 // multipart framing, refuses a larger body without buffering it, and only after

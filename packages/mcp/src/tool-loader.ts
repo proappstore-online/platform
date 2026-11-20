@@ -1,5 +1,5 @@
 import { text, type Text } from "./text-result.js";
-import { appToolAnnotations } from "./tool-metadata.js";
+import { appToolAnnotations, appToolReads } from "./tool-metadata.js";
 /**
  * Load app tools from the platform API and register them on the MCP server.
  *
@@ -36,7 +36,9 @@ interface ToolManifest {
   name: string;
   description: string;
   /** `verify` (#148) runs a platform verifier and may write; it is gated as a mutation here. */
-  operation: 'query' | 'execute' | 'batch' | 'verify';
+  operation: 'query' | 'execute' | 'batch' | 'verify' | 'worker';
+  /** `worker` (#579): a call that only reads; absent or false, it is gated as a mutation. */
+  read_only?: boolean;
   sql?: string;
   statements?: string[];
   verifier?: string;
@@ -171,6 +173,7 @@ function publicToolFields(tool: AppTool): AppTool {
     name: tool.name,
     description: tool.description,
     operation: tool.operation,
+    ...(tool.read_only === true ? { read_only: true } : {}),
     ...(tool.verifier !== undefined ? { verifier: tool.verifier } : {}),
     params: tool.params,
     requires_auth: tool.requires_auth,
@@ -262,7 +265,7 @@ export function measureToolsListBytes(tools: AppTool[]): number {
   const enc = new TextEncoder();
   let bytes = 2; // the surrounding `[]`
   for (const tool of tools) {
-    bytes += enc.encode(JSON.stringify({ name: tool.name, description: `[${tool.app_id}] ${tool.description}`, inputSchema: inputSchemaFor(tool.params), annotations: appToolAnnotations(tool.operation) })).byteLength + 1;
+    bytes += enc.encode(JSON.stringify({ name: tool.name, description: `[${tool.app_id}] ${tool.description}`, inputSchema: inputSchemaFor(tool.params), annotations: appToolAnnotations(tool) })).byteLength + 1;
   }
   return bytes;
 }
@@ -399,14 +402,14 @@ export function registerAppTools(
         // `execute` and `batch` actions mutate app data; `query` actions are read-only.
         // Gate + audit the mutating ones (read-only mode throws here). `scope: "app"`
         // lets the audit log tell this path from `call_app_tool` on the shared endpoint.
-        if (tool.operation !== 'query') {
+        if (!appToolReads(tool)) {
           await gateMutation({ env, subject: userId }, tool.name, { app_id: tool.app_id, scope: 'app' });
         }
         return executeToolCall(tool, args as Record<string, unknown>, token, api, apiBase);
       },
     );
 
-    if (registration && typeof registration.update === "function") registration.update({ annotations: appToolAnnotations(tool.operation) });
+    if (registration && typeof registration.update === "function") registration.update({ annotations: appToolAnnotations(tool) });
     registered.push(tool.name);
   }
 
@@ -415,7 +418,7 @@ export function registerAppTools(
 
 /** One line per tool for `list_app_tools`: what it is, whether it writes, whether it needs a session. */
 function describeTool(t: AppTool, includeParams: boolean): string {
-  const kind = t.operation === 'query' ? 'reads' : 'writes';
+  const kind = appToolReads(t) ? 'reads' : 'writes';
   const auth = t.requires_auth === false ? 'public' : 'auth';
   // #428: staged actions are listed only to the app's team, who can call them; its users cannot yet.
   const staged = t.state === 'staged' ? ' — staged (owner and team only until the app goes live)' : '';
@@ -540,7 +543,7 @@ function registerDiscoveryPair(
       // Query tools must keep working under MCP_READ_ONLY; only the mutating operations are
       // gated and audited. PAGS gates its invoker unconditionally because it cannot know the
       // side effect; PAS knows `operation`.
-      if (manifest.operation !== 'query') {
+      if (!appToolReads(manifest)) {
         await gateMutation({ env, subject: userId }, 'call_app_tool', { app_id: app_idResolved, tool, scope: scope ? 'app' : 'shared' });
       }
       return executeToolCall(manifest, params ?? {}, token, api, apiBase);

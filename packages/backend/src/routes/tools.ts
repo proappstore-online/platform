@@ -483,6 +483,8 @@ function publicToolView(m: ToolManifest) {
     name: m.name,
     description: m.description,
     operation: m.operation,
+    // A worker action that only reads (#579), so MCP can mark it read-only and let it run in read-only mode.
+    ...(m.read_only === true ? { read_only: true } : {}),
     // The platform verifier a verify tool runs (#148) — a public module id, not app SQL.
     ...(m.verifier !== undefined ? { verifier: m.verifier } : {}),
     params: m.params,

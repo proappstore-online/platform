@@ -6,6 +6,7 @@ import { MAX_SCHEDULED_ACTIONS_PER_APP, validateManifest, type ToolSource } from
 
 /** Every SQL statement a tool runs, in order: batch members; a verify tool's input SELECT then its writes; else the one `sql`. */
 export function toolStatements(tool: ToolManifest): string[] {
+  if (tool.operation === 'worker') return [];
   if (tool.operation === 'batch') return tool.statements ?? [];
   if (tool.operation === 'verify') return [tool.sql ?? '', ...(tool.statements ?? [])];
   return [tool.sql ?? ''];

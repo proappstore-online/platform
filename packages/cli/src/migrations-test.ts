@@ -136,6 +136,8 @@ export async function testMigrationChain(db: D1Like, input: { migrations: Migrat
     const operation = a.operation ?? 'query';
     // A verify action runs platform code the app cannot supply; its SQL is exercised through the platform, not here.
     if (operation === 'verify') { report.actions.push({ name: a.name, operation, outcome: 'skipped', detail: 'verify actions run platform verifiers' }); continue; }
+    // #579: a worker action calls the app's own worker; it has no SQL to run.
+    if (operation === 'worker') { report.actions.push({ name: a.name, operation, outcome: 'skipped', detail: 'worker actions run no sql' }); continue; }
     const statements = actionStatements(a);
     if (statements.length === 0) { report.actions.push({ name: a.name, operation, outcome: 'skipped', detail: 'no sql' }); continue; }
     try {

@@ -5,7 +5,7 @@ import { appWorkerHost, disableAppWorker } from '../../../backend/src/lib/app-wo
 import { mintCallerGrant } from '../../../backend/src/lib/caller-grant';
 import { sha256Hex } from '../../../backend/src/lib/app-tokens';
 import { AppWorkerApi } from '../../../backend/src/rpc/app-worker-api';
-import { WORKER_HTTP_MAX_REQUEST_BYTES } from '../../../backend/src/routes/app-workers';
+import { WORKER_HTTP_MAX_REQUEST_BYTES } from '../../../backend/src/lib/app-worker-http';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session, viaHostApi } from './helpers';
 
 const env = providedEnv as unknown as Env;

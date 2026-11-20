@@ -20,7 +20,7 @@ interface ToolSchedule {
   params: Record<string, unknown>;
 }
 
-type ToolOperation = 'query' | 'execute' | 'batch' | 'verify';
+type ToolOperation = 'query' | 'execute' | 'batch' | 'verify' | 'worker';
 
 /** Prefix of the magic placeholders a verify action's write statements bind the verdict through (#148). */
 export const VERIFY_PARAM_PREFIX = '__verify_';
@@ -28,7 +28,7 @@ export const VERIFY_PARAM_PREFIX = '__verify_';
 export interface ToolManifest {
   name: string;
   description: string;
-  /** `verify` (#148): `sql` is a scoped SELECT whose rows feed the platform
+  /** `worker` (#579): no SQL; the platform calls the app's own worker at `worker.path`. `verify` (#148): `sql` is a scoped SELECT whose rows feed the platform
    *  verifier named by `verifier`; the optional `statements` then run atomically
    *  with the verdict bound as `:__verify_<output>`. */
   operation: ToolOperation;
@@ -67,7 +67,16 @@ export interface ToolManifest {
    * or lock records, where an assistant proposing is fine but acting is not. Absent or false: callable by agents as before.
    */
   owner_ui_only?: boolean;
+  /** #579, `worker` actions: the app-worker route the platform POSTs `{ action, params }` to, as the caller. */
+  worker?: { path: string };
+  /** #579, `worker` actions: the call reads only. Absent or false: it is treated as a write, so a read-only app token and MCP read-only mode refuse it. */
+  read_only?: boolean;
+  /** #579, `worker` actions: params and response are never logged or audited, only the tool, the actor, the time and the outcome. */
+  sensitive?: boolean;
 }
+
+/** Longest `worker.path` of a worker action. */
+export const MAX_WORKER_ACTION_PATH = 200;
 
 /** The header the MCP server adds to every action call it makes on a user's behalf (#500). Only ever restricts a call. */
 export const MCP_VIA_HEADER = 'X-PAS-Via';

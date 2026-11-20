@@ -56,13 +56,13 @@
  */
 import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, isAdminId, requireAdmin, requireAppOwner, requireRecentAuth } from '../lib/auth.js';
+import { HttpError, isAdminId, requireAdmin, requireAppOwner, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
 import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
 import { paramsOf, queueWorkerRun, runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
 import { requireVisibleUser } from '../lib/visibility.js';
 import { mintCallerGrant } from '../lib/caller-grant.js';
-import { MAX_WORKER_OBJECT_BYTES } from '../lib/app-worker-calls.js';
+import { invokeAppWorkerHttp, WORKER_HTTP_MAX_REQUEST_BYTES } from '../lib/app-worker-http.js';
 import { readCapped } from './hooks.js';
 import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
 import type { AppWorkerExports } from '../lib/app-worker-host.js';
@@ -436,20 +436,8 @@ appWorkerRoutes.post('/apps/:appId/worker/schedules/:name/run', async (c) => {
 
 // ── Browser requests to the app worker (#260) ───────────────────────────────
 
-/**
- * #385: a document the worker may store (MAX_WORKER_OBJECT_BYTES, 10 MiB) plus
- * 1 MiB for multipart/form-data framing, so a full-size document fits either
- * raw or in a form. Responses get the same bound, so a stored document can be
- * downloaded back through the same path.
- */
-export const WORKER_HTTP_MAX_REQUEST_BYTES = MAX_WORKER_OBJECT_BYTES + 1024 * 1024;
-export const WORKER_HTTP_MAX_RESPONSE_BYTES = WORKER_HTTP_MAX_REQUEST_BYTES;
-/** ADR-009 §4: http events get 30 s. They are never retried. */
-const WORKER_HTTP_TIMEOUT_MS = 30_000;
 const WORKER_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const REQUEST_HEADERS = ['content-type', 'accept', 'accept-language', 'if-none-match', 'if-modified-since'];
-/** All a worker response may carry back; Cache-Control is forced, Set-Cookie and the rest never pass. */
-const RESPONSE_HEADERS = ['content-type', 'etag'];
 
 /**
  * A signed-in user's request to `/.pas/worker/<path>` on the app origin. The host
@@ -485,46 +473,9 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
     if (value !== undefined) headers[name] = value.slice(0, 1024);
   }
 
-  let ctx: AppWorkerExports | undefined;
-  try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
-  // #318: the grant is minted for this envelope (id, attempt) and works only from its invocation.
-  const event = { id: crypto.randomUUID(), attempt: 1 };
-  const result = await appWorkerHost(c.env, ctx).invoke(appId, {
-    id: event.id,
-    type: 'http',
-    attempt: event.attempt,
-    payload: {
-      method,
-      path: q === -1 ? target : target.slice(0, q),
-      query: q === -1 ? '' : target.slice(q + 1),
-      headers,
-      ...encodeEnvelopeBody(bytes, headers['content-type'] ?? null),
-    },
-    caller: await mintCallerGrant(c.env, appId, user, event),
-  }, { timeoutMs: WORKER_HTTP_TIMEOUT_MS }).catch((e: unknown) => {
-    // #275: an interactive request is refused honestly, with when to come back.
-    if (e instanceof AppWorkerQuotaError) return e;
-    throw e;
-  });
-  if (result instanceof AppWorkerQuotaError) {
-    return c.json({ error: result.message, quota: result.quota }, 429, { 'Retry-After': String(result.retryAfter), 'Cache-Control': 'private, no-store' });
-  }
-
-  if (result.status === 'timeout') throw new HttpError('the app worker did not answer in time', 504);
-  let wrapped: { v?: unknown; status?: unknown; headers?: Record<string, string>; body?: unknown; body_encoding?: unknown };
-  try {
-    wrapped = JSON.parse(result.body ?? '');
-  } catch {
-    throw new HttpError('the app worker failed', 502);
-  }
-  if (wrapped.v !== 1 || typeof wrapped.status !== 'number' || wrapped.status < 200 || wrapped.status > 599) throw new HttpError('the app worker failed', 502);
-  const body = decodeEnvelopeBody(wrapped.body, wrapped.body_encoding);
-  if (body.byteLength > WORKER_HTTP_MAX_RESPONSE_BYTES) throw new HttpError('the app worker response is too large', 502);
-  const out = new Headers({ 'Cache-Control': 'private, no-store' });
-  for (const name of RESPONSE_HEADERS) {
-    const value = wrapped.headers?.[name];
-    if (typeof value === 'string') out.set(name, value);
-  }
-  const nullBody = [204, 205, 304].includes(wrapped.status) || method === 'HEAD';
-  return new Response(nullBody ? null : body, { status: wrapped.status, headers: out });
+  return invokeAppWorkerHttp(c.env, executionExports(c), appId, user, { method, path: q === -1 ? target : target.slice(0, q), query: q === -1 ? '' : target.slice(q + 1), headers, body: bytes });
 });
+
+function executionExports(c: Context): AppWorkerExports | undefined {
+  try { return c.executionCtx as unknown as AppWorkerExports; } catch { return undefined; }
+}

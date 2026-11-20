@@ -62,6 +62,7 @@ const NOT_PERSONAL_SUFFIXES = ['_id', '_ids', '_count', '_verified', '_at'];
 
 /** The statements an action runs, as the platform executes them. */
 function policyStatements(tool: UnscopedPolicyTool): string[] {
+  if (tool.operation === 'worker') return []; // #579: a worker action runs no SQL
   if (tool.operation === 'batch') return tool.statements ?? [];
   if (tool.operation === 'verify') return [tool.sql ?? '', ...(tool.statements ?? [])];
   return [tool.sql ?? ''];

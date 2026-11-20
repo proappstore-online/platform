@@ -221,7 +221,7 @@ against your app's own D1 tables.
 |-------|---------|
 | `name` | lowercase `a-z0-9_`. Exposed under this name on `/mcp/apps/<app_id>`. |
 | `description` | what the tool does (the model reads this to decide when to call it). |
-| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. `verify` → a `SELECT` whose rows are checked by a platform-vetted verifier, then optional writes bound to the verdict (see [Verify actions](#verify-actions)). |
+| `operation` | `query` → a single `SELECT` (returns rows). `execute` → a single `INSERT`/`UPDATE`/`DELETE`. `batch` → multiple write statements in one D1 transaction. `verify` → a `SELECT` whose rows are checked by a platform-vetted verifier, then optional writes bound to the verdict (see [Verify actions](#verify-actions)). `worker` → no SQL: the platform calls the app's own worker route as the caller (see [Worker actions](#worker-actions)). |
 | `sql` | required for `query` and `execute`. Bind values with `:name` placeholders; **no semicolons**, one statement only. |
 | `statements` | required for `batch`, max 25 statements. Batch tools use `statements`, not `sql`; each member is validated like an `execute` statement. Optional on `verify` (the writes that run after verification, same limits). |
 | `verifier` | required for `verify`: the id of the platform verifier that runs on the rows of `sql`. Currently `chess.replay`. |
@@ -274,7 +274,7 @@ These are injected by the platform — **do not** declare them in `params`:
 
 ## Validation rules (enforced at register time)
 
-- `query` / `execute` tools use `sql`; `batch` tools use `statements`; `verify` tools use `sql` (a `SELECT`) plus an optional `statements` (writes) and a known `verifier`.
+- `query` / `execute` tools use `sql`; `batch` tools use `statements`; `worker` tools use `worker.path` and no SQL ([Worker actions](#worker-actions)); `verify` tools use `sql` (a `SELECT`) plus an optional `statements` (writes) and a known `verifier`.
 - SQL must start with `SELECT` / `INSERT` / `UPDATE` / `DELETE`.
 - No DDL (`CREATE`, `DROP`, `ALTER`, `PRAGMA`, ...) and no semicolons.
 - `UPDATE` and `DELETE` **must** have a `WHERE` clause.
@@ -487,6 +487,110 @@ Verifiers live in `packages/backend/src/lib/verifiers/` and are added by the
 platform, never by an app; an id the platform does not know is rejected at
 registration. Propose a new one in a platform issue with the input contract,
 the outputs and why SQL cannot do it.
+
+## Worker actions
+
+A `worker` action has no SQL. The platform validates the call as for any action, then POSTs `{ action, params }` to a
+route of the app's own [app worker](./app-workers.md#worker-backed-actions-operation-worker), as the caller, and
+returns the worker's JSON answer. Use it for what the data layer cannot do: an external API call with a secret, a
+decrypted value, an invitation.
+
+```json
+{
+  "name": "invite_member_to_github",
+  "description": "Invite a person to the GitHub org and teams. Managers only.",
+  "operation": "worker",
+  "worker": { "path": "/actions/invite-member" },
+  "params": {
+    "org_id": { "type": "string" },
+    "person_id": { "type": "string" },
+    "teams": { "type": "string", "optional": true, "description": "Comma-separated team slugs" }
+  },
+  "requires_auth": true,
+  "auth": { "app_roles": ["manager"] }
+}
+```
+
+The worker side. The request is a plain `POST` to the declared path, so it arrives in `fetch`. The `pas` client it
+gets is already bound to the caller's grant, so `pas.actions.call` runs **as the person who clicked**: with their rows
+and their role gates. It does not need to touch the grant itself.
+
+```ts
+import { defineAppWorker } from '@proappstore/sdk/worker';
+
+export default defineAppWorker({
+  async fetch(request, pas) {
+    const url = new URL(request.url);
+    if (request.method === 'POST' && url.pathname === '/actions/invite-member') {
+      const { action, params } = await request.json() as { action: string; params: { org_id: string; person_id: string; teams?: string | null } };
+      if (action !== 'invite_member_to_github') return Response.json({ error: 'unknown action' }, { status: 404 });
+
+      // Defence in depth: the platform already ran the manifest's role gate. Check the real rule again, as the
+      // caller, through an existing role-gated action. A non-manager gets Forbidden here, whatever the route.
+      await pas.actions.call('list_org_members', { org_id: params.org_id }); // callers: ["user", "worker"], auth.app_roles: ["manager"]
+
+      const key = await pas.secrets.get('GITHUB_APP_PRIVATE_KEY'); // listed in worker.secrets; never returned or logged
+      const res = await fetch('https://api.github.com/orgs/example/invitations', { /* ...signed with key... */ });
+      if (!res.ok) return Response.json({ error: 'GitHub refused the invitation' }, { status: 502 });
+      return Response.json({ invitation_id: (await res.json() as { id: number }).id, state: 'pending' });
+    }
+    return new Response('not found', { status: 404 });
+  },
+});
+```
+
+What the platform does, in order, on `POST /v1/apps/<app>/actions/<name>`:
+
+1. The checks every action gets: the app's visibility, a session or a personal app token, `auth.platform_roles` and
+   `auth.app_roles`, `step_up` (a token can never step up), and, for a token, its scopes. A read-only token is
+   refused unless the action says `"read_only": true`.
+2. `params` are checked with the same rules as a SQL action (`resolveToolParams`): a missing required param is a
+   `400`, defaults apply, types are coerced, and a param the manifest does not declare is dropped.
+3. `"dry_run": true` (app owner and team only) stops here and answers `{ "dry_run": true, "state": "live" }`. The
+   worker is not called.
+4. The app must have an enabled, deployed worker, otherwise `409`.
+5. The worker is invoked exactly as for a browser request to `/.pas/worker`: an `http` event with a 30-second caller
+   grant for the authenticated user (the session user, or the token's user), a 30-second budget, no retry.
+
+What the worker receives:
+
+| | |
+|---|---|
+| Method and path | `POST <worker.path>`, no query string |
+| Headers | `content-type: application/json` |
+| Body | `{ "action": "<tool name>", "params": { ...resolved params, optional ones as null when absent } }` |
+| Caller | in the envelope, not the body: the worker's `pas.actions.call` runs as that user |
+
+What the caller gets back:
+
+| Worker answers | The action answers |
+|---|---|
+| 2xx and a JSON body | the same status and body |
+| 4xx or 5xx | the same status and the worker's body, so its `{ "error": "..." }` reaches the caller |
+| quota spent | `429` with `Retry-After` |
+| no answer in 30 s | `504` |
+| not a valid reply | `502` |
+
+Only `Content-Type` and `ETag` pass through, and the response is always `Cache-Control: private, no-store`.
+
+Rules (enforced at registration):
+
+- `worker.path` starts with `/`, is at most 200 characters, and holds only letters, digits and `. _ ~ - /`: no
+  query, no `..`.
+- The action has no `sql` and no `statements`, and `requires_auth` is `true`: there are no public worker actions.
+- `callers` is omitted or `["user"]`. A `worker` or `hook` caller makes no sense for it.
+- It cannot be scheduled.
+- `read_only: true` declares that it only reads. Without it the action counts as a **write**: a read-only app
+  token and MCP read-only mode (`MCP_READ_ONLY`) refuse it, and the MCP tool is annotated as destructive.
+- `sensitive: true` declares that params and response are secrets (a tax file number, a key). The platform
+  never writes either to a log or an audit row for any action, so this flag is a promise the app keeps:
+  do not log them in the worker either. Every worker action is audited, role-gated or not: one `app_action_audit` row
+  with the action, the actor, the role that granted it (empty when none did), the time and the status. Only a call the
+  worker answered with a 2xx is recorded. The MCP audit log holds the tool and app, never the params.
+
+In MCP the tool is listed like any other. It is a mutation by default: under `MCP_READ_ONLY` it is refused before the
+executor, and its annotations say `readOnlyHint: false, destructiveHint: true`. With `"read_only": true` it runs in
+read-only mode and is annotated read-only.
 
 ## Full-text search (FTS5)
 
