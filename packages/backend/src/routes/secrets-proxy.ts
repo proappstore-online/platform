@@ -14,7 +14,7 @@ import type { Env } from '../types.js';
 export const PROXY_UPSTREAM_TIMEOUT_MS = 30_000;
 
 /** Set on a proxied response whose provider answered 401; the HTTP status is 502 (#608). */
-export const UPSTREAM_STATUS_HEADER = 'X-PAS-Upstream-Status';
+const UPSTREAM_STATUS_HEADER = 'X-PAS-Upstream-Status';
 
 const isTimeout = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
 import { type AllowlistRow, rowToRule } from './secrets-allowlist-row.js';
