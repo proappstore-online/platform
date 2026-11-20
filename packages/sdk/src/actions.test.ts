@@ -102,6 +102,15 @@ describe('Actions', () => {
     expect(plain).toMatchObject({ status: 500, code: null, body: null, forbidden: false });
   });
 
+  // #606: a 503 from an overloaded database carries its code and wait to the caller.
+  it('exposes the platform errorCode and Retry-After on an ActionError', async () => {
+    const a = auth(Response.json({ error: 'x', errorCode: 'd1_overloaded' }, { status: 503, headers: { 'Retry-After': '5' } }));
+    const err = await new Actions('interns', 'https://api.proappstore.online', a).call('x').catch((e) => e);
+    expect(err).toMatchObject({ status: 503, errorCode: 'd1_overloaded', retryAfterSeconds: 5 });
+    const plain = await new Actions('interns', 'https://api.proappstore.online', auth(new Response('boom', { status: 500 }))).call('x').catch((e) => e);
+    expect(plain).toMatchObject({ errorCode: null, retryAfterSeconds: null });
+  });
+
   // #344: `forbidden` means a missing role, not every 403.
   it('dryRun sends dry_run: true and returns the dry-run answer (#428)', async () => {
     const a = auth(Response.json({ dry_run: true, state: 'staged', rows: [] }));

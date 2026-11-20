@@ -307,7 +307,9 @@ export async function executeToolCall(
 
   if (!res.ok) {
     const text = await res.text();
-    return errText(`Error from platform action executor (${res.status}): ${text}`);
+    // #606: the body carries the stable errorCode; the wait the platform asked for is not in it.
+    const retryAfter = res.headers?.get?.('Retry-After');
+    return errText(`Error from platform action executor (${res.status}): ${text}${retryAfter ? ` (retry after ${retryAfter}s)` : ''}`);
   }
 
   const result = await res.json();

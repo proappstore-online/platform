@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireAppAccess, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
+import { sqlFingerprints } from '../lib/sql-fingerprint.js';
 import { DATA_FAULT_DETAIL_HEADER, DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
 import { isChildAccount } from '../lib/user-flags.js';
@@ -236,7 +237,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     return cachedPublicQuery(c.env, c.req.url, appId, name, payload, manifest.cache_ttl, (p) => c.executionCtx.waitUntil(p), traceparent);
   }
   const upstream = await forwardToDataWorker(c.env, appId, endpoint, payload, token, traceparent);
-  return passThrough(upstream, await upstream.text());
+  return passThrough(upstream, await upstream.text(), { appId, action: name, payload });
 });
 
 /** #428: what a dry run answers: the shape of a real answer, with nothing read or written. */
@@ -278,7 +279,7 @@ async function cachedPublicQuery(
 
   const upstream = await forwardToDataWorker(env, appId, 'query', payload, null, traceparent);
   const text = await upstream.text();
-  if (upstream.status !== 200) return passThrough(upstream, text);
+  if (upstream.status !== 200) return passThrough(upstream, text, { appId, action: name, payload });
   const res = new Response(text, {
     headers: {
       'Cache-Control': `public, max-age=${ttl}`,
@@ -310,9 +311,37 @@ export async function forwardToDataWorker(env: Env, appId: string, endpoint: str
   });
 }
 
-/** A data-worker answer as the action's answer. A 5xx is thrown instead (#394): see DataWorkerFailure. */
-function passThrough(upstream: Response, text: string): Response {
-  if (upstream.status >= 500) throw new DataWorkerFailure(upstream.status, dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)), upstream.headers.get(DATA_FAULT_DETAIL_HEADER));
+/** The stable `errorCode` of a data-worker error body, or null when the body is not JSON or has none. */
+function upstreamErrorCode(text: string): string | null {
+  try {
+    const code = (JSON.parse(text) as { errorCode?: unknown }).errorCode;
+    return typeof code === 'string' ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A data-worker answer as the action's answer. A 5xx is thrown instead (#394): see DataWorkerFailure.
+ * #606: a 5xx or a D1 class (`d1_*`) is logged with the action, app and SQL fingerprint, never the bound values,
+ * and the data worker's code and Retry-After ride the thrown failure to the caller. A 4xx body passes through as is.
+ */
+async function passThrough(upstream: Response, text: string, at: { appId: string; action: string; payload: unknown }): Promise<Response> {
+  const code = upstream.status >= 400 ? upstreamErrorCode(text) : null;
+  if (upstream.status >= 500 || code?.startsWith('d1_')) {
+    console.error('Data worker failure:', {
+      appId: at.appId,
+      action: at.action,
+      status: upstream.status,
+      errorCode: code,
+      fault: dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)),
+      sql: await sqlFingerprints(at.payload),
+    });
+  }
+  if (upstream.status >= 500) {
+    const retryAfter = Number.parseInt(upstream.headers.get('Retry-After') ?? '', 10);
+    throw new DataWorkerFailure(upstream.status, dataFaultOf(upstream.headers.get(DATA_FAULT_HEADER)), upstream.headers.get(DATA_FAULT_DETAIL_HEADER), code, Number.isNaN(retryAfter) ? null : retryAfter);
+  }
   return new Response(text, {
     status: upstream.status,
     headers: {
@@ -358,7 +387,7 @@ async function runVerifyAction(
   }
   const read = await forwardToDataWorker(env, appId, 'query', query, token, traceparent);
   const readText = await read.text();
-  if (!read.ok) return passThrough(read, readText);
+  if (!read.ok) return passThrough(read, readText, { appId, action: manifest.name, payload: query });
   let rows: unknown;
   try {
     rows = (JSON.parse(readText) as { rows?: unknown }).rows;
@@ -377,7 +406,7 @@ async function runVerifyAction(
 
   const written = await forwardToDataWorker(env, appId, 'batch', { statements: writes }, token, traceparent);
   const writtenText = await written.text();
-  if (!written.ok) return passThrough(written, writtenText);
+  if (!written.ok) return passThrough(written, writtenText, { appId, action: manifest.name, payload: { statements: writes } });
   let results: { meta?: unknown }[] = [];
   try {
     results = (JSON.parse(writtenText) as { results?: { meta?: unknown }[] }).results ?? [];

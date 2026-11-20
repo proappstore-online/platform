@@ -689,7 +689,6 @@ describe("fault verdict and trace context (#394)", () => {
     ["near \"SELEC\": syntax error", "tenant"],
     ["D1_TYPE_ERROR: Type 'object' not supported for value '[object Object]'", "tenant"],
     ["D1_ERROR: Network connection lost.", "platform"],
-    ["D1 DB is overloaded. Too many requests queued.", "platform"],
     ["something unexpected", "platform"],
   ])("%s → %s", async (message, fault) => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -699,6 +698,30 @@ describe("fault verdict and trace context (#394)", () => {
     expect(await res.json()).toEqual({ error: "internal server error" });
     // Its own log line names the trace, route pattern and verdict.
     expect(errSpy).toHaveBeenCalledWith("Unhandled error:", expect.objectContaining({ traceId: "ab".repeat(16), route: "/query", fault }));
+    errSpy.mockRestore();
+  });
+
+  // #606: a D1 overload, timeout or limit is a classified answer, not a bare 500.
+  it.each([
+    ["D1 DB is overloaded. Too many requests queued.", 503, "d1_overloaded", "platform", "5"],
+    ["D1_ERROR: Requests queued for too long", 503, "d1_overloaded", "platform", "5"],
+    ["D1_ERROR: D1 DB storage operation exceeded timeout which caused object to be reset", 503, "d1_timeout", "platform", "10"],
+    ["Worker exceeded CPU time limit", 503, "d1_timeout", "platform", "10"],
+    ["D1_ERROR: too many SQL variables at offset 52: SQLITE_ERROR", 400, "d1_too_many_parameters", "tenant", null],
+    ["D1_ERROR: statement too long: SQLITE_TOOBIG", 413, "d1_statement_too_long", "tenant", null],
+    ["D1_ERROR: Maximum response size exceeded: too many rows", 413, "d1_result_too_large", "tenant", null],
+    ["D1_ERROR: LIKE or GLOB pattern too complex: SQLITE_ERROR", 400, "d1_query_too_complex", "tenant", null],
+    ["INVALID_ARGUMENT: bad query", 400, "d1_invalid_query", "tenant", null],
+  ])("D1 error %s → %i %s", async (message, status, errorCode, fault, retryAfter) => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await app.request("/query", internalQuery(JSON.stringify({ sql: "SELECT secret FROM t" })), makeEnv(failingDb(message) as never, INTERNAL_TOKEN));
+    expect(res.status).toBe(status);
+    expect(res.headers.get("Retry-After")).toBe(retryAfter);
+    expect(res.headers.get("X-PAS-Fault")).toBe(fault);
+    const body = (await res.json()) as { error: string; errorCode: string };
+    expect(body.errorCode).toBe(errorCode);
+    // Fixed text: D1's own message is never echoed.
+    expect(JSON.stringify(body)).not.toContain("secret");
     errSpy.mockRestore();
   });
 

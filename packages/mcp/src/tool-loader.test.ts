@@ -180,6 +180,17 @@ describe('executeToolCall', () => {
     requires_auth: true,
   };
 
+  it('passes the status, errorCode and Retry-After of a failed action to the MCP caller (#606)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      Response.json({ error: 'data worker returned 503 (platform fault)', errorCode: 'd1_overloaded' }, { status: 503, headers: { 'Retry-After': '5' } }),
+    );
+    const result = await executeToolCall(tool, {}, 'session-token', api, 'https://api.proappstore.online');
+    const text = result.content[0].text;
+    expect(text).toContain('(503)');
+    expect(text).toContain('d1_overloaded');
+    expect(text).toContain('retry after 5s');
+  });
+
   it('uses the platform action executor instead of calling the data worker directly', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       Response.json({ rows: [{ id: 'org-1' }] }),

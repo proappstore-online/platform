@@ -430,6 +430,35 @@ export function faultOf(err: unknown): 'platform' | 'tenant' | 'client' {
   return 'platform';
 }
 
+/**
+ * #606: a D1 failure the caller can act on, answered with a stable `errorCode` instead of a bare 500.
+ * Overload and timeouts are the platform's and retryable (503 + Retry-After); a D1 limit or an invalid
+ * query is the caller's (4xx, the code names the limit). The text is fixed: D1's own message can quote SQL.
+ * Anything not listed here stays an unknown 500.
+ */
+export interface D1ErrorClass {
+  status: 400 | 413 | 503;
+  errorCode: string;
+  error: string;
+  fault: 'platform' | 'tenant';
+  retryAfterSeconds?: number;
+}
+
+const D1_ERROR_CLASSES: { match: RegExp; cls: D1ErrorClass }[] = [
+  { match: /overloaded|requests queued|queued for too long/i, cls: { status: 503, errorCode: 'd1_overloaded', error: 'database overloaded, retry shortly', fault: 'platform', retryAfterSeconds: 5 } },
+  { match: /timed out|timeout|exceeded (its )?cpu|cpu time limit|time limit|SQLITE_INTERRUPT|interrupted/i, cls: { status: 503, errorCode: 'd1_timeout', error: 'database query timed out, retry later', fault: 'platform', retryAfterSeconds: 10 } },
+  { match: /too many SQL variables|too many (bound )?parameters/i, cls: { status: 400, errorCode: 'd1_too_many_parameters', error: 'too many bound parameters in one statement (D1 allows 100)', fault: 'tenant' } },
+  { match: /statement too long|SQLITE_TOOBIG|string or blob too big/i, cls: { status: 413, errorCode: 'd1_statement_too_long', error: 'SQL statement or value exceeds the D1 size limit', fault: 'tenant' } },
+  { match: /too many rows|result (set )?(is )?too (large|big)|response size/i, cls: { status: 413, errorCode: 'd1_result_too_large', error: 'query result exceeds the D1 size limit; narrow it or page it', fault: 'tenant' } },
+  { match: /too many terms in compound|expression tree is too large|LIKE or GLOB pattern too complex|too many columns/i, cls: { status: 400, errorCode: 'd1_query_too_complex', error: 'query exceeds a D1 complexity limit', fault: 'tenant' } },
+  { match: /INVALID_ARGUMENT/, cls: { status: 400, errorCode: 'd1_invalid_query', error: 'the database rejected the query as invalid', fault: 'tenant' } },
+];
+
+export function classifyD1Error(err: unknown): D1ErrorClass | null {
+  const message = err instanceof Error ? err.message : String(err);
+  return D1_ERROR_CLASSES.find((e) => e.match.test(message))?.cls ?? null;
+}
+
 /** The trace id of the caller's W3C traceparent, for this worker's own log line. Correlation only. */
 function traceIdOf(header: string | undefined): string | null {
   return /^00-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(header?.trim().toLowerCase() ?? '')?.[1] ?? null;
@@ -492,6 +521,17 @@ app.onError((err, c) => {
     const { status, ...body } = rejection;
     const res = c.json(body, status);
     res.headers.set('Cache-Control', 'no-store');
+    setCorsHeaders(res, origin);
+    return res;
+  }
+  const classified = classifyD1Error(err);
+  if (classified) {
+    const { status, errorCode, error, fault, retryAfterSeconds } = classified;
+    console.error('D1 error:', { traceId: traceIdOf(c.req.header('traceparent')), route: c.req.routePath, errorCode, status });
+    const res = c.json({ error, errorCode }, status);
+    res.headers.set('X-PAS-Fault', fault);
+    res.headers.set('Cache-Control', 'no-store');
+    if (retryAfterSeconds) res.headers.set('Retry-After', String(retryAfterSeconds));
     setCorsHeaders(res, origin);
     return res;
   }

@@ -78,8 +78,14 @@ export function isPlatformFault(fault: DataFault): boolean {
 export class DataWorkerFailure extends HttpError {
   /** The bounded error text of a tenant fault (#501), for the owner's operation log only: the response never carries it. */
   readonly detail: string | null;
-  constructor(status: number, readonly fault: DataFault, detail?: string | null) {
+  /** #606: the data worker's stable class for a D1 overload or timeout (`d1_overloaded`, `d1_timeout`), null for an unknown fault. */
+  readonly code: string | null;
+  /** #606: whole seconds the data worker asked the caller to wait, null when it sent none. */
+  readonly retryAfterSeconds: number | null;
+  constructor(status: number, readonly fault: DataFault, detail?: string | null, code?: string | null, retryAfterSeconds?: number | null) {
     super(`data worker returned ${status} (${fault} fault)`, status);
     this.detail = detail?.trim() ? detail.slice(0, 200) : null;
+    this.code = code && /^d1_[a-z_]{3,40}$/.test(code) ? code : null;
+    this.retryAfterSeconds = retryAfterSeconds && Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0 && retryAfterSeconds <= 3600 ? retryAfterSeconds : null;
   }
 }

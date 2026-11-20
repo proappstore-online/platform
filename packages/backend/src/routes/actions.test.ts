@@ -589,3 +589,62 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
     expect(noFetch).not.toHaveBeenCalled();
   });
 });
+
+describe('data-worker D1 failures (#606)', () => {
+  const call = (body: unknown, init: ResponseInit) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(body, init)));
+    return app.request(
+      '/v1/apps/interns/actions/list_mine',
+      { method: 'POST', headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ params: { limit: 10 } }) },
+      env(db(stmt({ first: { manifest: manifest() } }))),
+    );
+  };
+
+  it.each([
+    ['d1_overloaded', '5'],
+    ['d1_timeout', '10'],
+  ])('%s: 503 with the code and Retry-After, and a log line with the SQL fingerprint but no bound values', async (errorCode, retryAfter) => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call({ error: 'database overloaded', errorCode }, { status: 503, headers: { 'Retry-After': retryAfter, 'X-PAS-Fault': 'platform' } });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe(retryAfter);
+    expect(await res.json()).toMatchObject({ errorCode });
+    const logged = errSpy.mock.calls.find((c) => c[0] === 'Data worker failure:')![1] as { appId: string; action: string; sql: { id: string; shape: string }[] };
+    expect(logged).toMatchObject({ appId: 'interns', action: 'list_mine', status: 503, errorCode });
+    expect(logged.sql[0]!.id).toMatch(/^[0-9a-f]{12}$/);
+    expect(logged.sql[0]!.shape).toContain('select * from items');
+    expect(JSON.stringify(logged)).not.toContain('gh:1');
+    errSpy.mockRestore();
+  });
+
+  it.each([
+    [400, 'd1_too_many_parameters'],
+    [413, 'd1_statement_too_long'],
+    [413, 'd1_result_too_large'],
+    [400, 'd1_invalid_query'],
+  ])('%i %s passes through unchanged and is logged', async (status, errorCode) => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call({ error: 'limit', errorCode }, { status });
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: 'limit', errorCode });
+    expect(errSpy).toHaveBeenCalledWith('Data worker failure:', expect.objectContaining({ errorCode, status }));
+    errSpy.mockRestore();
+  });
+
+  it('an unclassified 500 stays a 500 with the generic code and no Retry-After', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call({ error: 'internal server error' }, { status: 500, headers: { 'X-PAS-Fault': 'platform' } });
+    expect(res.status).toBe(500);
+    expect(res.headers.get('Retry-After')).toBeNull();
+    expect(await res.json()).toMatchObject({ error: 'data worker returned 500 (platform fault)', errorCode: 'internal_error' });
+    errSpy.mockRestore();
+  });
+
+  it('ignores a malformed code or Retry-After from upstream', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call({ errorCode: 'not a code' }, { status: 503, headers: { 'Retry-After': 'soon' } });
+    expect(res.headers.get('Retry-After')).toBeNull();
+    expect((await res.json() as { errorCode: string }).errorCode).not.toBe('not a code');
+    errSpy.mockRestore();
+  });
+});

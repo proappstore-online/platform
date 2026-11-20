@@ -226,7 +226,7 @@ app.onError(async (err, c) => {
   const { traceId, spanId, parentSpanId } = requestTrace(c.req.raw);
   // #394: a data-worker 5xx is that worker's, with its own fault verdict, not the API's.
   const dataFailure = err instanceof DataWorkerFailure ? err : null;
-  const errorCode = safeErrorCode(status, err instanceof HttpError ? err.message : null);
+  const errorCode = dataFailure?.code ?? safeErrorCode(status, err instanceof HttpError ? err.message : null);
   const body = err instanceof HttpError
     ? { ...err.body, error: err.message, errorCode, traceId }
     : { error: 'Internal server error', errorCode, traceId };
@@ -291,11 +291,16 @@ app.onError(async (err, c) => {
   res.headers.set(TRACE_ID_HEADER, traceId);
   // A data-worker failure kept passThrough's no-store, so no cache keeps the error.
   if (dataFailure) res.headers.set('Cache-Control', 'no-store');
+  // #606: a data worker's retry hint reaches the caller.
+  if (dataFailure?.retryAfterSeconds) {
+    res.headers.set('Retry-After', String(dataFailure.retryAfterSeconds));
+    res.headers.set('Access-Control-Expose-Headers', `${TRACE_ID_HEADER}, Retry-After`);
+  }
   if (origin) {
     res.headers.set('Access-Control-Allow-Origin', origin);
     res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, traceparent');
-    res.headers.set('Access-Control-Expose-Headers', TRACE_ID_HEADER);
+    if (!res.headers.has('Access-Control-Expose-Headers')) res.headers.set('Access-Control-Expose-Headers', TRACE_ID_HEADER);
   }
   return res;
 });

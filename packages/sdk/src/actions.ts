@@ -57,13 +57,20 @@ export interface ActionVerifyResult<TOutput = Record<string, string | number | b
  * with — the same id as the server's log row and the response's `traceId` — and
  * `durationMs` how long it took; both are null on an error built without them.
  */
+function retryAfterSeconds(response: Response): number | null {
+  const n = Number.parseInt(response.headers?.get?.('Retry-After') ?? '', 10);
+  return Number.isNaN(n) || n <= 0 ? null : n;
+}
+
 export class ActionError extends Error {
   readonly code: string | null;
   readonly body: Record<string, unknown> | null;
   readonly traceId: string | null;
   readonly durationMs: number | null;
+  /** #606: seconds the platform asked the caller to wait (a 503 from an overloaded database), null when it sent no hint. */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(readonly action: string, readonly status: number, text: string, trace?: { traceId: string; durationMs: number }) {
+  constructor(readonly action: string, readonly status: number, text: string, trace?: { traceId: string; durationMs: number; retryAfterSeconds?: number | null }) {
     super(`actions.${action} failed: ${status} ${text}`);
     this.name = 'ActionError';
     let body: unknown = null;
@@ -72,6 +79,12 @@ export class ActionError extends Error {
     this.code = typeof this.body?.error === 'string' ? this.body.error : null;
     this.traceId = trace?.traceId ?? null;
     this.durationMs = trace?.durationMs ?? null;
+    this.retryAfterSeconds = trace?.retryAfterSeconds ?? null;
+  }
+
+  /** The platform's stable error code (`d1_overloaded`, `d1_timeout`, `d1_too_many_parameters`, …), null when the body has none. */
+  get errorCode(): string | null {
+    return typeof this.body?.errorCode === 'string' ? this.body.errorCode : null;
   }
 
   /** The server wants a recent sign-in (or a passkey check, see {@link needsPasskey}) before it runs this action. */
@@ -182,7 +195,7 @@ export class Actions {
   private async failed(name: string, ctx: RequestContext, response: Response): Promise<ActionError> {
     const text = await response.text().catch(() => '');
     const durationMs = Date.now() - ctx.startedAt;
-    const error = new ActionError(name, response.status, text, { traceId: ctx.traceId, durationMs });
+    const error = new ActionError(name, response.status, text, { traceId: ctx.traceId, durationMs, retryAfterSeconds: retryAfterSeconds(response) });
     this.logger?.capture('error', 'action', `action ${name} failed`, { action: name, status: response.status }, failureContext(ctx, durationMs, error.body?.errorCode));
     return error;
   }
