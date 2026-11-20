@@ -444,6 +444,21 @@ describe('ALL /v1/apps/:appId/proxy/* — outbound bounds (#225)', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('a provider 401 is a 502 with X-PAS-Upstream-Status, never a platform-session 401 (#608)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'bad key' }, { status: 401, statusText: 'Unauthorized' })));
+    const res = await (await setup('header'))();
+    expect(res.status).toBe(502);
+    expect(res.headers.get('X-PAS-Upstream-Status')).toBe('401');
+    expect(await res.json()).toEqual({ error: 'bad key' });
+  });
+
+  it('other provider statuses pass through unchanged, with no upstream-status header', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('no', { status: 403 })));
+    const res = await (await setup('header'))();
+    expect(res.status).toBe(403);
+    expect(res.headers.get('X-PAS-Upstream-Status')).toBeNull();
+  });
+
   it('an upstream that never answers is a 504 after PROXY_UPSTREAM_TIMEOUT_MS', async () => {
     const t = timeoutControl();
     vi.stubGlobal('fetch', vi.fn(hang));

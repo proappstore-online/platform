@@ -13,6 +13,9 @@ import type { Env } from '../types.js';
 /** Bound on the upstream call, headers and body (#225). */
 export const PROXY_UPSTREAM_TIMEOUT_MS = 30_000;
 
+/** Set on a proxied response whose provider answered 401; the HTTP status is 502 (#608). */
+export const UPSTREAM_STATUS_HEADER = 'X-PAS-Upstream-Status';
+
 const isTimeout = (err: unknown) => err instanceof Error && err.name === 'TimeoutError';
 import { type AllowlistRow, rowToRule } from './secrets-allowlist-row.js';
 import {
@@ -307,8 +310,15 @@ export function registerProxyRoute(secretsRoutes: Hono<{ Bindings: Env }>) {
       // a browser sniff or run it as a page there (#587 review).
       respHeaders.set('X-Content-Type-Options', 'nosniff');
       respHeaders.set('Content-Security-Policy', 'sandbox');
+      // The provider's own 401 (a bad or expired key) is not a platform-session
+      // signal, but the host clears the session cookie and the SDK signs the user
+      // out on any 401 from /.pas/api. Surface it as a 502 with the real status in
+      // X-PAS-Upstream-Status; the body and headers are the provider's. Other
+      // statuses pass through unchanged (#608).
+      const upstreamAuthRejected = upstreamRes.status === 401;
+      if (upstreamAuthRejected) respHeaders.set(UPSTREAM_STATUS_HEADER, '401');
       return new Response(respBuf, {
-        status: upstreamRes.status,
+        status: upstreamAuthRejected ? 502 : upstreamRes.status,
         statusText: upstreamRes.statusText,
         headers: respHeaders,
       });

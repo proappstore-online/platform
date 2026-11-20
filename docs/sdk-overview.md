@@ -81,7 +81,10 @@ app.rooms.join(roomId) → room.send() / .onMessage() / .onPeers() / .close()
 // Secret-injecting API proxy — requires authMode: 'platform-cookie' (calls are
 // bound to the app's own origin; a legacy-bearer call gets 403). The host refuses
 // /.pas/api navigations and requests the browser marks as not same-origin, and
-// proxy responses carry nosniff + CSP sandbox.
+// proxy responses carry nosniff + CSP sandbox. A provider's own 401 (bad or
+// expired key) comes back as 502 with `X-PAS-Upstream-Status: 401` and the
+// provider's body, so it never signs the user out; a 401 from the proxy itself
+// is still a platform-session 401.
 app.proxy.fetch(url, opts)
 
 // The signed-in user's own keys for this app (BYO keys, #587) — platform-cookie only.

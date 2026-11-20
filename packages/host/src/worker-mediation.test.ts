@@ -64,3 +64,23 @@ describe("/.pas/worker mediation (#260)", () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+describe("/.pas/api session 401 vs proxied provider 401 (#608)", () => {
+  const proxyPath = "/.pas/api/v1/apps/doordrop/proxy/api.example.com/v1/thing";
+  const apiReq = () => req(proxyPath, { headers: { "Sec-Fetch-Site": "same-origin" } });
+
+  it("a provider 401 surfaced by the proxy (502 + X-PAS-Upstream-Status) keeps the session cookie", async () => {
+    const API = { fetch: vi.fn(async () => new Response("{}", { status: 502, headers: { "X-PAS-Upstream-Status": "401" } })) };
+    const res = await handlePlatformMediation(apiReq(), { API } as unknown as Env, route, ctx);
+    expect(res!.status).toBe(502);
+    expect(res!.headers.get("X-PAS-Upstream-Status")).toBe("401");
+    expect(res!.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("a genuine platform 401 on the same route still clears the session cookie", async () => {
+    const { env } = capture(401);
+    const res = await handlePlatformMediation(apiReq(), env, route, ctx);
+    expect(res!.status).toBe(401);
+    expect(res!.headers.get("Set-Cookie")).toContain(`${SESSION_COOKIE_NAME}=`);
+  });
+});
