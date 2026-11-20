@@ -38,6 +38,7 @@ packages and commits the version bumps back.
 | `platform/packages/*` | Workers and libraries — `backend` (the `proappstore-api` worker), `host`, `kb-host`, `mcp`, `mcp-registry`, `admin`, `agent-teams`, `data-worker`, `qa-worker`, `build-core`, `compliance`, `qa-spec`, `sdk`, `cli` |
 | `../proappstore/` | The storefront static site (plain HTML + `build.js`) |
 | `../apps/<slug>/` | **One org repo per published app**, cloned locally. `console` = creator console, `dashboard` = subscriber dashboard; the rest are real apps |
+| `platform/brand/` | The PAS brand guide (`BRAND.md`) and the full kit export (`assets/`); the guide lists every repo that carries a deployed copy |
 | `../templates/` | App scaffolds |
 
 A defect "in the console" is a commit in `proappstore-online/console`, not here. Check which repo an

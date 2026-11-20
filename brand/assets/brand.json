@@ -1,0 +1,13 @@
+{
+  "version": "2026-11-18",
+  "id": "pas",
+  "name": "ProAppStore",
+  "prefix": "Pro",
+  "noun": "App",
+  "family": "apps",
+  "accent": "#7c3aed",
+  "darkAccent": "#a78bfa",
+  "gradient": "#a78bfa",
+  "ink": "#ffffff",
+  "domain": "proappstore.online"
+}

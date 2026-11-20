@@ -587,3 +587,6 @@ An app's palette lives in the **values** of the PAS tokens, for example
 `--accent: #d86f4d` in `:root` and in the dark block. Migrating an app to this
 model changes how the tokens are *used* (utilities instead of bespoke classes),
 never what they are *set to*. Keep the app's token values when you migrate.
+
+The platform's own identity (the ProAppStore name, symbol and colours) is documented in the
+[brand guide](https://github.com/proappstore-online/platform/blob/main/brand/BRAND.md).

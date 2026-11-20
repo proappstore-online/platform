@@ -107,6 +107,11 @@ pnpm test:runtime   # Cloudflare-runtime integration tests (workerd + real D1)
 - Push to main → auto-deploy backend + data-workers via GitHub Actions
 - SDK/CLI auto-publish to npm via OIDC on version bump
 
+## Brand
+
+The ProAppStore identity (name, symbol, colours, the full asset export and where it ships) is in
+[`brand/BRAND.md`](brand/BRAND.md).
+
 ## License
 
 MIT.
