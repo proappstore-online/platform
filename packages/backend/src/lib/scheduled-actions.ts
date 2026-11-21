@@ -362,7 +362,13 @@ export async function runScheduledActions(opts: { env: Env; now?: number }): Pro
   const dueAt = minute(now);
   const report: ScheduledActionReport = { due: 0, claimed: 0, succeeded: 0, failed: 0, recovered: 0, skipped: 0 };
   report.recovered = await recoverStaleClaims(opts.env, now);
-  const rows = await opts.env.DB.prepare('SELECT app_id, name, manifest, source FROM app_tools').all<ScheduledToolRow>();
+  // #597: only the actions that have a schedule, through the partial index
+  // idx_app_tools_scheduled (migration 0145), not the whole table every tick. The
+  // predicate must stay textually equal to the index's, or the planner scans again.
+  const rows = await opts.env.DB.prepare(
+    `SELECT app_id, name, manifest, source FROM app_tools
+      WHERE CASE WHEN json_valid(manifest) THEN json_extract(manifest, '$.schedule') END IS NOT NULL`,
+  ).all<ScheduledToolRow>();
   for (const row of rows.results ?? []) {
     let manifest: ToolManifest;
     try { manifest = JSON.parse(row.manifest) as ToolManifest; } catch { continue; }

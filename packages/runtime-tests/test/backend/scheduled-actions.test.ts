@@ -63,6 +63,23 @@ const alerts = (appId: string) =>
   env.DB.prepare("SELECT COUNT(*) AS n FROM app_alerts WHERE app_id = ? AND kind = 'scheduled_action_failures'").bind(appId).first<{ n: number }>().then((r) => r?.n ?? 0);
 
 describe('scheduled actions — tenant isolation', () => {
+  // #597: the tick reads scheduled actions from a partial index instead of the whole table.
+  it('finds the scheduled action among unscheduled and unparseable rows, from idx_app_tools_scheduled on D1', async () => {
+    await register('alpha');
+    const { schedule: _schedule, ...plain } = reap;
+    const insert = env.DB.prepare("INSERT INTO app_tools (app_id, name, manifest, created_at, updated_at, source) VALUES ('alpha', ?, ?, 1, 1, 'code')");
+    await insert.bind('plain', JSON.stringify({ ...plain, name: 'plain' })).run();
+    await insert.bind('broken', '{"schedule": {"cron": ').run();
+    executes('alpha', 200, { meta: { changes: 0 } });
+
+    expect(await runScheduledActions({ env, now: tick(0) })).toMatchObject({ due: 1, claimed: 1, succeeded: 1, failed: 0 });
+    const plan = (await env.DB.prepare(
+      `EXPLAIN QUERY PLAN SELECT app_id, name, manifest, source FROM app_tools
+        WHERE CASE WHEN json_valid(manifest) THEN json_extract(manifest, '$.schedule') END IS NOT NULL`,
+    ).all<{ detail: string }>()).results.map((r) => r.detail);
+    expect(plan).toEqual(['SCAN app_tools USING INDEX idx_app_tools_scheduled']);
+  });
+
   it("two apps with a same-named action: each runs against only its own data worker, with separate breaker state", async () => {
     await register('alpha');
     await register('beta');
