@@ -36,7 +36,6 @@ export const MAX_PAS_CALLS_PER_INVOCATION = 200;
 /** ADR-009 §4: prepared statements per `actions.batch` (half of D1's 1,000 per invocation). */
 export const MAX_BATCH_STATEMENTS = 500;
 const MAX_BATCH_BODY_BYTES = 1024 * 1024;
-export { MAX_WORKER_OBJECT_BYTES };
 const STORAGE_KEY = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,511}$/;
 
 export type WorkerCallCode = 'Unauthorized' | 'TooManyCalls' | 'Forbidden' | 'NotFound' | 'BadRequest' | 'Unavailable' | 'Failed'

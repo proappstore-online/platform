@@ -131,8 +131,10 @@ describe('worker actions (#579)', () => {
 
   it('dry_run validates for the app team and never reaches the worker; others are refused', async () => {
     const invoke = stubWorker(reply(200, {}));
-    const dry = await call({ manifest: worker({ auth: undefined }) }, OWNER, { params: { org_id: 'o1' }, dry_run: true }).res;
+    const { res, audits } = call({ manifest: worker({ auth: undefined }) }, OWNER, { params: { org_id: 'o1' }, dry_run: true });
+    const dry = await res;
     expect(dry.status).toBe(200);
+    expect(audits).toHaveLength(0);
     expect(await dry.json()).toEqual({ dry_run: true, state: 'live' });
     expect((await call({ manifest: worker({ auth: undefined }) }, OWNER, { params: {}, dry_run: true }).res).status).toBe(400);
     expect((await call({ manifest: worker({ auth: undefined }) }, MANAGER, { params: { org_id: 'o1' }, dry_run: true }).res).status).toBe(403);

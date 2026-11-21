@@ -27,7 +27,7 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { openAppSecret } from '../lib/app-secrets.js';
-import { activeAppWorker, appWorkerHost, type AppWorkerExports } from '../lib/app-worker-host.js';
+import { activeAppWorker, appWorkerHost, executionExports, type AppWorkerExports } from '../lib/app-worker-host.js';
 import { actionCallers, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { encodeEnvelopeBody, hookHeaders, verifyHookDelivery, type HookVerify, type VerifiedDelivery } from '../lib/hook-verifiers.js';
 import { AppWorkerQuotaError, quotasFrom, reserveHookDelivery } from '../lib/app-worker-usage.js';
@@ -250,9 +250,7 @@ export async function ingestVerifiedDelivery(
     }
     return c.json({ accepted: true, delivery: row.id }, 202);
   }
-  let ctx: AppWorkerExports | undefined;
-  try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
-  runAfterResponse(c, deliverHook(c.env, delivery, ctx)
+  runAfterResponse(c, deliverHook(c.env, delivery, executionExports(c))
     .then((error) => finish(c.env, row.id, row.attempt_token!, error), (e) => { const r = notProcessed(e); return finish(c.env, row.id, row.attempt_token!, r.error, r.status); })
     .catch((e) => console.error(`[hooks] recording delivery ${row.id} failed: ${(e as Error)?.message ?? e}`)));
   return c.json({ accepted: true, delivery: row.id }, 202);

@@ -56,18 +56,15 @@
  */
 import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
-import { HttpError, isAdminId, requireAdmin, requireAppOwner, requireRecentAuth, type FasUser } from '../lib/auth.js';
+import { HttpError, isAdminId, requireAdmin, requireAppOwner, requireRecentAuth } from '../lib/auth.js';
 import { requireAppDeployOidc } from '../lib/app-deploy-oidc.js';
-import { activeAppWorker, appWorkerHost, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
+import { activeAppWorker, appWorkerHost, executionExports, disableAppWorker, parseBundle, rotateAppWorkerCredentials } from '../lib/app-worker-host.js';
 import { paramsOf, queueWorkerRun, runNowDueAt, WORKER_RUN_PREFIX } from '../lib/scheduled-actions.js';
 import { requireVisibleUser } from '../lib/visibility.js';
-import { mintCallerGrant } from '../lib/caller-grant.js';
 import { invokeAppWorkerHttp, WORKER_HTTP_MAX_REQUEST_BYTES } from '../lib/app-worker-http.js';
 import { readCapped } from './hooks.js';
-import { decodeEnvelopeBody, encodeEnvelopeBody } from '../app-worker-shim/body.js';
-import type { AppWorkerExports } from '../lib/app-worker-host.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
-import { AppWorkerQuotaError, appWorkerOwnerSelfServeOpen, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
+import { appWorkerOwnerSelfServeOpen, appWorkersOpen, appWorkerUsage, setAppWorkersOpen, validateQuotaOverrides } from '../lib/app-worker-usage.js';
 
 /** One manual run per schedule per minute (#255). */
 const RUN_NOW_INTERVAL_MS = 60_000;
@@ -458,6 +455,12 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
   if (!WORKER_HTTP_METHODS.has(method)) throw new HttpError('unsupported method', 405);
   if (!target.startsWith('/') || target.length > 2048 || /[\r\n]/.test(target)) throw new HttpError('invalid worker path', 400);
   if (!(await activeAppWorker(c.env, appId))) throw new HttpError('not found', 404);
+  // A worker action's path is reachable only through the action route, which runs the platform's gates first.
+  const q = target.indexOf('?');
+  const pathOnly = q === -1 ? target : target.slice(0, q);
+  const owned = await c.env.DB.prepare("SELECT 1 FROM app_tools WHERE app_id = ? AND json_extract(manifest, '$.operation') = 'worker' AND json_extract(manifest, '$.worker.path') = ?")
+    .bind(appId, pathOnly).first();
+  if (owned) throw new HttpError('this path is a worker action; call it through /v1/apps/<app>/actions/<name>', 403);
 
   // #385: refused on a declared length before reading, and otherwise read only up
   // to the limit — an oversized or chunked body is never buffered whole.
@@ -466,16 +469,11 @@ appWorkerRoutes.post('/apps/:appId/worker/http', async (c) => {
   }
   const bytes = await readCapped(c.req.raw, WORKER_HTTP_MAX_REQUEST_BYTES);
   if (!bytes) throw new HttpError(`request body exceeds ${WORKER_HTTP_MAX_REQUEST_BYTES} bytes`, 413);
-  const q = target.indexOf('?');
   const headers: Record<string, string> = {};
   for (const name of REQUEST_HEADERS) {
     const value = c.req.header(name);
     if (value !== undefined) headers[name] = value.slice(0, 1024);
   }
 
-  return invokeAppWorkerHttp(c.env, executionExports(c), appId, user, { method, path: q === -1 ? target : target.slice(0, q), query: q === -1 ? '' : target.slice(q + 1), headers, body: bytes });
+  return invokeAppWorkerHttp(c.env, executionExports(c), appId, user, { method, path: pathOnly, query: q === -1 ? '' : target.slice(q + 1), headers, body: bytes });
 });
-
-function executionExports(c: Context): AppWorkerExports | undefined {
-  try { return c.executionCtx as unknown as AppWorkerExports; } catch { return undefined; }
-}

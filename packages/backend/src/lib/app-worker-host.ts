@@ -123,6 +123,11 @@ export interface AppWorkerExports {
   };
 }
 
+/** The request's execution context as the loader's exports, or undefined outside a Workers request. */
+export function executionExports(c: { executionCtx: unknown }): AppWorkerExports | undefined {
+  try { return c.executionCtx as unknown as AppWorkerExports; } catch { return undefined; }
+}
+
 /**
  * The host for this deployment's backend. Never throws; an unusable backend
  * answers on use. Pass the request's ExecutionContext so invoked workers get

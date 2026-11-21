@@ -19,7 +19,7 @@ export const MAX_WORKER_OBJECT_BYTES = 10 * 1024 * 1024;
  * downloaded back through the same path.
  */
 export const WORKER_HTTP_MAX_REQUEST_BYTES = MAX_WORKER_OBJECT_BYTES + 1024 * 1024;
-export const WORKER_HTTP_MAX_RESPONSE_BYTES = MAX_WORKER_OBJECT_BYTES + 1024 * 1024;
+export const WORKER_HTTP_MAX_RESPONSE_BYTES = WORKER_HTTP_MAX_REQUEST_BYTES;
 /** ADR-009 §4: http events get 30 s. They are never retried. */
 const WORKER_HTTP_TIMEOUT_MS = 30_000;
 /** All a worker response may carry back; Cache-Control is forced, Set-Cookie and the rest never pass. */

@@ -24,7 +24,7 @@ import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyA
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
 import { APP_HOST_HEADER } from '../lib/app-context.js';
-import { activeAppWorker, type AppWorkerExports } from '../lib/app-worker-host.js';
+import { activeAppWorker, executionExports } from '../lib/app-worker-host.js';
 import { invokeAppWorkerHttp } from '../lib/app-worker-http.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
@@ -139,7 +139,6 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     if (!team) throw new HttpError("action is staged: only the app's owner and team can call it until the app goes live", 403);
   }
   let token: string | null = null;
-  let userId = '';
   // #579: who a worker action calls the worker as: the session user, or the app token's user.
   let caller: FasUser | null = null;
 
@@ -168,7 +167,6 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
       if (verified.scopes.actions && !verified.scopes.actions.includes(name)) {
         throw new HttpError('token is not scoped to this action', 403);
       }
-      userId = verified.user.id;
       caller = verified.user;
       grantRole(c.req.raw, verified.user, await enforceActionAuth(c.env.DB, appId, manifest, verified.user));
       // #231: an app token has no auth_time and can never step up.
@@ -181,7 +179,6 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     } else {
       const user = await requireUser(c);
       await requireVisible(c.env, appId, visibility, user);
-      userId = user.id;
       caller = user;
       grantRole(c.req.raw, user, await enforceActionAuth(c.env.DB, appId, manifest, user));
       // #231: after the role check, so a caller without the role is told that,
@@ -190,6 +187,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     }
   }
 
+  const userId = caller?.id ?? '';
   const body = await c.req.json<ActionBody>().catch(() => {
     throw new HttpError('invalid JSON body', 400);
   });
@@ -213,7 +211,10 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
     } catch (e) {
       throw new HttpError(e instanceof Error ? e.message : String(e), 400);
     }
-    if (dryRun) return dryRunResponse(manifest, state);
+    if (dryRun) {
+      roleGrants.delete(c.req.raw);
+      return dryRunResponse(manifest, state);
+    }
     return runWorkerAction(c, appId, manifest, params, caller!);
   }
   // A verify action's dry run stops after the auth checks: its input statement
@@ -324,9 +325,7 @@ async function runWorkerAction(
   caller: FasUser,
 ): Promise<Response> {
   if (!(await activeAppWorker(c.env, appId))) throw new HttpError('this app has no enabled, deployed app worker to run this action', 409);
-  let ctx: AppWorkerExports | undefined;
-  try { ctx = c.executionCtx as unknown as AppWorkerExports; } catch { ctx = undefined; }
-  return invokeAppWorkerHttp(c.env, ctx, appId, caller, {
+  return invokeAppWorkerHttp(c.env, executionExports(c), appId, caller, {
     method: 'POST',
     path: manifest.worker!.path,
     query: '',

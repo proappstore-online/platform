@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { app } from '../index.js';
+import * as host from '../lib/app-worker-host.js';
 import { makeEnv, testToken } from '../test-helpers.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
-import { MAX_WORKER_OBJECT_BYTES } from '../lib/app-worker-calls.js';
 import { parseAppWorkerCap } from './app-workers.js';
-import { WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from '../lib/app-worker-http.js';
+import { MAX_WORKER_OBJECT_BYTES, WORKER_HTTP_MAX_REQUEST_BYTES, WORKER_HTTP_MAX_RESPONSE_BYTES } from '../lib/app-worker-http.js';
 
 // #385: the worker HTTP plane takes a full-size worker document (10 MiB) plus
 // multipart framing, refuses a larger body without buffering it, and only after
@@ -15,11 +15,16 @@ const TOK = await testToken('gh:42');
 const CHUNK = 256 * 1024;
 
 /** The app `t` exists, is public, and has an enabled, deployed worker. */
-function db() {
+function db(workerPath: string | null = null) {
   const stmt = (sql: string) => {
+    let bound: unknown[] = [];
     const st = {
-      bind: () => st,
-      first: async () => (/FROM app_workers w/.test(sql) ? { app_id: 't', enabled: 1, deployed_at: 1, bundle_sha256: 'b', token_hash: 'h' } : null),
+      bind: (...a: unknown[]) => { bound = a; return st; },
+      first: async () => {
+        if (/FROM app_workers w/.test(sql)) return { app_id: 't', enabled: 1, deployed_at: 1, bundle_sha256: 'b', token_hash: 'h' };
+        if (/FROM app_tools/.test(sql)) return workerPath !== null && bound[1] === workerPath ? { 1: 1 } : null;
+        return null;
+      },
       all: async () => ({ results: [] }),
       run: async () => ({ meta: { changes: 1 } }),
     };
@@ -41,7 +46,7 @@ function stream(total: number) {
   return { body, pulled: () => pulled };
 }
 
-function post(body: ReadableStream<Uint8Array>, headers: Record<string, string> = {}, token: string | null = TOK) {
+function post(body: ReadableStream<Uint8Array>, headers: Record<string, string> = {}, token: string | null = TOK, workerPath: string | null = null) {
   return app.request('/v1/apps/t/worker/http', {
     method: 'POST',
     body,
@@ -50,7 +55,7 @@ function post(body: ReadableStream<Uint8Array>, headers: Record<string, string> 
       [APP_CONTEXT_HEADER]: 't', 'X-PAS-Worker-Method': 'POST', 'X-PAS-Worker-Path': '/upload',
       ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers,
     },
-  } as RequestInit, makeEnv({ DB: db() }));
+  } as RequestInit, makeEnv({ DB: db(workerPath) }));
 }
 
 describe('worker HTTP size limits (#385)', () => {
@@ -81,6 +86,19 @@ describe('worker HTTP size limits (#385)', () => {
     const direct = stream(WORKER_HTTP_MAX_REQUEST_BYTES);
     expect((await post(direct.body, { [APP_CONTEXT_HEADER]: 'other' })).status).toBe(403);
     expect(direct.pulled()).toBe(0);
+  });
+});
+
+describe('a worker action path is not reachable through /worker/http', () => {
+  it('refuses a signed-in non-manager posting to the declared worker.path, with or without a query, and never invokes the worker', async () => {
+    const invoke = vi.fn();
+    vi.spyOn(host, 'appWorkerHost').mockReturnValue({ backend: 'loader', invoke, deploy: vi.fn(), remove: vi.fn() } as unknown as host.AppWorkerHost);
+    for (const path of ['/actions/invite', '/actions/invite?x=1']) {
+      const res = await post(stream(10).body, { 'X-PAS-Worker-Path': path, 'content-type': 'application/json' }, TOK, '/actions/invite');
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toMatch(/worker action/);
+    }
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

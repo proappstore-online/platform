@@ -590,13 +590,14 @@ Rules (enforced at registration):
 - The action has no `sql` and no `statements`, and `requires_auth` is `true`: there are no public worker actions.
 - `callers` is omitted or `["user"]`. A `worker` or `hook` caller makes no sense for it.
 - It cannot be scheduled.
+- Its `worker.path` is reachable only through the action route. A browser request to that path under `/.pas/worker` is refused with `403`, because the action route is where the platform checks `auth`, `step_up`, token scopes and the staged state before the worker runs.
 - `read_only: true` declares that it only reads. Without it the action counts as a **write**: a read-only app
   token and MCP read-only mode (`MCP_READ_ONLY`) refuse it, and the MCP tool is annotated as destructive.
 - `sensitive: true` declares that params and response are secrets (a tax file number, a key). The platform
   never writes either to a log or an audit row for any action, so this flag is a promise the app keeps:
   do not log them in the worker either. Every worker action is audited, role-gated or not: one `app_action_audit` row
   with the action, the actor, the role that granted it (empty when none did), the time and the status. Only a call the
-  worker answered with a 2xx is recorded. The MCP audit log holds the tool and app, never the params.
+  worker answered with a 2xx is recorded; a dry run is never recorded. The MCP audit log holds the tool and app, never the params.
 
 See also [MCP app tools](./mcp-app-tools.md#worker-actions).
 
