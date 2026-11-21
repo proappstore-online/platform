@@ -59,6 +59,7 @@ describe('knip.json', () => {
       'packages/sdk/src/hooks.ts': ['duplicates'],
       'packages/sdk/src/shell.tsx': ['duplicates'],
       'packages/backend/src/routes/app-workers.ts': ['duplicates'],
+      'packages/backend/src/lib/app-worker-http.ts': ['duplicates'],
     });
   });
 });
