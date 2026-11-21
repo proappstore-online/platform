@@ -579,6 +579,34 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     );
   });
 
+  // #609: each call_app_tool used to re-read the app's whole manifest (asked as the caller, to
+  // find staged actions). The staged lookup is now its own filtered request.
+  it('consecutive call_app_tool calls on a 300-action app make one full-list request, and a staged action stays callable (#609)', async () => {
+    const live = Array.from({ length: 300 }, (_, i) => ({ name: `live_${i}`, description: `Live ${i}`, operation: 'query', params: {}, requires_auth: true }));
+    const staged = { name: 'draft_report', description: 'Not live yet', operation: 'query', requires_auth: true, params: {}, state: 'staged' };
+    const requests: { url: string; authed: boolean }[] = [];
+    globalThis.fetch = vi.fn().mockImplementation((request: Request | string, init?: RequestInit) => {
+      const url = String(request);
+      const authed = new Headers(init?.headers).has('Authorization');
+      requests.push({ url, authed });
+      if (url.includes('/actions/')) return Promise.resolve(Response.json({ rows: [{ id: url.split('/').pop() }] }));
+      // The backend's contract: staged rows to the team only under ?state=staged, live rows to anyone otherwise.
+      if (url.endsWith('/tools?state=staged')) return Promise.resolve(Response.json({ tools: authed ? [staged] : [] }));
+      return Promise.resolve(Response.json({ tools: live }));
+    });
+    const h = setup();
+    for (let i = 0; i < 20; i += 1) {
+      expect((await h.get('call_app_tool')!({ app_id: 'hiring', tool: `live_${i}` })).content[0].text).toContain(`live_${i}`);
+    }
+    expect((await h.get('call_app_tool')!({ app_id: 'hiring', tool: 'draft_report' })).content[0].text).toContain('draft_report');
+
+    const lists = requests.filter((r) => r.url.includes('/tools'));
+    expect(lists.filter((r) => r.url.endsWith('/v1/apps/hiring/tools'))).toHaveLength(1);
+    // Every other listing request is the staged-only one, asked as the caller.
+    expect(lists.filter((r) => r.url.endsWith('/v1/apps/hiring/tools?state=staged') && r.authed)).toHaveLength(21);
+    expect(lists).toHaveLength(22);
+  });
+
   it('call_app_tool runs a query through the platform action executor as the connected user', async () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(listing())

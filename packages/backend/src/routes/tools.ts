@@ -515,6 +515,12 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   const teamMember = await requireAppAccess(c, appId, 'viewer').then(() => true, () => false);
 
+  // #609: `?state=staged` is what the MCP asks on every app tool call. Only the team
+  // sees staged actions, so anyone else gets none without reading a row, and the
+  // team's read is the partial index idx_app_tools_staged, never the app's live rows.
+  const stagedOnly = c.req.query('state') === 'staged';
+  if (stagedOnly && !teamMember) return c.json({ tools: [] });
+
   // `source` tells the console which rows are code (mcp.json) and which are its
   // own endpoints (#155). The console `config` column is never listed here.
   // The app's visibility (#259) rides on the same read: an app with no tools has
@@ -522,7 +528,7 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const result = await c.env.DB.prepare(
     `SELECT t.name, t.manifest, t.updated_at, t.source, t.state, v.mode AS visibility_mode, v.roles AS visibility_roles
        FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
-      WHERE t.app_id = ? ORDER BY t.name`,
+      WHERE t.app_id = ?${stagedOnly ? " AND t.state = 'staged'" : ''} ORDER BY t.name`,
   ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; state?: string | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
 
   // A private app's tool list is part of the app: its team and allowed roles only.

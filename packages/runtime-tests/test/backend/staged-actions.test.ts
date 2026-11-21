@@ -74,6 +74,18 @@ describe('staged actions (#428)', () => {
     const team = (await (await SELF.fetch(`${BASE}/v1/apps/club/tools`, json('GET', undefined, await owner()))).json()) as { tools: { name: string; state: string }[] };
     expect(team.tools).toEqual([expect.objectContaining({ name: 'list_mine', state: 'staged' })]);
 
+    // #609: the MCP's per-call staged lookup. The team gets the staged rows, anyone else none,
+    // and on D1 it is the partial index, not a walk of the app's live rows.
+    const stagedFor = async (headers?: RequestInit) => ((await (await SELF.fetch(`${BASE}/v1/apps/club/tools?state=staged`, headers)).json()) as { tools: { name: string }[] }).tools;
+    expect(await stagedFor(json('GET', undefined, await owner()))).toEqual([expect.objectContaining({ name: 'list_mine', state: 'staged' })]);
+    expect(await stagedFor(json('GET', undefined, await session('gh:2')))).toEqual([]);
+    expect(await stagedFor()).toEqual([]);
+    const plan = (await env.DB.prepare(
+      `EXPLAIN QUERY PLAN SELECT t.name, t.manifest FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
+        WHERE t.app_id = ? AND t.state = 'staged' ORDER BY t.name`,
+    ).bind('club').all<{ detail: string }>()).results.map((r) => r.detail);
+    expect(plan[0]).toBe('SEARCH t USING INDEX idx_app_tools_staged (app_id=?)');
+
     runs('query');
     const own = await call('list_mine', await owner());
     expect(own.status).toBe(200);

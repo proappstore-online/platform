@@ -85,8 +85,8 @@ describe('an app-scoped /mcp/apps/<id> surface (#157)', () => {
     expect(names).toEqual(expect.arrayContaining(['tool_0', 'tool_1', 'tool_2', 'whoami', 'mcp_audit_log']));
     for (const n of names) expect(n).not.toContain('/');
     // The first request obtains public/live metadata; the authenticated second
-    // request additionally checks for private staged actions owned by this caller.
-    expect(fetched).toEqual(['https://api.test/v1/apps/crm/tools', 'https://api.test/v1/apps/crm/tools']);
+    // request asks only for private staged actions owned by this caller (#609).
+    expect(fetched).toEqual(['https://api.test/v1/apps/crm/tools', 'https://api.test/v1/apps/crm/tools?state=staged']);
     expect(names).not.toContain('list_app_tools');
   });
 });

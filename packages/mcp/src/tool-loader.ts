@@ -193,7 +193,9 @@ function publicToolFields(tool: AppTool): AppTool {
 async function fetchStagedTools(api: Fetcher, apiBase: string, appId: string, token?: string | null): Promise<AppTool[]> {
   if (!token) return [];
   try {
-    const res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`, { headers: { Authorization: `Bearer ${token}` } });
+    // #609: `?state=staged` so the backend reads only staged rows. This runs on every
+    // call_app_tool, and the unfiltered list read the app's whole manifest each time.
+    const res = await api.fetch(`${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools?state=staged`, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return [];
     return toolsFrom((await res.json()) as ToolsResponse, appId).filter((t) => t.state === 'staged').map(publicToolFields);
   } catch {
