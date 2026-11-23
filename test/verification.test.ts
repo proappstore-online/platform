@@ -10,7 +10,7 @@ import { commandFor, executeCommand, gates, gateStatus, releasePassed, run, supp
 describe('required verification report (#554)', () => {
   it('retains all mandatory gates, including coverage, both browsers and real D1', () => {
     expect(gates.map(([id]: string[]) => id)).toEqual([
-      'install', 'build', 'design', 'deploy-paths', 'knip', 'typecheck', 'unit',
+      'install', 'build', 'design', 'deploy-paths', 'cross-request-state', 'knip', 'typecheck', 'unit',
       'coverage', 'offline-browser', 'google-consent-browser', 'docs', 'runtime',
       'template-drift', 'skills',
     ]);

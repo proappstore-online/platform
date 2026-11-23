@@ -223,7 +223,7 @@ export function deploysTriggeredBy(pkg) {
   return Object.keys(DEPLOYS).filter((w) => existsSync(join(workflowsDir, w)) && triggerPackages(readFileSync(join(workflowsDir, w), 'utf8')).has(pkg)).sort();
 }
 
-export { packageDirs };
+export { packageDirs, sourceFiles };
 
 function main() {
   const { problems, map } = checkDeployPaths();

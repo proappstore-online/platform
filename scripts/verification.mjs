@@ -11,6 +11,7 @@ export const gates = [
   ['build', 'pnpm', ['-r', '--filter', './packages/*', 'build']],
   ['design', 'bash', ['scripts/check-design-system.sh', '.'], true],
   ['deploy-paths', 'node', ['scripts/check-deploy-paths.mjs']],
+  ['cross-request-state', 'node', ['scripts/check-cross-request-state.mjs']],
   ['knip', 'pnpm', ['knip']],
   ['typecheck', 'pnpm', ['-r', 'typecheck']],
   ['unit', 'pnpm', ['test'], true],

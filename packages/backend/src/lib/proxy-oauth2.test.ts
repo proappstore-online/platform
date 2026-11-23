@@ -54,12 +54,19 @@ describe('getOAuth2Token', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1); // only one fetch
   });
 
-  it('deduplicates concurrent requests for the same cacheKey', async () => {
-    mockTokenResponse('tok-dedup', 3600);
-    const [t1, t2] = await Promise.all([getOAuth2Token(opts), getOAuth2Token(opts)]);
-    expect(t1).toBe('tok-dedup');
-    expect(t2).toBe('tok-dedup');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+  it('gives each caller that misses the cache together its own exchange, never a shared in-flight one (#655)', async () => {
+    // A promise awaited by a request other than the one that created it fails once
+    // that request ends (#616), so concurrent callers must not share one refresh.
+    const releases: ((r: Response) => void)[] = [];
+    mockFetch.mockImplementation(() => new Promise<Response>((resolve) => { releases.push(resolve); }));
+    const a = getOAuth2Token(opts);
+    const b = getOAuth2Token(opts);
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    for (const release of releases) release({ ok: true, json: () => Promise.resolve({ access_token: 'tok-own', expires_in: 3600 }) } as Response);
+    expect(await Promise.all([a, b])).toEqual(['tok-own', 'tok-own']);
+    // Once one has landed, later callers use the cache.
+    await expect(getOAuth2Token(opts)).resolves.toBe('tok-own');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('throws on non-200 response', async () => {
@@ -99,7 +106,7 @@ describe('getOAuth2Token', () => {
 });
 
 // #225: the client secret never follows a redirect, and a hung token endpoint
-// cannot hold the shared in-flight refresh forever.
+// fails the exchange instead of holding the caller forever.
 describe('getOAuth2Token hardening (#225)', () => {
   it('refuses a redirect: one fetch, redirect manual, nothing cached, next call retries', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -112,7 +119,7 @@ describe('getOAuth2Token hardening (#225)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('bounds the exchange with a timeout; a hung endpoint rejects and clears the in-flight refresh', async () => {
+  it('bounds the exchange with a timeout; a hung endpoint rejects and the next call retries', async () => {
     const timeouts: AbortController[] = [];
     const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
       expect(ms).toBe(OAUTH2_TOKEN_TIMEOUT_MS);
@@ -123,13 +130,10 @@ describe('getOAuth2Token hardening (#225)', () => {
     try {
       mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
         new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason))));
-      // Two concurrent callers share the one hung refresh.
       const a = getOAuth2Token(opts);
-      const b = getOAuth2Token(opts);
       await vi.waitFor(() => expect(timeouts).toHaveLength(1));
       timeouts[0]!.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
       await expect(a).rejects.toMatchObject({ name: 'TimeoutError' });
-      await expect(b).rejects.toMatchObject({ name: 'TimeoutError' });
       mockTokenResponse('tok-retry');
       await expect(getOAuth2Token(opts)).resolves.toBe('tok-retry');
     } finally {

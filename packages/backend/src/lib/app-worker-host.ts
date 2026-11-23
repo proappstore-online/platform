@@ -380,16 +380,18 @@ function unavailableHost(env: Env, backend: AppWorkerBackend | null, reason: str
   };
 }
 
-const shimShas = new Map<string, Promise<string>>();
+// Hex strings, never promises: a promise awaited by a request other than the one
+// that created it fails once that request ends (#616, #655).
+const shimShas = new Map<string, string>();
 /**
  * The identity of what the platform contributes to every loaded worker: the
  * shim, its limits and runtime settings. Part of the loader ID, so a platform
  * deploy that changes any of them starts fresh isolates.
  */
-export function appWorkerShimSha(compatDate: string = APP_WORKER_COMPATIBILITY_DATE): Promise<string> {
+export async function appWorkerShimSha(compatDate: string = APP_WORKER_COMPATIBILITY_DATE): Promise<string> {
   let sha = shimShas.get(compatDate);
   if (!sha) {
-    sha = sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS, EGRESS_MODE, TAIL_MODE]));
+    sha = await sha256Hex(JSON.stringify([APP_WORKER_SHIM, APP_WORKER_LIMITS, compatDate, COMPATIBILITY_FLAGS, EGRESS_MODE, TAIL_MODE]));
     shimShas.set(compatDate, sha);
   }
   return sha;

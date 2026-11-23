@@ -66,6 +66,9 @@ describe('bundle identity and loader ID', () => {
   it('the loader ID carries app, bundle, config version and the shim hash', async () => {
     const shim = await appWorkerShimSha();
     expect(shim).toMatch(/^[0-9a-f]{64}$/);
+    // #655: the hex string is cached, never a promise shared across requests.
+    expect(appWorkerShimSha()).not.toBe(appWorkerShimSha());
+    expect(await appWorkerShimSha()).toBe(shim);
     expect(loaderId('demo', 'abc', 3, shim)).toBe(`demo:abc:3:${shim}`);
     expect(loaderId('demo', 'abc', 4, shim)).not.toBe(loaderId('demo', 'abc', 3, shim));
   });

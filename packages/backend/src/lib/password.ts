@@ -68,10 +68,12 @@ export async function hashPassword(password: string, iterations = PBKDF2_ITERATI
  * enumerate which logins are provisioned (the KDF must run on every attempt,
  * present or not). See routes/auth.ts.
  */
-let dummyHashPromise: Promise<string> | null = null;
-export function dummyPasswordHash(): Promise<string> {
-  if (!dummyHashPromise) dummyHashPromise = hashPassword('timing-safe-dummy-password');
-  return dummyHashPromise;
+// The resolved string, never the promise: a promise awaited by a request other than
+// the one that created it fails once that request ends (#616, #655).
+let dummyHash: string | undefined;
+export async function dummyPasswordHash(): Promise<string> {
+  if (!dummyHash) dummyHash = await hashPassword('timing-safe-dummy-password');
+  return dummyHash;
 }
 
 /** Verify a password against a stored `pbkdf2$...` hash. Never throws. */
