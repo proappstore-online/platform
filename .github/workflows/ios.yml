@@ -21,9 +21,10 @@ jobs:
           echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
           unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
           cd ios && "$RUNNER_TEMP/xcodegen/bin/xcodegen" generate && git diff --exit-code -- ProAppStore.xcodeproj
-      # Ad-hoc signed, not CODE_SIGNING_ALLOWED=NO: an unsigned test host has no Keychain entitlement
+      # Build number = workflow run number and PAS_COMMIT = short SHA (both default in Config/Version.xcconfig
+      # for local builds). Ad-hoc signed, not CODE_SIGNING_ALLOWED=NO: an unsigned test host has no Keychain entitlement
       # (errSecMissingEntitlement, -34018), which SecureStoreTests and PasApiTests need.
       - name: Unit tests (simulator, ad-hoc signed)
-        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath build/ios test CODE_SIGN_IDENTITY=-
+        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath build/ios test CODE_SIGN_IDENTITY=- CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
       - name: Device build (unsigned)
-        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'generic/platform=iOS' -derivedDataPath build/ios build CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'generic/platform=iOS' -derivedDataPath build/ios build CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}

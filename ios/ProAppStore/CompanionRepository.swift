@@ -129,6 +129,7 @@ actor CompanionRepository {
         let user = me["user"] as? [String: Any]
         guard let id = user?["id"] as? String, id == (try secure.read())["userId"] else { throw CompanionError("Account changed. Reconnect this device.") }
         local.userName = user?["name"] as? String ?? ""
+        local.deviceLabel = (me["device"] as? [String: Any])?["label"] as? String ?? ""
         try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"] as? [Any] ?? []))
     }
 

@@ -9,8 +9,11 @@
 /* Begin PBXBuildFile section */
 		0FF892C26A665D236FB8894C /* SecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769262658F18E1A5B8B96D31 /* SecureStore.swift */; };
 		1E864C3759DBC42CCA6A409B /* ProAppStoreApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */; };
+		4BB86174E9F9566B63E42E77 /* AppInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A292A82436A16B586312173C /* AppInfoTests.swift */; };
 		53643E7099CACCC616082AB3 /* PasApiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */; };
+		65D44EA4EA3245A7B7FDC942 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 02F34D17F2EA035907DCD336 /* Assets.xcassets */; };
 		68CA481DB27F0957E164A73A /* CompanionRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */; };
+		83667591AD49DAB41BF57F9D /* AppInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE66F7D0B7641EFC42BCB984 /* AppInfo.swift */; };
 		97DC249D6DF5FD7FEA07E9AB /* LocationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB2642186745D2F314A032D /* LocationPolicyTests.swift */; };
 		98EEA9E54C0E0C59E6E8034F /* LocalStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E465577ECE76DEF93158E2CF /* LocalStoreTests.swift */; };
 		ABB0FEDEAF94C0FE59A72B1F /* LocationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 743BDE3CD671100418D7AC04 /* LocationPolicy.swift */; };
@@ -33,6 +36,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		02F34D17F2EA035907DCD336 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProAppStoreApp.swift; sourceTree = "<group>"; };
 		1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionRepository.swift; sourceTree = "<group>"; };
 		2DB2642186745D2F314A032D /* LocationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPolicyTests.swift; sourceTree = "<group>"; };
@@ -44,18 +48,22 @@
 		6C2C984EA4A8B18D1438C5B3 /* PasApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasApi.swift; sourceTree = "<group>"; };
 		743BDE3CD671100418D7AC04 /* LocationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPolicy.swift; sourceTree = "<group>"; };
 		769262658F18E1A5B8B96D31 /* SecureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStore.swift; sourceTree = "<group>"; };
+		A292A82436A16B586312173C /* AppInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfoTests.swift; sourceTree = "<group>"; };
 		A3AAE89C44E5F82093943F76 /* LocationCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationCollector.swift; sourceTree = "<group>"; };
 		ABB575299865B2E756E74140 /* SecureStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStoreTests.swift; sourceTree = "<group>"; };
 		ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasApiTests.swift; sourceTree = "<group>"; };
 		C731A49585E0996081CB72E8 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		CB96C3C1C45B24091E7E5B31 /* ProAppStoreTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ProAppStoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E465577ECE76DEF93158E2CF /* LocalStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStoreTests.swift; sourceTree = "<group>"; };
+		EE66F7D0B7641EFC42BCB984 /* AppInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfo.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		018C2E1B5E6BAD74409C8A1A /* ProAppStore */ = {
 			isa = PBXGroup;
 			children = (
+				EE66F7D0B7641EFC42BCB984 /* AppInfo.swift */,
+				02F34D17F2EA035907DCD336 /* Assets.xcassets */,
 				1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */,
 				639CF5D4AB25DD2EA7AE65EA /* ContentView.swift */,
 				31A80FA71297ADD68900688E /* Info.plist */,
@@ -90,6 +98,7 @@
 		AC90555DAE69CC4641ED30A4 /* ProAppStoreTests */ = {
 			isa = PBXGroup;
 			children = (
+				A292A82436A16B586312173C /* AppInfoTests.swift */,
 				E465577ECE76DEF93158E2CF /* LocalStoreTests.swift */,
 				2DB2642186745D2F314A032D /* LocationPolicyTests.swift */,
 				ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */,
@@ -134,6 +143,7 @@
 			buildConfigurationList = ABEBE037038443ADE6153648 /* Build configuration list for PBXNativeTarget "ProAppStore" */;
 			buildPhases = (
 				3E7089DC2CD032D160500EA2 /* Sources */,
+				D1BC5F80FCEE67747250003C /* Resources */,
 			);
 			buildRules = (
 			);
@@ -183,11 +193,23 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		D1BC5F80FCEE67747250003C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				65D44EA4EA3245A7B7FDC942 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		3E7089DC2CD032D160500EA2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				83667591AD49DAB41BF57F9D /* AppInfo.swift in Sources */,
 				68CA481DB27F0957E164A73A /* CompanionRepository.swift in Sources */,
 				D18C979188FAAC166651199C /* ContentView.swift in Sources */,
 				EDE2973889F0FC802ED8F1FD /* LocalStore.swift in Sources */,
@@ -204,6 +226,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4BB86174E9F9566B63E42E77 /* AppInfoTests.swift in Sources */,
 				98EEA9E54C0E0C59E6E8034F /* LocalStoreTests.swift in Sources */,
 				97DC249D6DF5FD7FEA07E9AB /* LocationPolicyTests.swift in Sources */,
 				53643E7099CACCC616082AB3 /* PasApiTests.swift in Sources */,
@@ -306,6 +329,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				INFOPLIST_FILE = ProAppStore/Info.plist;
@@ -323,6 +347,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				INFOPLIST_FILE = ProAppStore/Info.plist;

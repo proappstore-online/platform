@@ -34,6 +34,7 @@ Kit version **2026-11-18**. Canonical source: [`serge-ivo/stores-workspace` `bra
 
 - **This repo, `docs/public/`** (8 files, served at `docs.proappstore.online`): `favicon.svg`, `favicon-16x16.png` (kit `icon-16.png`), `favicon-32x32.png` (kit `icon-32.png`), `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `og-image.png`, `brand.json`.
 - **This repo, `packages/admin/src/publish.ts`:** the favicon SVG is embedded as a string in the knowledge-base workflow that the admin worker writes into app repos.
+- **This repo, `ios/ProAppStore/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`:** the iOS companion's app icon, the maskable composition rendered at 1024×1024 by the kit's `generate.py` and flattened to opaque RGB. It is a render, not a byte copy, so it is registered under `renders` in the workspace `destinations.json`.
 - **`proappstore-online/proappstore`** (storefront): 8 served files at the repo root plus the full export in `brand/assets/`. Its pages and manifest reference them with the `?v=2026-11-18` cache parameter.
 - **`proappstore-online/console`:** `web/public/`.
 - **`proappstore-online/dashboard`:** `web/public/`.

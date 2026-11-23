@@ -62,6 +62,10 @@ final class LocalStore: @unchecked Sendable {
         get { setting("userName") ?? "" }
         set { try? setSetting("userName", newValue) }
     }
+    var deviceLabel: String {
+        get { setting("deviceLabel") ?? "" }
+        set { try? setSetting("deviceLabel", newValue) }
+    }
 
     func blocked() -> Set<String> {
         guard let raw = setting("blocked")?.data(using: .utf8), let ids = try? JSONDecoder().decode([String].self, from: raw) else { return [] }

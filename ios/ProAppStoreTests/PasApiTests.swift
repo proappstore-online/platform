@@ -107,6 +107,7 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(try local.count(), 0)
         XCTAssertGreaterThan(local.lastSync, 0)
         XCTAssertEqual(local.userName, "Alex")
+        XCTAssertEqual(local.deviceLabel, "iPhone (iOS 18.0)")
     }
 
     func testAckMismatchKeepsTheQueueAndSetsTheMessage() async throws {

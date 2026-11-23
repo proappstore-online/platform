@@ -1,0 +1,6 @@
+// The one place the app's version lives. MARKETING_VERSION must equal android/version.properties
+// versionName (test/ios-version.test.ts fails when they drift). CI overrides CURRENT_PROJECT_VERSION with
+// the workflow run number and PAS_COMMIT with the short commit SHA; local builds keep the values below.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+PAS_COMMIT = dev

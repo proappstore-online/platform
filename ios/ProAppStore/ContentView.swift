@@ -12,6 +12,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
 
     @Published private(set) var signedIn = false
     @Published private(set) var name = ""
+    @Published private(set) var deviceLabel = ""
     @Published private(set) var apps: [ConnectedApp] = []
     @Published private(set) var blocked: Set<String> = []
     @Published private(set) var paused = true
@@ -38,7 +39,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
 
     func refresh() {
         signedIn = repository.token() != nil
-        name = local.userName; apps = local.apps(); blocked = local.blocked(); paused = local.paused
+        name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); paused = local.paused
         queued = (try? local.count()) ?? 0; lastSync = local.lastSync; pairingCode = repository.pairingCode()
         message = error.isEmpty ? local.message : error
     }
@@ -136,11 +137,10 @@ struct ContentView: View {
                 if !model.signedIn { signIn } else { account }
                 if model.busy { ProgressView().frame(maxWidth: .infinity) }
                 if !model.message.isEmpty { Text(model.message).foregroundStyle(.red) }
-                Button("How your data is used") { open("https://docs.proappstore.online/native-companion-users/") }
+                about
             }
             .padding(24)
         }
-        .tint(Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.77, green: 0.71, blue: 0.99, alpha: 1) : UIColor(red: 0.43, green: 0.16, blue: 0.85, alpha: 1) }))
         .onChange(of: phase, initial: true) { _, phase in
             if phase == .active { model.becameActive() } else { model.resignActive() }
         }
@@ -200,6 +200,22 @@ struct ContentView: View {
         }
         Button("Manage account") { open("https://dashboard.proappstore.online") }
         Button("Disconnect this phone") { disconnectPrompt = true }.disabled(model.busy)
+    }
+
+    @ViewBuilder private var about: some View {
+        Text("About").font(.title3.bold())
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Version", value: AppInfo.current.version)
+                LabeledContent("Build", value: AppInfo.current.build)
+                LabeledContent("Commit", value: AppInfo.current.commit)
+                if model.signedIn && !model.deviceLabel.isEmpty { LabeledContent("This phone", value: model.deviceLabel) }
+            }
+            .font(.subheadline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        Button("How your data is used") { open("https://docs.proappstore.online/native-companion-users/") }
+        Button("Privacy policy") { open("https://proappstore.online/privacy") }
     }
 
     private var status: String {
