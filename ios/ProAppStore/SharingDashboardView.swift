@@ -6,7 +6,7 @@ import UIKit
 
 /// One app row's state chip. Pure, so every combination is table-tested.
 enum SharingState: Equatable {
-    case sharing, paused, pausedAll, off, turningOff, notRecording
+    case sharing, paused, pausedAll, off, turningOff, notRecording, expired
 
     /// `blocked` with a grant still held means the server `DELETE` has not gone through yet.
     static func of(granted: Bool, blocked: Bool, appPaused: Bool, pausedAll: Bool, running: Bool) -> SharingState {
@@ -25,6 +25,7 @@ enum SharingState: Equatable {
         case .off: "Off"
         case .turningOff: "Turning off…"
         case .notRecording: "Not recording"
+        case .expired: "Connection expired"
         }
     }
 
@@ -32,7 +33,7 @@ enum SharingState: Equatable {
         switch self {
         case .sharing: .green
         case .paused, .pausedAll, .turningOff: .orange
-        case .off: .secondary
+        case .off, .expired: .secondary
         case .notRecording: .red
         }
     }
@@ -92,14 +93,15 @@ struct SharingDashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     StatusMessages(model: model)
-                    if model.signedIn { dashboard } else { signIn }
+                    if model.expired { ExpiredCard(model: model) }
+                    if model.signedIn || model.expired { dashboard } else { signIn }
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle("Sharing")
             .toolbar {
-                if model.signedIn {
+                if model.signedIn || model.expired {
                     NavigationLink { ActivityLogView(model: model) } label: { Label("Activity", systemImage: "list.bullet.rectangle") }
                 }
             }
@@ -167,10 +169,10 @@ struct SharingDashboardView: View {
 
     @ViewBuilder private var dashboard: some View {
         if !granted.isEmpty { overview }
-        header
-        if model.apps.isEmpty { Text("No supported native features are available for your apps yet.") }
+        if !model.expired { header }
+        if model.apps.isEmpty && !model.expired { Text("No supported native features are available for your apps yet.") }
         ForEach(granted) { app in row(app) }
-        if !available.isEmpty {
+        if !available.isEmpty && !model.expired {
             Text("Available").font(.title3.bold())
             ForEach(available) { app in
                 GroupBox {

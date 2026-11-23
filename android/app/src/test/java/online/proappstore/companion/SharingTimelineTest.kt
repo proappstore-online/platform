@@ -56,6 +56,15 @@ class SharingTimelineTest {
         assertEquals(HISTORY_CLEARED, sessions[0].endKind)
     }
 
+    /** #652: an expiry ends every open session; re-enabling after Reconnect starts a new one. */
+    @Test fun expiryEndsTheSessionAndReconnectStartsANewOne() {
+        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(EXPIRED, 10 * min, null), e(ENABLED, 30 * min)), "run")
+        assertEquals(listOf(0L, 30 * min), sessions.map { it.start })
+        assertEquals(10 * min, sessions[0].end)
+        assertEquals(EXPIRED, sessions[0].endKind)
+        assertNull(sessions[1].end)
+    }
+
     @Test fun aRestoredGrantStartsASessionAndEnableInsideItContinuesIt() {
         val sessions = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(GRANT_LOST, 10 * min), e(GRANT_RESTORED, 20 * min), e(ENABLED, 20 * min)), "run")
         assertEquals(listOf(0L, 20 * min), sessions.map { it.start })

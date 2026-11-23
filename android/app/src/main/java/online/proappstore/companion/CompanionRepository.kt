@@ -43,23 +43,26 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         if (result.optBoolean("pending")) return@withLock false
         val credential = result.getString("token")
         val me = api.request("GET", "/native/me", credential)
-        // Pairing never adopts a previous installation/account's queue or grants.
-        local.clear()
-        secure.write(JSONObject().put("token", credential).put("userId", me.getJSONObject("user").getString("id")))
+        val userId = me.getJSONObject("user").getString("id")
+        // Pairing never adopts a previous installation/account's queue or grants. The same account after an expiry
+        // keeps the on-device history (#652).
+        if (local.expiredUser == userId) local.clearForReconnect() else local.clear()
+        secure.write(JSONObject().put("token", credential).put("userId", userId))
         updateMe(me)
         true
     } }
     private fun updateMe(me: JSONObject) {
         check(me.getJSONObject("user").getString("id") == secure.read().getString("userId")) { "Account changed. Reconnect this device." }
         local.userName = me.getJSONObject("user").getString("name")
+        local.deviceExpiresAt = me.optJSONObject("device")?.optLong("expiresAt") ?: 0
         local.saveApps(me.getJSONArray("apps"))
     }
     suspend fun enable(app: ConnectedApp) = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: error("Sign in first.")
         // Finish any queued revocation before granting a new epoch.
-        if (app.id in local.blocked()) api.request("DELETE", "/native/apps/${app.id}/location", credential)
-        api.request("PUT", "/native/apps/${app.id}/location", credential, JSONObject().put("version", app.version).put("enabled", true))
-        updateMe(api.request("GET", "/native/me", credential))
+        if (app.id in local.blocked()) device("DELETE", "/native/apps/${app.id}/location", credential)
+        device("PUT", "/native/apps/${app.id}/location", credential, JSONObject().put("version", app.version).put("enabled", true))
+        updateMe(device("GET", "/native/me", credential))
         local.unblock(app.id); local.record(ShareEvent.Kind.ENABLED, app.id)
         local.resume(app.id); local.paused = false; local.message = ""
     } }
@@ -79,15 +82,15 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         var uploading = false; var partial = false
         try {
             val blocked = local.blocked()
-            for (id in blocked) api.request("DELETE", "/native/apps/$id/location", credential)
-            updateMe(api.request("GET", "/native/me", credential))
+            for (id in blocked) device("DELETE", "/native/apps/$id/location", credential)
+            updateMe(device("GET", "/native/me", credential))
             for (id in blocked) local.unblock(id)
             local.expire(System.currentTimeMillis())
             repeat(10) {
                 val batch = local.pending()
                 if (batch.isEmpty()) return@repeat
                 uploading = true
-                val result = api.request("POST", "/native/locations", credential, JSONObject().put("points", JSONArray(batch.map { it.json() })))
+                val result = device("POST", "/native/locations", credential, JSONObject().put("points", JSONArray(batch.map { it.json() })))
                 val ack = result.getJSONArray("acknowledged")
                 val ids = (0 until ack.length()).map { ack.getString(it) }
                 if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
@@ -96,7 +99,7 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
             local.lastSync = System.currentTimeMillis(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
             runCatching { local.syncSucceeded() }
         } catch (e: Exception) {
-            if (e is ApiFailure && e.status == 401) local.stop("signed_out")
+            if (DeviceConnection.expired(e)) throw e // the expired card says it, not a sync failure
             local.message = if (e is ApiFailure) e.message ?: "Reconnect your account." else "Waiting to sync. Location stays on this phone."
             local.lastSyncAttempt = System.currentTimeMillis(); local.lastSyncError = e.message ?: local.message
             // Activity log: status (0 = network) plus the server's `error` text only.
@@ -109,4 +112,23 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
             throw e
         }
     } }
+    /**
+     * Reconnecting before the connection expires (#652): uploads what it can, then takes the expiry path, which keeps
+     * the history. The old credential is only forgotten: revoking it would delete the platform copies already shared,
+     * and it lapses within days.
+     */
+    suspend fun renew() = withContext(Dispatchers.IO) {
+        if (token() == null) return@withContext
+        try { sync() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e }
+        operations.withLock { if (token() != null) expire("renew") }
+    }
+    /** A device-authenticated request. A 401 expires the connection (#652). */
+    private fun device(method: String, path: String, credential: String, body: JSONObject? = null): JSONObject = try {
+        api.request(method, path, credential, body)
+    } catch (e: ApiFailure) {
+        if (DeviceConnection.expired(e)) expire()
+        throw e
+    }
+    /** Drops the credential, so collection stops, and keeps everything on the phone for Reconnect. */
+    private fun expire(detail: String = "") { local.markExpired(secure.read().optString("userId"), detail); secure.clear() }
 }

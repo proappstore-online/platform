@@ -249,6 +249,40 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try history(local), [])
     }
 
+    /// #652: the expired state survives a relaunch, and the expired device's grants seed nothing.
+    func testExpiredSurvivesReopenAndClearHistorySeedsNothing() throws {
+        let local = try store(apps: [app("ski", "ski-g")])
+        XCTAssertFalse(local.expired)
+        try local.markExpired(userId: "u1")
+        try local.markExpired(userId: "u1") // logged once
+        local.close()
+        let reopened = try LocalStore(directory: directory)
+        XCTAssertEqual(reopened.expiredUser, "u1")
+        XCTAssertEqual(try reopened.events().map(\.kind), [.resumedAll, .expired])
+        try reopened.clearHistory(now: 99)
+        XCTAssertEqual(try reopened.events().map(\.kind), [.historyCleared])
+    }
+
+    /// #652: Reconnect drops the queue, unsent points and the old grants; the shared history and the log stay.
+    func testClearForReconnectKeepsHistoryAndDropsQueueAndGrants() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("sent", at: 10, grants: ["ski-g"]))
+        try local.acknowledge(["sent"], now: 20)
+        try local.enqueue(point("queued", at: 30, grants: ["ski-g"]))
+        try local.pause("ski")
+        try local.block("run")
+        try local.markExpired(userId: "u1")
+        try local.clearForReconnect()
+        XCTAssertEqual(try local.count(), 0)
+        XCTAssertEqual(try history(local), ["ski:sent:20"])
+        XCTAssertEqual(try local.events().map(\.kind), [.resumedAll, .paused, .disabled, .expired])
+        XCTAssertEqual(local.apps(), [])
+        XCTAssertEqual(local.blocked(), [])
+        XCTAssertEqual(local.pausedApps(), [])
+        XCTAssertFalse(local.expired)
+        XCTAssertTrue(local.paused)
+    }
+
     func testSeedOnAnEmptyHistoryDatesEnabledAtConsent() throws {
         let local = try LocalStore(directory: directory)
         try local.saveApps(try JSONSerialization.data(withJSONObject: [app("run", "run-g")])) // consent_at 1

@@ -123,6 +123,18 @@ final class ScreenshotTests: XCTestCase {
             try save(tall, to: "\(output)/sharing-full-\(name).png")
             tall.isHidden = true
         }
+        // #652: the connection expired; the history stays.
+        StubProtocol.handler = { _ in .init(status: 401, json: ["error": "Device connection expired or was disconnected."]) }
+        try? await model.repository.sync()
+        model.refresh()
+        for tab in [ContentView.Tab.sharing, .settings] {
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = UIHostingController(rootView: ContentView(model: model, collector: model.collector, tab: tab, catalogue: catalogue))
+            window.makeKeyAndVisible()
+            try await Task.sleep(for: .seconds(3))
+            try save(window, to: "\(output)/expired-\(tab)-light.png")
+            window.isHidden = true
+        }
         model.resignActive()
     }
 

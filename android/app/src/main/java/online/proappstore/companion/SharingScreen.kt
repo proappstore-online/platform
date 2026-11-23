@@ -23,7 +23,9 @@ import java.util.Locale
 
 /** One app row's state chip. Pure, so every combination is table-tested. Ported from iOS SharingDashboardView.swift. */
 enum class SharingState(val label: String) {
-    SHARING("Sharing"), PAUSED("Paused"), PAUSED_ALL("Paused (all)"), OFF("Off"), TURNING_OFF("Turning off…"), NOT_RECORDING("Not recording");
+    SHARING("Sharing"), PAUSED("Paused"), PAUSED_ALL("Paused (all)"), OFF("Off"), TURNING_OFF("Turning off…"), NOT_RECORDING("Not recording"),
+    /** The device connection expired (#652); set by [CompanionState.stateOf], not [of]. */
+    EXPIRED("Connection expired");
 
     companion object {
         /** `blocked` with a grant still held means the server `DELETE` has not gone through yet. */
@@ -42,14 +44,15 @@ internal val Orange = Color(0xFFEA580C)
 @Composable internal fun SharingState.color(): Color = when (this) {
     SharingState.SHARING -> Color(0xFF16A34A)
     SharingState.PAUSED, SharingState.PAUSED_ALL, SharingState.TURNING_OFF -> Orange
-    SharingState.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+    SharingState.OFF, SharingState.EXPIRED -> MaterialTheme.colorScheme.onSurfaceVariant
     SharingState.NOT_RECORDING -> MaterialTheme.colorScheme.error
 }
 
-internal fun CompanionState.enabled(app: ConnectedApp) = app.grantId != null && app.id !in blocked
+/** An expired connection's grants are gone on the server: nothing is enabled until the user re-enables it. */
+internal fun CompanionState.enabled(app: ConnectedApp) = !expired && app.grantId != null && app.id !in blocked
 internal fun CompanionState.sharing(app: ConnectedApp) = enabled(app) && app.id !in pausedApps && !paused
-internal fun CompanionState.stateOf(app: ConnectedApp) =
-    SharingState.of(app.grantId != null, app.id in blocked, app.id in pausedApps, paused, running)
+internal fun CompanionState.stateOf(app: ConnectedApp) = if (expired) SharingState.EXPIRED
+    else SharingState.of(app.grantId != null, app.id in blocked, app.id in pausedApps, paused, running)
 internal fun CompanionState.sharedToday(appId: String): Long {
     val today = SharingTimeline.today(now)
     return SharingTimeline.sessions(events, appId).sumOf { it.sharedMs(today) }
@@ -77,6 +80,7 @@ internal object Format {
         ShareEvent.Kind.DISABLED -> "turned off"
         ShareEvent.Kind.GRANT_LOST -> "revoked by ProAppStore"
         ShareEvent.Kind.HISTORY_CLEARED -> "history cleared"
+        ShareEvent.Kind.EXPIRED -> "connection expired"
         else -> kind.raw
     }
     val permission = mapOf("" to "Not set", "denied" to "Not allowed", "approximate" to "Approximate only", "whenInUse" to "While using the app", "always" to "All the time")
@@ -104,26 +108,27 @@ internal fun SharingDashboard(
     state: CompanionState, tracks: List<MapTrack>, connect: () -> Unit, askConsent: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit,
     pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit, pause: () -> Unit, resume: () -> Unit,
     permissions: () -> Unit, sync: () -> Unit, openApp: (ConnectedApp) -> Unit,
-    showApp: (ConnectedApp) -> Unit, showActivity: () -> Unit, showMap: () -> Unit,
+    showApp: (ConnectedApp) -> Unit, showActivity: () -> Unit, showMap: () -> Unit, reconnect: () -> Unit = {},
 ) {
     Column(Modifier.padding(horizontal = 24.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Sharing", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
-            if (state.signedIn) TextButton(onClick = showActivity) { Text("Activity") }
+            if (state.signedIn || state.expired) TextButton(onClick = showActivity) { Text("Activity") }
         }
         StatusMessages(state)
-        if (!state.signedIn) {
+        if (state.expired) ExpiredCard(state, reconnect)
+        if (!state.signedIn && !state.expired) {
             Text("Your apps, connected to your phone", style = MaterialTheme.typography.titleMedium)
             Text("Enable background features for the PAS apps you use. You stay in control of what each app can access.")
             Button(onClick = connect, enabled = !state.busy) { Text("Sign in to ProAppStore") }
             if (state.pairingCode.isNotBlank()) Text("Match this code in your browser: ${state.pairingCode}")
         } else {
             val granted = state.apps.filter { it.grantId != null }
-            val available = state.apps.filter { it.grantId == null && it.id !in state.blocked }
+            val available = state.apps.filter { it.grantId == null && it.id !in state.blocked && !state.expired }
             if (granted.isNotEmpty()) Overview(state, granted, tracks, showMap)
-            Header(state, pause, resume, permissions, sync)
-            if (state.apps.isEmpty()) Text("No supported native features are available for your apps yet.")
+            if (!state.expired) Header(state, pause, resume, permissions, sync)
+            if (state.apps.isEmpty() && !state.expired) Text("No supported native features are available for your apps yet.")
             granted.forEach { AppRow(state, it, disable, pauseApp, resumeApp, openApp, showApp) }
             if (available.isNotEmpty()) {
                 Text("Available", style = MaterialTheme.typography.titleLarge)
@@ -143,6 +148,20 @@ internal fun SharingDashboard(
             DeviceCard(state, permissions)
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** The expired connection (#652): one way back that keeps the history. */
+@Composable
+internal fun ExpiredCard(state: CompanionState, reconnect: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Connection expired", style = MaterialTheme.typography.titleLarge)
+            Text("This phone is no longer connected to ProAppStore, so location sharing has stopped. Your sharing history stays on this phone. Reconnect, then turn sharing back on for each app.",
+                style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = reconnect, enabled = !state.busy) { Text("Reconnect") }
+            if (state.pairingCode.isNotBlank()) Text("Match this code in your browser: ${state.pairingCode}", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 

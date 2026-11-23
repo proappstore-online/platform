@@ -63,6 +63,7 @@ class SharingViewsTest {
             Triple(QUOTA, "429", "Upload limit reached (429)"),
             Triple(PERMISSION, "always→approximate", "Precise location turned off: recording stopped"),
             Triple(QUEUE_FULL, "", "Storage queue full: recording stopped until uploads catch up"),
+            Triple(EXPIRED, "", "Connection to ProAppStore expired: sharing stopped"),
         )
         assertEquals(ShareEvent.Kind.entries.toSet(), table.map { it.first }.toSet())
         table.forEach { (kind, detail, expected) -> assertEquals(expected, sentence(kind, detail)) }
@@ -70,6 +71,8 @@ class SharingViewsTest {
         assertEquals("Upload rejected by ProAppStore (413)", sentence(UPLOAD_REJECTED, "413", null))
         assertEquals("Location permission changed: All the time → While using the app", sentence(PERMISSION, "always→whenInUse", null))
         assertEquals("Precise location turned on", sentence(PERMISSION, "approximate→whenInUse", null))
+        assertEquals("Reconnecting to ProAppStore: sharing stopped until you re-enable apps", sentence(EXPIRED, "renew", null))
+        assertEquals(ActivityText.Category.PROBLEM, ActivityText.category(EXPIRED))
         assertEquals(ActivityText.Category.SHARING, ActivityText.category(PAUSED))
         assertEquals(ActivityText.Category.PROBLEM, ActivityText.category(SYNC_FAILED))
     }
@@ -92,6 +95,16 @@ class SharingViewsTest {
             Case(true, true, true, true, false, SharingState.TURNING_OFF),
             Case(true, false, false, false, false, SharingState.NOT_RECORDING), // e.g. permission lost
         ).forEach { assertEquals(it.toString(), it.chip, SharingState.of(it.granted, it.blocked, it.appPaused, it.pausedAll, it.running)) }
+    }
+
+    /** #652: an expired connection enables nothing, and every app's chip says so. */
+    @Test fun anExpiredConnectionEnablesNothing() {
+        val app = ConnectedApp("ski", "Ski", "Routes", "D", "1", "g")
+        val state = CompanionState(expired = true, apps = listOf(app), paused = false, running = true)
+        assertFalse(state.enabled(app))
+        assertFalse(state.sharing(app))
+        assertEquals(SharingState.EXPIRED, state.stateOf(app))
+        assertTrue(CompanionState(signedIn = true, apps = listOf(app)).enabled(app))
     }
 
     @Test fun durations() {

@@ -15,7 +15,8 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     StatusMessages(model: model)
-                    if model.signedIn { account }
+                    if model.expired { ExpiredCard(model: model) }
+                    if model.signedIn || model.expired { account }
                     about
                 }
                 .padding(24)
@@ -39,6 +40,12 @@ struct SettingsView: View {
 
     @ViewBuilder private var account: some View {
         Text(model.name).font(.headline)
+        if let days = model.expiresInDays {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Connection renews when you reconnect — expires in \(days) day\(days == 1 ? "" : "s")").font(.footnote).foregroundStyle(.secondary)
+                Button("Reconnect") { model.reconnect() }.font(.footnote).disabled(model.busy)
+            }
+        }
         GroupBox("Location permission") {
             VStack(alignment: .leading, spacing: 8) {
                 PermissionControls(collector: collector)

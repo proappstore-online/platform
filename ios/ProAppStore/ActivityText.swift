@@ -7,7 +7,7 @@ enum ActivityText {
     static func category(_ kind: ShareEvent.Kind) -> Category {
         switch kind {
         case .enabled, .disabled, .paused, .resumed, .pausedAll, .resumedAll, .grantLost, .grantRestored, .historyCleared: .sharing
-        case .stopped, .syncFailed, .syncRecovered, .uploadRejected, .quota, .permission, .queueFull: .problem
+        case .stopped, .syncFailed, .syncRecovered, .uploadRejected, .quota, .permission, .queueFull, .expired: .problem
         }
     }
 
@@ -53,6 +53,10 @@ enum ActivityText {
                 return "Location permission changed: \(sides.joined(separator: " → "))"
             }
         case .queueFull: return "Storage queue full: recording stopped until uploads catch up"
+        case .expired:
+            return event.detail == "renew"
+                ? "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"
+                : "Connection to ProAppStore expired: sharing stopped"
         }
     }
 
@@ -72,6 +76,7 @@ enum ActivityText {
         case .quota: "gauge.with.dots.needle.100percent"
         case .permission: "lock.shield"
         case .queueFull: "externaldrive.badge.exclamationmark"
+        case .expired: "link.badge.plus"
         }
     }
 }

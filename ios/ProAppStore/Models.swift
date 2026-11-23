@@ -49,6 +49,8 @@ struct ShareEvent: Equatable {
         // Activity log only (#624).
         case syncFailed = "sync_failed", syncRecovered = "sync_recovered", uploadRejected = "upload_rejected", quota
         case permission, queueFull = "queue_full", grantRestored = "grant_restored"
+        /// The device connection expired or was revoked (#652); `detail` "renew" when the user reconnected early.
+        case expired
     }
 
     let id: Int64

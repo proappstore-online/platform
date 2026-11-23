@@ -123,6 +123,161 @@ class CompanionTest {
         store.clear(); assertFalse(store.read().has("token"))
     }
 
+    // Connection expired (#652)
+    @Test fun anExpiredConnectionShowsReconnectAndKeepsTheHistory() {
+        var reconnects = 0
+        val events = listOf(ShareEvent(1, 1, "ski", ShareEvent.Kind.ENABLED, ""), ShareEvent(2, 2, null, ShareEvent.Kind.EXPIRED, ""))
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(expired = true, apps = listOf(ski.copy(grantId = "old")), events = events),
+            {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, reconnect = { reconnects++ }) } }
+        compose.onAllNodesWithText("Connection expired").onFirst().assertIsDisplayed()
+        compose.onNodeWithText("Sign in to ProAppStore").assertDoesNotExist()
+        compose.onNodeWithText("Pause all").assertDoesNotExist()
+        compose.onAllNodesWithText("Connection expired", useUnmergedTree = true).assertCountEquals(2) // the card and Ski's chip
+        compose.onNodeWithText("Reconnect").performClick()
+        assertEquals(1, reconnects)
+        compose.onNodeWithText("Activity").performClick()
+        compose.onNodeWithText("Connection to ProAppStore expired: sharing stopped", substring = true).assertExists()
+    }
+    @Test fun theExpiryNoteShowsInSettingsOnlyWhenSet() {
+        var reconnects = 0
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, expiresInDays = 1), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+            initialTab = Tab.SETTINGS, reconnect = { reconnects++ }) } }
+        compose.onNodeWithText("Connection renews when you reconnect — expires in 1 day").assertIsDisplayed()
+        compose.onNodeWithText("Reconnect").performClick()
+        assertEquals(1, reconnects)
+    }
+
+    /** Answers like the server: `status(path)` decides per call; 200 paths get a usable body. */
+    private class Server(var status: (String) -> Int) : PasApi() {
+        val seen = mutableListOf<String>()
+        override fun request(method: String, path: String, token: String?, body: JSONObject?): JSONObject {
+            seen += "$method $path"
+            when (val code = status(path)) {
+                0 -> throw java.io.IOException("offline")
+                200 -> return when (path) {
+                    "/native/me" -> JSONObject().put("user", JSONObject().put("id", userId).put("name", "Alex"))
+                        .put("device", JSONObject().put("id", "d1").put("label", "Pixel").put("expiresAt", 123L))
+                        .put("apps", JSONArray().put(JSONObject().put("id", "ski").put("name", "Ski").put("purpose", "Routes").put("disclosure", "D").put("version", "1")
+                            .put("grant", if (token == "ndev_new") JSONObject.NULL else JSONObject().put("id", "ski-g").put("consent_at", 1))))
+                    "/native/auth/complete" -> JSONObject().put("token", "ndev_new")
+                    "/native/locations" -> JSONObject().put("acknowledged", JSONArray(body!!.getJSONArray("points").let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("id") } }))
+                    else -> JSONObject()
+                }
+                else -> throw ApiFailure(code, "Device connection expired or was disconnected.")
+            }
+        }
+        var userId = "u1"
+    }
+    private fun connected(server: Server): CompanionRepository {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val local = store()
+        // Only Ski, as the fake server answers, so no `grant_lost` for Run.
+        local.saveApps(JSONArray().put(JSONObject().put("id", "ski").put("name", "Ski").put("purpose", "Routes").put("disclosure", "D").put("version", "1")
+            .put("grant", JSONObject().put("id", "ski-g").put("consent_at", 1))))
+        local.writableDatabase.delete("share_events", null, null)
+        SecureStore(context).write(JSONObject().put("token", "ndev_old").put("userId", "u1"))
+        local.enqueue(TrackPoint("p", System.currentTimeMillis(), 1.0, 2.0, 5f, listOf("ski-g")))
+        return CompanionRepository(local, SecureStore(context), server)
+    }
+    private fun LocalStore.kinds() = events().map { it.kind }
+    @Test fun a401FromAnyDeviceCallExpiresTheConnection() = kotlinx.coroutines.runBlocking {
+        for (failing in listOf("/native/me", "/native/locations")) {
+            val repository = connected(Server { if (it == failing) 401 else 200 })
+            assertTrue(runCatching { repository.sync() }.isFailure)
+            val local = repository.local
+            assertTrue(failing, local.expired)
+            assertEquals("u1", local.expiredUser)
+            assertNull(repository.token())
+            assertFalse("collection stops", repository.collecting())
+            assertEquals("", local.message)
+            assertEquals(listOf(ShareEvent.Kind.EXPIRED), local.kinds())
+            local.enqueue(TrackPoint("late", System.currentTimeMillis(), 1.0, 2.0, 5f, listOf("ski-g")))
+            assertEquals(1, local.count())
+            local.clear(); local.close()
+        }
+        val repository = connected(Server { if (it.startsWith("/native/apps/")) 401 else 200 })
+        assertTrue(runCatching { repository.enable(repository.local.apps().first()) }.isFailure)
+        assertTrue(repository.local.expired)
+        repository.local.clear(); repository.local.close(); SecureStore(ApplicationProvider.getApplicationContext()).clear()
+    }
+    @Test fun networkErrors429And5xxNeverExpire() = kotlinx.coroutines.runBlocking {
+        for (status in listOf(0, 429, 500, 503)) {
+            val repository = connected(Server { if (it == "/native/me") status else 200 })
+            assertTrue(runCatching { repository.sync() }.isFailure)
+            assertFalse("$status", repository.local.expired)
+            assertEquals("ndev_old", repository.token())
+            assertEquals(1, repository.local.count())
+            repository.local.clear(); repository.local.close()
+        }
+        SecureStore(ApplicationProvider.getApplicationContext()).clear()
+    }
+    @Test fun expiredSurvivesARelaunchAndReconnectKeepsHistoryButNotQueueOrGrants() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val server = Server { 200 }
+        val first = connected(server)
+        first.sync() // "p" uploads: shared history
+        first.local.enqueue(TrackPoint("q", System.currentTimeMillis(), 1.0, 2.0, 5f, listOf("ski-g"))) // still queued
+        first.local.record(ShareEvent.Kind.ENABLED, "ski")
+        server.status = { if (it == "/native/me") 401 else 200 }
+        assertTrue(runCatching { first.sync() }.isFailure)
+        first.local.close()
+        // Relaunch: new store and repository instances.
+        val local = LocalStore(context)
+        val repository = CompanionRepository(local, SecureStore(context), server)
+        assertTrue(local.expired); assertNull(repository.token()); assertEquals(1, local.count())
+        // Reconnect: the same pairing flow, same account.
+        server.status = { 200 }
+        SecureStore(context).write(JSONObject().put("pairId", "abcdef0123").put("verifier", "00"))
+        assertTrue(repository.finishSignIn())
+        assertEquals("ndev_new", repository.token())
+        assertFalse(local.expired)
+        assertEquals(0, local.count())
+        assertNull("the old device's grant is gone", local.apps().single().grantId)
+        assertEquals("no grant_lost noise", listOf(ShareEvent.Kind.ENABLED, ShareEvent.Kind.EXPIRED), local.kinds())
+        assertEquals("the shared point stays, the unsent one goes", 1, local.track("ski", 0, Long.MAX_VALUE).size)
+        assertEquals(123L, local.deviceExpiresAt)
+        local.clear(); local.close(); SecureStore(context).clear()
+    }
+    @Test fun reconnectingAsAnotherAccountClearsEverything() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val server = Server { if (it == "/native/me") 401 else 200 }
+        val repository = connected(server)
+        assertTrue(runCatching { repository.sync() }.isFailure)
+        server.status = { 200 }; server.userId = "u2"
+        SecureStore(context).write(JSONObject().put("pairId", "abcdef0123").put("verifier", "00"))
+        assertTrue(repository.finishSignIn())
+        assertEquals(emptyList<ShareEvent>(), repository.local.events())
+        assertEquals(0, repository.local.count())
+        repository.local.clear(); repository.local.close(); SecureStore(context).clear()
+    }
+    @Test fun renewingEarlyUploadsFirstThenKeepsHistory() = kotlinx.coroutines.runBlocking {
+        val server = Server { 200 }
+        val repository = connected(server)
+        repository.renew()
+        assertEquals(listOf("GET /native/me", "POST /native/locations"), server.seen)
+        assertTrue(repository.local.expired); assertNull(repository.token()); assertEquals(0, repository.local.count())
+        assertEquals("renew", repository.local.events().last().detail)
+        assertEquals(1, repository.local.track("ski", 0, Long.MAX_VALUE).size)
+        repository.local.clear(); repository.local.close()
+    }
+    @Test fun disconnectStillWipesEverything() = kotlinx.coroutines.runBlocking {
+        for (expire in listOf(false, true)) {
+            val server = Server { 200 }
+            val repository = connected(server)
+            repository.sync()
+            if (expire) { server.status = { 401 }; runCatching { repository.sync() }; server.status = { 200 } }
+            repository.disconnect()
+            val local = repository.local
+            assertFalse(local.expired)
+            assertEquals(emptyList<ShareEvent>(), local.events())
+            assertEquals(emptyList<TrackSample>(), local.track("ski", 0, Long.MAX_VALUE))
+            assertEquals(0, local.count())
+            assertEquals(emptyList<ConnectedApp>(), local.apps())
+            assertNull(repository.token())
+            local.close()
+        }
+    }
+
     /** A pairing the server calls expired (403) or used (409) is forgotten; a pending one or a network error keeps it. */
     @Test fun aDeadPairingIsForgottenSoSignInStartsClean() = kotlinx.coroutines.runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()

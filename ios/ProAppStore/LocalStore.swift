@@ -97,6 +97,25 @@ final class LocalStore: @unchecked Sendable {
         get { setting("deviceLabel") ?? "" }
         set { try? setSetting("deviceLabel", newValue) }
     }
+    /// `device.expiresAt` from `GET /native/me`, 0 until known.
+    var deviceExpiresAt: Int64 {
+        get { setting("deviceExpiresAt").flatMap { Int64($0) } ?? 0 }
+        set { try? setSetting("deviceExpiresAt", String(newValue)) }
+    }
+
+    /// The account whose device connection expired or was revoked (#652), nil while connected or never paired. It
+    /// survives relaunch; only pairing or `clear()` resets it.
+    var expiredUser: String? { setting("expiredUser") }
+    var expired: Bool { expiredUser != nil }
+
+    /// Records `expired` once and remembers `userId`, so pairing that account again keeps the history.
+    func markExpired(userId: String, detail: String = "") throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            if !expired { try record(.expired, detail: detail) }
+            try setSetting("expiredUser", userId)
+        }
+    }
 
     func blocked() -> Set<String> { ids("blocked") }
 
@@ -237,14 +256,28 @@ final class LocalStore: @unchecked Sendable {
 
     func count() throws -> Int { try query("SELECT COUNT(*) FROM points") { Int(sqlite3_column_int64($0, 0)) }.first ?? 0 }
 
+    /// Disconnect, or pairing a different account: everything.
     func clear() throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
-            try exec("DELETE FROM points")
-            try exec("DELETE FROM settings")
+            try clearConnection()
             try exec("DELETE FROM share_events")
             try exec("DELETE FROM share_points")
         }
+    }
+
+    /// Pairing the same account after an expiry (#652): the queue and the settings, which hold the old device's
+    /// grants, go; the sharing history and activity log stay. Queued points were tagged with grants the new device
+    /// will never hold, so they can never upload.
+    func clearForReconnect() throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction { try clearConnection() }
+    }
+
+    private func clearConnection() throws {
+        try exec("DELETE FROM points")
+        try exec("DELETE FROM share_points WHERE sent_at IS NULL") // never shared, and now never will be
+        try exec("DELETE FROM settings")
     }
 
     // MARK: Sharing history (#621)
@@ -331,6 +364,7 @@ final class LocalStore: @unchecked Sendable {
     }
 
     private func seed(now: Int64, consentTime: Bool, detail: String) throws {
+        guard !expired else { return } // the expired device's grants share nothing
         let blocked = blocked(), paused = pausedApps()
         for app in apps() where app.grantId != nil && !blocked.contains(app.id) {
             try record(.enabled, appId: app.id, detail: detail, at: consentTime ? min(app.consentAt, now) : now)

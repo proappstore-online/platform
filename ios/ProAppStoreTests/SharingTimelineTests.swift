@@ -62,6 +62,15 @@ final class SharingTimelineTests: XCTestCase {
         XCTAssertEqual(sessions[0].endKind, .historyCleared)
     }
 
+    /// #652: an expiry ends every open session; re-enabling after Reconnect starts a new one.
+    func testExpiryEndsTheSessionAndReconnectStartsANewOne() {
+        let sessions = SharingTimeline.sessions([e(.enabled, 0), e(.expired, 10 * min, nil), e(.enabled, 30 * min)], appId: "run")
+        XCTAssertEqual(sessions.map(\.start), [0, 30 * min])
+        XCTAssertEqual(sessions[0].end, 10 * min)
+        XCTAssertEqual(sessions[0].endKind, .expired)
+        XCTAssertNil(sessions[1].end)
+    }
+
     func testARestoredGrantStartsASessionAndEnableInsideItContinuesIt() {
         let sessions = SharingTimeline.sessions([
             e(.enabled, 0), e(.grantLost, 10 * min), e(.grantRestored, 20 * min), e(.enabled, 20 * min),

@@ -60,6 +60,21 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
     var permissionState: String
         get() = prefs.getString("permission", "") ?: ""
         set(value) { prefs.edit().putString("permission", value).apply() }
+    /** `device.expiresAt` from `GET /native/me`, 0 until known. */
+    var deviceExpiresAt: Long
+        get() = prefs.getLong("deviceExpiresAt", 0)
+        set(value) { prefs.edit().putLong("deviceExpiresAt", value).apply() }
+    /**
+     * The account whose device connection expired or was revoked (#652), null while connected. Survives relaunch;
+     * only pairing or [clear] resets it.
+     */
+    val expiredUser: String? get() = prefs.getString("expiredUser", null)
+    val expired: Boolean get() = expiredUser != null
+    /** Records `expired` once and remembers `userId`, so pairing that account again keeps the history. */
+    @Synchronized fun markExpired(userId: String, detail: String = "") {
+        if (!expired) record(ShareEvent.Kind.EXPIRED, detail = detail)
+        check(prefs.edit().putString("expiredUser", userId).commit())
+    }
     @Synchronized fun blocked(): Set<String> = prefs.getStringSet("blocked", emptySet())!!.toSet()
     @Synchronized fun block(appId: String) {
         val wasBlocked = appId in blocked()
@@ -126,7 +141,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         val apps = apps()
         val allowed = LocationPolicy.recipients(apps, excluded(), point.at).toSet()
         val retained = point.copy(grants = point.grants.filter { it in allowed })
-        if (paused || retained.grants.isEmpty()) return
+        if (paused || expired || retained.grants.isEmpty()) return
         if (count() >= LocationPolicy.MAX_QUEUE) {
             runCatching { record(ShareEvent.Kind.QUEUE_FULL) }
             error("Device storage queue is full. Connect to upload before resuming.")
@@ -165,8 +180,20 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         db.execSQL("DELETE FROM share_events WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM share_events WHERE at < ? GROUP BY app_id, kind)", arrayOf<Any>(cutoff, cutoff))
     }
     @Synchronized fun count(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM points", null).use { it.moveToFirst(); it.getInt(0) }
+    /** Disconnect, or pairing a different account: everything. */
     @Synchronized fun clear() {
         transaction { db -> listOf("points", "share_events", "share_points").forEach { db.delete(it, null, null) } }
+        check(prefs.edit().clear().commit())
+    }
+    /**
+     * Pairing the same account after an expiry (#652): the queue and the settings, which hold the old device's grants,
+     * go; the sharing history and activity log stay. Queued points carry grants the new device will never hold.
+     */
+    @Synchronized fun clearForReconnect() {
+        transaction { db ->
+            db.delete("points", null, null)
+            db.delete("share_points", "sent_at IS NULL", null) // never shared, and now never will be
+        }
         check(prefs.edit().clear().commit())
     }
 
@@ -228,6 +255,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         if (empty) transaction { seed(now, consentTime = true, detail = "seeded") }
     }
     private fun seed(now: Long, consentTime: Boolean, detail: String) {
+        if (expired) return // the expired device's grants share nothing
         val blocked = blocked(); val paused = pausedApps()
         val granted = apps().filter { it.grantId != null && it.id !in blocked }
         granted.forEach { record(ShareEvent.Kind.ENABLED, it.id, detail, if (consentTime) minOf(it.consentAt, now) else now) }

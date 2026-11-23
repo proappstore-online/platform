@@ -156,13 +156,163 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(local.lastSync, 0)
     }
 
-    func testUnauthorizedPausesCollection() async throws {
+    // MARK: Connection expired (#652)
+
+    private func assertExpired(_ repository: CompanionRepository, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertTrue(local.expired, file: file, line: line)
+        XCTAssertEqual(local.expiredUser, "u1", file: file, line: line)
+        XCTAssertNil(repository.token(), "the credential is dropped, so collection stops", file: file, line: line)
+        XCTAssertEqual(try secure.read(), [:], file: file, line: line)
+        XCTAssertEqual(local.message, "", "the expired card says it, not a sync error", file: file, line: line)
+    }
+
+    func testUnauthorizedMeExpiresTheConnectionAndKeepsEverything() async throws {
         let repository = try await connected()
         respond(me: 401, locations: .init())
         do { try await repository.sync(); XCTFail("401 must fail the sync") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, 401) }
-        XCTAssertTrue(local.paused)
-        XCTAssertEqual(local.message, "Device connection expired or was disconnected.")
+        try assertExpired(repository)
+        XCTAssertEqual(try local.count(), 2, "kept until Reconnect")
+        XCTAssertEqual(local.apps().map(\.id), ["ski"], "kept so the history still shows the app")
+        XCTAssertEqual(try logged([.expired, .syncFailed, .stopped]), ["expired:"])
+        // Nothing more is sent: there is no credential.
+        StubProtocol.seen = []
+        try await repository.sync()
+        XCTAssertEqual(StubProtocol.seen.count, 0)
+    }
+
+    func testUnauthorizedUploadExpiresTheConnection() async throws {
+        let repository = try await connected()
+        respond(locations: .init(status: 401, json: ["error": "Device connection expired or was disconnected."]))
+        do { try await repository.sync(); XCTFail("401 must fail the sync") } catch {}
+        try assertExpired(repository)
+    }
+
+    func testUnauthorizedGrantChangeExpiresTheConnection() async throws {
+        let repository = try await connected()
+        StubProtocol.handler = { _ in .init(status: 401, json: ["error": "Device connection expired or was disconnected."]) }
+        let app = local.apps()[0]
+        do { try await repository.enable(app); XCTFail("401 must fail") } catch {}
+        try assertExpired(repository)
+        try secure.write(["token": "ndev_test", "userId": "u1"])
+        try local.clearForReconnect()
+        try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"]!))
+        try local.block("ski") // the queued DELETE
+        do { try await repository.sync(); XCTFail("401 must fail") } catch {}
+        XCTAssertNil(repository.token())
+        XCTAssertTrue(local.expired)
+    }
+
+    /// Network errors, 429 and 5xx are sync failures: the connection stays.
+    func testTransientFailuresNeverExpireTheConnection() async throws {
+        let repository = try await connected()
+        for stub in [StubProtocol.Stub(offline: true), StubProtocol.Stub(status: 429), StubProtocol.Stub(status: 500), StubProtocol.Stub(status: 503), StubProtocol.Stub(status: 403)] {
+            StubProtocol.handler = { _ in stub }
+            do { try await repository.sync(); XCTFail("must fail") } catch {}
+            XCTAssertFalse(local.expired, "\(stub.status)")
+            XCTAssertEqual(repository.token(), "ndev_test")
+        }
         XCTAssertEqual(try local.count(), 2)
+    }
+
+    func testExpiredSurvivesARelaunch() async throws {
+        let repository = try await connected()
+        respond(me: 401, locations: .init())
+        do { try await repository.sync() } catch {}
+        local.close()
+        local = try LocalStore(directory: directory)
+        let relaunched = CompanionRepository(local: local, secure: SecureStore(service: secure.service), api: api)
+        XCTAssertTrue(local.expired)
+        XCTAssertNil(relaunched.token())
+        XCTAssertEqual(try local.count(), 2)
+    }
+
+    /// The pairing exchange for `userId`, after which `/native/me` reports no grants (they belonged to the old device).
+    private func pairAgain(userId: String) async throws -> Bool {
+        try secure.write(["pairId": String(repeating: "a", count: 64), "verifier": String(repeating: "b", count: 64)])
+        var fresh = me
+        fresh["user"] = ["id": userId, "name": "Alex"]
+        fresh["apps"] = [["id": "ski", "name": "Ski", "version": "v", "purpose": "Routes", "disclosure": "Disclosure", "grant": NSNull()]]
+        StubProtocol.handler = { [fresh] request in
+            request.url!.path == "/v1/native/auth/complete" ? .init(json: ["token": "ndev_new"]) : .init(json: fresh)
+        }
+        return try await CompanionRepository(local: local, secure: secure, api: api).finishSignIn()
+    }
+
+    func testReconnectKeepsHistoryAndClearsTheQueueAndGrants() async throws {
+        let repository = try await connected()
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        try await repository.sync()
+        try local.enqueue(TrackPoint(id: "c", at: CompanionRepository.now(), lat: 1, lng: 2, accuracy: 5, grants: ["g1"]))
+        try local.record(.enabled, appId: "ski")
+        respond(me: 401, locations: .init())
+        do { try await repository.sync() } catch {}
+        XCTAssertTrue(local.expired)
+        let finished = try await pairAgain(userId: "u1")
+        XCTAssertTrue(finished)
+        XCTAssertEqual(repository.token(), "ndev_new")
+        XCTAssertFalse(local.expired)
+        XCTAssertEqual(try local.count(), 0, "points tagged with the old grants can never upload")
+        XCTAssertNil(local.apps().first?.grantId)
+        XCTAssertEqual(try local.events().map(\.kind), [.resumedAll, .enabled, .expired], "no grant_lost noise for the old device's grants")
+        XCTAssertEqual(try local.track(appId: "ski", from: 0, to: .max).count, 2, "uploaded history kept, the unsent point dropped")
+        XCTAssertTrue(local.paused)
+    }
+
+    /// A different account after an expiry never sees the previous account's history.
+    func testReconnectWithAnotherAccountClearsEverything() async throws {
+        let repository = try await connected()
+        respond(me: 401, locations: .init())
+        do { try await repository.sync() } catch {}
+        let finished = try await pairAgain(userId: "u2")
+        XCTAssertTrue(finished)
+        XCTAssertEqual(try local.events(), [])
+        XCTAssertEqual(try local.count(), 0)
+        XCTAssertFalse(local.expired)
+    }
+
+    func testRenewingEarlyUploadsFirstThenKeepsHistory() async throws {
+        let repository = try await connected()
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        try await repository.renew()
+        XCTAssertEqual(StubProtocol.seen.map(\.url!.path), ["/v1/native/me", "/v1/native/locations"])
+        try assertExpired(repository)
+        XCTAssertEqual(try logged([.expired]), ["expired:renew"])
+        XCTAssertEqual(try local.track(appId: "ski", from: 0, to: .max).count, 2)
+    }
+
+    func testDisconnectStillWipesEverything() async throws {
+        for expire in [false, true] {
+            let repository = try await connected()
+            respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+            try await repository.sync()
+            if expire { respond(me: 401, locations: .init()); do { try await repository.sync() } catch {} }
+            StubProtocol.handler = { _ in .init(json: ["disconnected": true]) }
+            try await repository.disconnect()
+            XCTAssertEqual(try local.events(), [], "expired: \(expire)")
+            XCTAssertEqual(try local.track(appId: "ski", from: 0, to: .max), [])
+            XCTAssertEqual(try local.count(), 0)
+            XCTAssertEqual(local.apps(), [])
+            XCTAssertFalse(local.expired)
+            XCTAssertNil(repository.token())
+        }
+    }
+
+    func testExpiryWarningOnlyInTheLastSevenDays() {
+        let day: Int64 = 86_400_000
+        XCTAssertNil(CompanionRepository.expiresInDays(0, now: 1))
+        XCTAssertNil(CompanionRepository.expiresInDays(10 * day, now: 0))
+        XCTAssertNil(CompanionRepository.expiresInDays(7 * day, now: 0))
+        XCTAssertEqual(CompanionRepository.expiresInDays(7 * day - 1, now: 0), 7)
+        XCTAssertEqual(CompanionRepository.expiresInDays(day, now: 0), 1)
+        XCTAssertEqual(CompanionRepository.expiresInDays(1, now: 0), 1)
+        XCTAssertNil(CompanionRepository.expiresInDays(5, now: 5))
+    }
+
+    func testMeStoresTheDeviceExpiry() async throws {
+        let repository = try await connected()
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        try await repository.sync()
+        XCTAssertEqual(local.deviceExpiresAt, 1)
     }
 
     func testQuotaKeepsTheQueue() async throws {
@@ -218,14 +368,6 @@ final class PasApiTests: XCTestCase {
         respond(locations: .init(json: ["acknowledged": ["a"]]))
         do { try await repository.sync() } catch {}
         XCTAssertEqual(try logged([.uploadRejected]), ["upload_rejected:partial_ack"])
-    }
-
-    func testUnauthorizedLogsTheStopAndTheFailureAndStillThrows() async throws {
-        let repository = try await connected()
-        respond(me: 401, locations: .init())
-        do { try await repository.sync(); XCTFail("401 must still throw") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, 401) }
-        XCTAssertEqual(try logged(), ["stopped:signed_out", "sync_failed:401 Device connection expired or was disconnected."])
-        XCTAssertEqual(local.message, "Device connection expired or was disconnected.")
     }
 
     /// #621: the sharing history is local only. Clearing, expiring and seeding it make no request.

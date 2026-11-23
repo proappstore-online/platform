@@ -19,7 +19,7 @@ data class InactiveInterval(val start: Long, val end: Long?, val cause: Inactive
 data class SharingPeriod(val start: Long, val end: Long, val cause: InactiveCause?)
 
 /**
- * One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost` or `history_cleared`
+ * One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost`, `history_cleared` or `expired`
  * (open if none). This is *intended* sharing: permission loss or Android stopping the service can still leave gaps in
  * the points, and the track shows those (ADR-015: a gap must remain a gap). Ported from iOS SharingTimeline.swift.
  */
@@ -87,7 +87,7 @@ object SharingTimeline {
                     sessions += SharingSession(event.at, null, null, global?.let { listOf(InactiveInterval(event.at, null, it)) } ?: emptyList())
                 }
                 ShareEvent.Kind.DISABLED, ShareEvent.Kind.GRANT_LOST -> if (mine) { end(event.at, event.kind); appPaused = false }
-                ShareEvent.Kind.HISTORY_CLEARED -> if (device) end(event.at, ShareEvent.Kind.HISTORY_CLEARED)
+                ShareEvent.Kind.HISTORY_CLEARED, ShareEvent.Kind.EXPIRED -> if (device) end(event.at, event.kind)
                 ShareEvent.Kind.PAUSED -> if (mine) { appPaused = true; transition(event.at, old) }
                 ShareEvent.Kind.RESUMED -> if (mine) { appPaused = false; transition(event.at, old) }
                 ShareEvent.Kind.PAUSED_ALL -> if (device) { if (global == null) global = InactiveCause.All; transition(event.at, old) }

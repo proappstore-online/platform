@@ -17,8 +17,23 @@ data class ShareEvent(val id: Long, val at: Long, val appId: String?, val kind: 
         GRANT_LOST("grant_lost"), HISTORY_CLEARED("history_cleared"),
         // Activity log only (#624).
         SYNC_FAILED("sync_failed"), SYNC_RECOVERED("sync_recovered"), UPLOAD_REJECTED("upload_rejected"), QUOTA("quota"),
-        PERMISSION("permission"), QUEUE_FULL("queue_full"), GRANT_RESTORED("grant_restored");
+        PERMISSION("permission"), QUEUE_FULL("queue_full"), GRANT_RESTORED("grant_restored"),
+        /** The device connection expired or was revoked (#652); `detail` "renew" when the user reconnected early. */
+        EXPIRED("expired");
         companion object { fun of(raw: String): Kind? = entries.firstOrNull { it.raw == raw } }
+    }
+}
+
+/** The device connection's lifetime (#652). Pure, so the rules are unit-tested. */
+object DeviceConnection {
+    /** Only a 401 means the credential expired or was revoked. Network errors, 429 and 5xx never do. */
+    fun expired(e: Throwable): Boolean = e is ApiFailure && e.status == 401
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+    /** The days left when `device.expiresAt` is under 7 days away, else null. */
+    fun expiresInDays(expiresAt: Long, now: Long): Int? {
+        val left = expiresAt - now
+        if (expiresAt <= 0 || left <= 0 || left >= 7 * DAY_MS) return null
+        return ((left + DAY_MS - 1) / DAY_MS).toInt()
     }
 }
 

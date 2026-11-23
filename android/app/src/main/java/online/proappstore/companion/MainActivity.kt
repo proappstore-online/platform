@@ -42,6 +42,8 @@ data class CompanionState(
     /** `denied`, `approximate`, `whenInUse` or `always` (LocationService.permissionState). */
     val permission: String = "", val locationOn: Boolean = true, val powerSave: Boolean = false, val batteryOptimized: Boolean = false,
     val lastFix: LiveFix? = null, val version: String = "",
+    /** The device connection expired or was revoked (#652); [expiresInDays] is set only in its last 7 days. */
+    val expired: Boolean = false, val expiresInDays: Int? = null,
 )
 
 enum class Tab(val label: String, val icon: Int) {
@@ -61,8 +63,8 @@ class MainActivity : ComponentActivity() {
         // Upgrade path: sessions for grants held before the history existed start at their consent time.
         if (graph.repository.token() != null) runCatching { graph.local.seedIfEmpty() }
         refresh()
-        // Sharing when any app has a grant, otherwise the Store.
-        val initialTab = if (state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE
+        // Sharing when any app has a grant or the connection expired, otherwise the Store.
+        val initialTab = if (state.expired || state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE
         setContent {
             val colors = if (isSystemInDarkTheme()) darkColorScheme(primary = Color(0xFFC4B5FD)) else lightColorScheme(primary = Color(0xFF6D28D9))
             val catalogue by graph.catalogue.state.collectAsState()
@@ -86,7 +88,9 @@ class MainActivity : ComponentActivity() {
                     initialTab = initialTab,
                     store = StoreHooks(catalogue, graph.images, refresh = { refreshCatalogue() }, open = { open(it.openUrl) }, openUrl = { open(it) }),
                     clearHistory = { runCatching { graph.local.clearHistory() }.onFailure { error = it.message ?: "Could not clear history." }; refresh() },
-                    loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } })
+                    loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } },
+                    // Pairs again keeping the history (#652): after an expiry, or early from the expiry note.
+                    reconnect = { act { graph.repository.renew(); stopService(Intent(this@MainActivity, LocationService::class.java)); open(graph.repository.startSignIn()) } })
                 if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false },
                     title = { Text("Allow background location") },
                     text = { Text("ProAppStore collects precise location to automatically record routes for apps you enable, even when ProAppStore and those apps are closed. Updates go to PAS and only your enabled apps. Choose Precise location, then Allow all the time on the next settings screen. You can pause or revoke access here.") },
@@ -102,7 +106,7 @@ class MainActivity : ComponentActivity() {
         refreshJob?.cancel()
         refreshJob = lifecycleScope.launch {
             try { graph.repository.finishSignIn(); if (graph.repository.token() != null) graph.repository.sync() }
-            catch (e: Exception) { if (e !is CancellationException) error = e.message ?: "Could not connect." else throw e }
+            catch (e: Exception) { if (e is CancellationException) throw e; if (!DeviceConnection.expired(e)) error = e.message ?: "Could not connect." }
             refresh(); maybeStart()
             while (isActive) { delay(2_000); refresh() }
         }
@@ -116,7 +120,8 @@ class MainActivity : ComponentActivity() {
         val apps = local.apps()
         val connectivity = getSystemService(ConnectivityManager::class.java)
         val power = getSystemService(PowerManager::class.java)
-        state = CompanionState(graph.repository.token() != null, local.userName, apps, local.blocked(),
+        val signedIn = graph.repository.token() != null
+        state = CompanionState(signedIn, local.userName, apps, local.blocked(),
             local.paused, LocationService.running, LocationService.allowed(this), local.count(), local.message,
             pairingCode = graph.repository.pairingCode(), lastSync = local.lastSync, pausedApps = local.pausedApps(),
             now = System.currentTimeMillis(), events = runCatching { local.events() }.getOrDefault(emptyList()),
@@ -128,13 +133,19 @@ class MainActivity : ComponentActivity() {
             locationOn = getSystemService(LocationManager::class.java).isLocationEnabled,
             powerSave = power.isPowerSaveMode, batteryOptimized = !power.isIgnoringBatteryOptimizations(packageName),
             lastFix = LocationService.lastFix,
-            version = packageManager.getPackageInfo(packageName, 0).let { "${it.versionName} (${it.longVersionCode})" })
+            version = packageManager.getPackageInfo(packageName, 0).let { "${it.versionName} (${it.longVersionCode})" },
+            expired = local.expired,
+            expiresInDays = if (signedIn) DeviceConnection.expiresInDays(local.deviceExpiresAt, System.currentTimeMillis()) else null)
+        if (state.expired && LocationService.running) stopService(Intent(this, LocationService::class.java))
     }
     private fun act(action: suspend () -> Unit) {
         if (working) return
         working = true; error = ""
         lifecycleScope.launch {
-            try { action() } catch (e: Exception) { if (e is CancellationException) throw e; error = e.message ?: "Please try again." }
+            try { action() } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (!DeviceConnection.expired(e)) error = e.message ?: "Please try again." // the expired card says it
+            }
             finally { working = false; refresh() }
         }
     }
@@ -186,6 +197,7 @@ internal fun PasScreen(
     store: StoreHooks = StoreHooks(),
     clearHistory: () -> Unit = {},
     loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>> = { _, _ -> emptyMap() },
+    reconnect: () -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(initialTab) }
     var sharingPage by remember { mutableStateOf<SharingPage>(SharingPage.Dashboard) }
@@ -213,7 +225,7 @@ internal fun PasScreen(
                         val tracks = rememberTracks(granted, state, SharingTimeline.today(state.now), loadTracks)
                         SharingDashboard(state, tracks, connect, { consent = it }, disable, pauseApp, resumeApp, pause, resume, permissions, sync, openApp,
                             showApp = { sharingPage = SharingPage.App(it.id) }, showActivity = { sharingPage = SharingPage.Activity(null, page) },
-                            showMap = { sharingPage = SharingPage.Map })
+                            showMap = { sharingPage = SharingPage.Map }, reconnect = reconnect)
                     }
                     SharingPage.Map -> Column(Modifier.padding(horizontal = 16.dp).fillMaxSize()) {
                         BackRow("Sharing") { sharingPage = SharingPage.Dashboard }
@@ -228,7 +240,7 @@ internal fun PasScreen(
                     } ?: LaunchedEffect(page) { sharingPage = SharingPage.Dashboard } // the app left /native/me
                     is SharingPage.Activity -> ActivityScreen(state, page.appId) { sharingPage = page.from }
                 }
-                Tab.SETTINGS -> SettingsScreen(state, connect, permissions, disconnect, privacy, account, clearHistory, store.openUrl)
+                Tab.SETTINGS -> SettingsScreen(state, connect, permissions, disconnect, privacy, account, clearHistory, store.openUrl, reconnect)
             }
         }
     }
@@ -250,7 +262,7 @@ internal fun StatusMessages(state: CompanionState) {
 @Composable
 private fun SettingsScreen(
     state: CompanionState, connect: () -> Unit, permissions: () -> Unit, disconnect: () -> Unit, privacy: () -> Unit, account: () -> Unit,
-    clearHistory: () -> Unit, openUrl: (String) -> Unit,
+    clearHistory: () -> Unit, openUrl: (String) -> Unit, reconnect: () -> Unit,
 ) {
     var disconnectPrompt by remember { mutableStateOf(false) }
     var clearPrompt by remember { mutableStateOf(false) }
@@ -258,8 +270,13 @@ private fun SettingsScreen(
         Spacer(Modifier.height(8.dp))
         Text("Settings", style = MaterialTheme.typography.headlineLarge)
         StatusMessages(state)
-        if (state.signedIn) {
+        if (state.expired) ExpiredCard(state, reconnect)
+        if (state.signedIn || state.expired) {
             Text(state.name, style = MaterialTheme.typography.titleMedium)
+            state.expiresInDays?.let { days ->
+                Text("Connection renews when you reconnect — expires in $days day${if (days == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = reconnect, enabled = !state.busy) { Text("Reconnect") }
+            }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Labeled("Location permission", Format.permission[state.permission] ?: state.permission)

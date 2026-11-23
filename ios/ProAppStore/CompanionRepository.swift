@@ -71,8 +71,9 @@ actor CompanionRepository {
             guard let credential = result["token"] as? String else { throw CompanionError("Unexpected response from ProAppStore.") }
             let me = try await api.request("GET", "/native/me", token: credential)
             guard let userId = (me["user"] as? [String: Any])?["id"] as? String else { throw CompanionError("Unexpected response from ProAppStore.") }
-            // Pairing never adopts a previous installation/account's queue or grants.
-            try local.clear()
+            // Pairing never adopts a previous installation/account's queue or grants. The same account after an
+            // expiry keeps the on-device history (#652).
+            if local.expiredUser == userId { try local.clearForReconnect() } else { try local.clear() }
             try secure.write(["token": credential, "userId": userId])
             try updateMe(me)
             return true
@@ -83,10 +84,9 @@ actor CompanionRepository {
         try await exclusive { [self] in
             guard let credential = token() else { throw CompanionError("Sign in first.") }
             // Finish any queued revocation before granting a new epoch.
-            if local.blocked().contains(app.id) { _ = try await api.request("DELETE", "/native/apps/\(app.id)/location", token: credential) }
-            _ = try await api.request("PUT", "/native/apps/\(app.id)/location", token: credential,
-                                      body: json(["version": app.version, "enabled": true]))
-            try updateMe(try await api.request("GET", "/native/me", token: credential))
+            if local.blocked().contains(app.id) { _ = try await device("DELETE", "/native/apps/\(app.id)/location", credential) }
+            _ = try await device("PUT", "/native/apps/\(app.id)/location", credential, body: json(["version": app.version, "enabled": true]))
+            try updateMe(try await device("GET", "/native/me", credential))
             try local.unblock(app.id); try local.record(.enabled, appId: app.id)
             try local.resume(app.id); try local.setPaused(false); local.message = ""
         }
@@ -113,15 +113,15 @@ actor CompanionRepository {
             var uploading = false, partial = false
             do {
                 let blocked = local.blocked()
-                for id in blocked { _ = try await api.request("DELETE", "/native/apps/\(id)/location", token: credential) }
-                try updateMe(try await api.request("GET", "/native/me", token: credential))
+                for id in blocked { _ = try await device("DELETE", "/native/apps/\(id)/location", credential) }
+                try updateMe(try await device("GET", "/native/me", credential))
                 for id in blocked { try local.unblock(id) }
                 try local.expire(now: Self.now())
                 for _ in 0..<10 {
                     let batch = try local.pending()
                     if batch.isEmpty { break }
                     uploading = true
-                    let result = try await api.request("POST", "/native/locations", token: credential, body: try JSONEncoder().encode(["points": batch]))
+                    let result = try await device("POST", "/native/locations", credential, body: try JSONEncoder().encode(["points": batch]))
                     let ids = result["acknowledged"] as? [String] ?? []
                     guard Set(ids) == Set(batch.map(\.id)) else {
                         partial = true
@@ -132,7 +132,7 @@ actor CompanionRepository {
                 local.lastSync = Self.now(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
                 try? local.syncSucceeded()
             } catch {
-                if let failure = error as? ApiFailure, failure.status == 401 { try? local.setPaused(true, stopped: "signed_out") }
+                if (error as? ApiFailure)?.status == 401 { throw error } // expired: the expired card says so, not a sync failure
                 local.message = (error as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
                 local.lastSyncAttempt = Self.now(); local.lastSyncError = error.localizedDescription
                 // Activity log: status (0 = network) plus the server's `error` text only.
@@ -147,11 +147,44 @@ actor CompanionRepository {
         }
     }
 
+    /// Reconnecting before the connection expires (#652): uploads what it can, then takes the same path as an
+    /// expiry, which keeps the history. The old credential is only forgotten: revoking it would delete the
+    /// platform copies already shared, and it lapses on its own within days.
+    func renew() async throws {
+        guard token() != nil else { return }
+        try? await sync()
+        try await exclusive { [self] in if token() != nil { try expire(detail: "renew") } }
+    }
+
+    /// A device-authenticated request. 401 means the credential expired or was revoked (#652); network errors,
+    /// 429 and 5xx never expire the connection.
+    private func device(_ method: String, _ path: String, _ credential: String, body: Data? = nil) async throws -> [String: Any] {
+        do { return try await api.request(method, path, token: credential, body: body) } catch let failure as ApiFailure where failure.status == 401 {
+            try expire()
+            throw failure
+        }
+    }
+
+    /// Drops the credential, so collection stops, and keeps everything on the phone for Reconnect.
+    private nonisolated func expire(detail: String = "") throws {
+        try local.markExpired(userId: try secure.read()["userId"] ?? "", detail: detail)
+        try secure.clear()
+    }
+
+    /// The days left when `device.expiresAt` is under 7 days away, else nil (#652).
+    static func expiresInDays(_ expiresAt: Int64, now: Int64 = now()) -> Int? {
+        let left = expiresAt - now
+        guard expiresAt > 0, left > 0, left < 7 * 86_400_000 else { return nil }
+        return Int((left + 86_399_999) / 86_400_000)
+    }
+
     private nonisolated func updateMe(_ me: [String: Any]) throws {
         let user = me["user"] as? [String: Any]
         guard let id = user?["id"] as? String, id == (try secure.read())["userId"] else { throw CompanionError("Account changed. Reconnect this device.") }
         local.userName = user?["name"] as? String ?? ""
-        local.deviceLabel = (me["device"] as? [String: Any])?["label"] as? String ?? ""
+        let device = me["device"] as? [String: Any]
+        local.deviceLabel = device?["label"] as? String ?? ""
+        local.deviceExpiresAt = (device?["expiresAt"] as? NSNumber)?.int64Value ?? 0
         try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"] as? [Any] ?? []))
     }
 

@@ -27,6 +27,8 @@ final class ActivityTextTests: XCTestCase {
             (.permission, "precise→approximate", nil, "Precise Location turned off: recording stopped"),
             (.permission, "whenInUse→denied", nil, "Location permission changed: While Using → Denied"),
             (.queueFull, "", nil, "Storage queue full: recording stopped until uploads catch up"),
+            (.expired, "", nil, "Connection to ProAppStore expired: sharing stopped"),
+            (.expired, "renew", nil, "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"),
         ]
         XCTAssertEqual(Set(table.map(\.0)), Set(ShareEvent.Kind.allCases), "every kind has a sentence")
         for (kind, detail, app, expected) in table { XCTAssertEqual(sentence(kind, detail, app: app), expected) }

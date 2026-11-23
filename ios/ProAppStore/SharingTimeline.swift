@@ -13,7 +13,8 @@ struct InactiveInterval: Equatable {
     let cause: InactiveCause
 }
 
-/// One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost` or `history_cleared` (open if none).
+/// One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost`, `history_cleared` or
+/// `expired` (open if none).
 /// This is *intended* sharing. Permission loss or iOS ending the app can still leave gaps in the points, and the
 /// track shows those (ADR-015: a gap must remain a gap).
 struct SharingSession: Equatable {
@@ -70,8 +71,8 @@ enum SharingTimeline {
                                                inactive: global.map { [InactiveInterval(start: event.at, end: nil, cause: $0)] } ?? []))
             case (.disabled, appId), (.grantLost, appId):
                 end(at: event.at, kind: event.kind); appPaused = false
-            case (.historyCleared, nil):
-                end(at: event.at, kind: .historyCleared)
+            case (.historyCleared, nil), (.expired, nil):
+                end(at: event.at, kind: event.kind)
             case (.paused, appId):
                 appPaused = true; transition(at: event.at, from: old)
             case (.resumed, appId):

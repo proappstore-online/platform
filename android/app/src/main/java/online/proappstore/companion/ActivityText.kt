@@ -8,7 +8,7 @@ object ActivityText {
         ShareEvent.Kind.ENABLED, ShareEvent.Kind.DISABLED, ShareEvent.Kind.PAUSED, ShareEvent.Kind.RESUMED, ShareEvent.Kind.PAUSED_ALL,
         ShareEvent.Kind.RESUMED_ALL, ShareEvent.Kind.GRANT_LOST, ShareEvent.Kind.GRANT_RESTORED, ShareEvent.Kind.HISTORY_CLEARED -> Category.SHARING
         ShareEvent.Kind.STOPPED, ShareEvent.Kind.SYNC_FAILED, ShareEvent.Kind.SYNC_RECOVERED, ShareEvent.Kind.UPLOAD_REJECTED,
-        ShareEvent.Kind.QUOTA, ShareEvent.Kind.PERMISSION, ShareEvent.Kind.QUEUE_FULL -> Category.PROBLEM
+        ShareEvent.Kind.QUOTA, ShareEvent.Kind.PERMISSION, ShareEvent.Kind.QUEUE_FULL, ShareEvent.Kind.EXPIRED -> Category.PROBLEM
     }
 
     private val permissionNames = mapOf("denied" to "Not allowed", "approximate" to "Approximate only", "whenInUse" to "While using the app", "always" to "All the time")
@@ -53,6 +53,8 @@ object ActivityText {
                 }
             }
             ShareEvent.Kind.QUEUE_FULL -> "Storage queue full: recording stopped until uploads catch up"
+            ShareEvent.Kind.EXPIRED -> if (event.detail == "renew") "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"
+                else "Connection to ProAppStore expired: sharing stopped"
         }
     }
 }
