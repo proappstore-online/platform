@@ -24,7 +24,14 @@ jobs:
       # Build number = workflow run number and PAS_COMMIT = short SHA (both default in Config/Version.xcconfig
       # for local builds). Ad-hoc signed, not CODE_SIGNING_ALLOWED=NO: an unsigned test host has no Keychain entitlement
       # (errSecMissingEntitlement, -34018), which SecureStoreTests and PasApiTests need.
+      # Runner images change which simulators exist, so a fixed device name fails at random. Use the
+      # newest available iPhone simulator instead (freeappstore-online/platform 349c4dc).
+      - name: Pick a simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; ios=sorted((k for k in d if "iOS" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-",1)[1].split("-")]); print(next(x["udid"] for k in reversed(ios) for x in d[k] if x["name"].startswith("iPhone")))')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
       - name: Unit tests (simulator, ad-hoc signed)
-        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath build/ios test CODE_SIGN_IDENTITY=- CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
+        run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'id=${{ steps.sim.outputs.udid }}' -derivedDataPath build/ios test CODE_SIGN_IDENTITY=- CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
       - name: Device build (unsigned)
         run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'generic/platform=iOS' -derivedDataPath build/ios build CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
