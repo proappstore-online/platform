@@ -44,4 +44,12 @@ final class LocationPolicyTests: XCTestCase {
         XCTAssertFalse(LocationPolicy.valid(batch[1], now: now, lastFixAt: lastFixAt)) // out of order / redelivered
         XCTAssertFalse(LocationPolicy.valid(batch[3], now: now, lastFixAt: lastFixAt)) // same timestamp
     }
+
+    /// #620: with every granted app paused or revoked there is no recipient, which is the condition
+    /// LocationCollector.evaluate() stops collection on.
+    func testNoRecipientsWhenEveryGrantedAppIsExcluded() {
+        let run = ConnectedApp(id: "run", name: "Run", purpose: "Routes", disclosure: "Disclosure", version: "1", grantId: "grant-two", consentAt: 1000)
+        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski"], at: 2000), ["grant-two"])
+        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski", "run"], at: 2000), [])
+    }
 }

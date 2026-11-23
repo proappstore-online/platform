@@ -114,6 +114,47 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
     }
 
+    // MARK: Per-app pause (#620)
+
+    func testPauseFiltersNewPointsToTheOtherRecipient() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.pause("ski")
+        try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
+        XCTAssertEqual(try local.pending().first?.grants, ["run-g"])
+        try local.pause("run")
+        try local.enqueue(point("q", at: 11, grants: ["ski-g", "run-g"]))
+        XCTAssertEqual(try local.count(), 1)
+    }
+
+    func testPauseLeavesQueuedPointsUntouched() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
+        try local.pause("ski")
+        XCTAssertEqual(try local.pending().first?.grants, ["ski-g", "run-g"])
+    }
+
+    func testResumeRestoresTaggingAndBlockClearsThePause() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.pause("ski")
+        try local.resume("ski")
+        try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
+        XCTAssertEqual(try local.pending().first?.grants, ["ski-g", "run-g"])
+        try local.pause("ski")
+        try local.block("ski")
+        XCTAssertEqual(local.pausedApps(), [])
+        XCTAssertEqual(local.excluded(), ["ski"])
+    }
+
+    func testPausesSurviveReopenAndClearEmptiesThem() throws {
+        let local = try store(apps: [app("ski", "ski-g")])
+        try local.pause("ski")
+        local.close()
+        let reopened = try LocalStore(directory: directory)
+        XCTAssertEqual(reopened.pausedApps(), ["ski"])
+        try reopened.clear()
+        XCTAssertEqual(reopened.pausedApps(), [])
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil

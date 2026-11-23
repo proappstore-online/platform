@@ -80,7 +80,7 @@ actor CompanionRepository {
             _ = try await api.request("PUT", "/native/apps/\(app.id)/location", token: credential,
                                       body: json(["version": app.version, "enabled": true]))
             try updateMe(try await api.request("GET", "/native/me", token: credential))
-            try local.unblock(app.id); try local.setPaused(false); local.message = ""
+            try local.unblock(app.id); try local.resume(app.id); try local.setPaused(false); local.message = ""
         }
     }
 

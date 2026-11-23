@@ -39,7 +39,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     }
 
     private func recipients(at: Int64) -> [String] {
-        LocationPolicy.recipients(local.apps(), blocked: local.blocked(), at: at)
+        LocationPolicy.recipients(local.apps(), blocked: local.excluded(), at: at)
     }
 
     /// Starts or stops collection to match the current rules. Called on launch (including a relaunch for a

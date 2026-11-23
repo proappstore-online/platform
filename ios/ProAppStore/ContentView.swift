@@ -15,6 +15,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     @Published private(set) var deviceLabel = ""
     @Published private(set) var apps: [ConnectedApp] = []
     @Published private(set) var blocked: Set<String> = []
+    @Published private(set) var pausedApps: Set<String> = []
     @Published private(set) var paused = true
     @Published private(set) var queued = 0
     @Published private(set) var message = ""
@@ -36,10 +37,12 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     }
 
     func enabled(_ app: ConnectedApp) -> Bool { app.grantId != nil && !blocked.contains(app.id) }
+    /// Enabled, not paused for this app, and Pause all is off.
+    func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && !pausedApps.contains(app.id) && !paused }
 
     func refresh() {
         signedIn = repository.token() != nil
-        name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); paused = local.paused
+        name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); pausedApps = local.pausedApps(); paused = local.paused
         queued = (try? local.count()) ?? 0; lastSync = local.lastSync; pairingCode = repository.pairingCode()
         message = error.isEmpty ? local.message : error
     }
@@ -117,6 +120,16 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         refresh(); collector.evaluate()
     }
 
+    /// Local writes, not `act`: pausing works offline and instantly.
+    func pause(_ app: ConnectedApp) {
+        do { try local.pause(app.id) } catch { self.error = error.localizedDescription }
+        refresh(); collector.evaluate()
+    }
+    func resume(_ app: ConnectedApp) {
+        do { try local.resume(app.id) } catch { self.error = error.localizedDescription }
+        refresh(); collector.evaluate()
+    }
+
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
     }
@@ -187,13 +200,25 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(app.name).font(.headline)
                     Text("Background location").font(.subheadline)
-                    Text(model.enabled(app) ? "Enabled" : "Off").foregroundStyle(.tint)
+                    Text(!model.enabled(app) ? "Off" : model.pausedApps.contains(app.id) ? "Paused" : "Sharing").foregroundStyle(.tint)
                     if model.blocked.contains(app.id) {
                         Text("Disabled on this phone. Server revocation will finish when connected.").font(.footnote)
                     }
-                    Button(model.enabled(app) ? "Disable" : "Enable") {
-                        if model.enabled(app) { model.disable(app) } else { model.consent = app }
-                    }.disabled(model.busy)
+                    HStack {
+                        if model.enabled(app) {
+                            if model.pausedApps.contains(app.id) {
+                                Button("Resume") { model.resume(app) }.disabled(model.paused)
+                            } else {
+                                Button("Pause") { model.pause(app) }
+                            }
+                        }
+                        Button(model.enabled(app) ? "Disable" : "Enable") {
+                            if model.enabled(app) { model.disable(app) } else { model.consent = app }
+                        }.disabled(model.busy)
+                    }
+                    if model.paused && model.enabled(app) && model.pausedApps.contains(app.id) {
+                        Text("All sharing is paused. Resume location to continue.").font(.footnote)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -220,6 +245,8 @@ struct ContentView: View {
 
     private var status: String {
         if model.paused { return "Location paused" }
+        let enabledApps = model.apps.filter(model.enabled)
+        if !enabledApps.isEmpty && enabledApps.allSatisfy({ model.pausedApps.contains($0.id) }) { return "All apps paused" }
         if !collector.permitted { return "Location permission needed" }
         return collector.running ? "Location sharing is on" : "Location is not running"
     }

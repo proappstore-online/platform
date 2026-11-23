@@ -76,6 +76,8 @@ final class LocalStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         try transaction {
             try saveBlocked(blocked().union([appId]))
+            // A disabled app is not "paused": re-enabling it starts sharing.
+            try savePausedApps(pausedApps().subtracting([appId]))
             // Discard only this recipient. Other enabled apps retain their own queued copy.
             guard let revoked = apps().first(where: { $0.id == appId })?.grantId else { return }
             for p in try pending(limit: LocationPolicy.MAX_QUEUE) where p.grants.contains(revoked) {
@@ -91,6 +93,27 @@ final class LocalStore: @unchecked Sendable {
         try saveBlocked(blocked().subtracting([appId]))
     }
 
+    /// Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform
+    /// copy are untouched, and resuming needs no new disclosure.
+    func pausedApps() -> Set<String> {
+        guard let raw = setting("pausedApps")?.data(using: .utf8), let ids = try? JSONDecoder().decode([String].self, from: raw) else { return [] }
+        return Set(ids)
+    }
+
+    /// Never rewrites the queue: points recorded before the pause were authorized when taken and still upload.
+    func pause(_ appId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try savePausedApps(pausedApps().union([appId]))
+    }
+
+    func resume(_ appId: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try savePausedApps(pausedApps().subtracting([appId]))
+    }
+
+    /// Apps that must not receive new fixes: revoked, or paused by the user.
+    func excluded() -> Set<String> { blocked().union(pausedApps()) }
+
     func apps() -> [ConnectedApp] {
         guard let raw = setting("apps")?.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([ConnectedApp].self, from: raw)) ?? []
@@ -103,7 +126,7 @@ final class LocalStore: @unchecked Sendable {
 
     func enqueue(_ point: TrackPoint) throws {
         lock.lock(); defer { lock.unlock() }
-        let allowed = Set(LocationPolicy.recipients(apps(), blocked: blocked(), at: point.at))
+        let allowed = Set(LocationPolicy.recipients(apps(), blocked: excluded(), at: point.at))
         let retained = point.with(grants: point.grants.filter { allowed.contains($0) })
         if paused || retained.grants.isEmpty { return }
         guard try count() < LocationPolicy.MAX_QUEUE else { throw CompanionError("Device storage queue is full. Connect to upload before resuming.") }
@@ -143,6 +166,9 @@ final class LocalStore: @unchecked Sendable {
     }
     private func saveBlocked(_ ids: Set<String>) throws {
         try setSetting("blocked", String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
+    }
+    private func savePausedApps(_ ids: Set<String>) throws {
+        try setSetting("pausedApps", String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
     }
     private func json(_ point: TrackPoint) throws -> String { String(decoding: try JSONEncoder().encode(point), as: UTF8.self) }
 
