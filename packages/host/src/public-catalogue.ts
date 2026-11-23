@@ -5,12 +5,14 @@ export interface CatalogueApp {
   description: string;
   appUrl: string;
 }
+// Only plain data is shared across requests. An in-flight promise must not be:
+// Workers drop its settlement in any request other than the one that created
+// it, so a second awaiter throws once the first request ends (#616).
 let cache: { apps: CatalogueApp[]; until: number } | undefined;
-let loading: Promise<CatalogueApp[]> | undefined;
 
 export async function getPublicCatalogueApp(appId: string): Promise<CatalogueApp | undefined> {
   if (cache && cache.until > Date.now()) return cache.apps.find((app) => app.id === appId);
-  loading ??= (async () => {
+  const apps = await (async () => {
     try {
       const response = await fetch("https://proappstore.online/catalogue.json", {
         signal: AbortSignal.timeout(1500),
@@ -32,9 +34,7 @@ export async function getPublicCatalogueApp(appId: string): Promise<CatalogueApp
       return apps;
     } catch {
       return [];
-    } finally {
-      loading = undefined;
     }
   })();
-  return (await loading).find((app) => app.id === appId);
+  return apps.find((app) => app.id === appId);
 }

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const URL_ = "https://proappstore.online/catalogue.json";
 const good = { id: "meet", name: "Meet", description: "Find people nearby.", appUrl: "https://meet.proappstore.online" };
 
-/** A fresh module per test: the cache and the in-flight request are module state. */
+/** A fresh module per test: the cache is module state. */
 async function load() {
   vi.resetModules();
   return (await import("./public-catalogue.js")).getPublicCatalogueApp;
@@ -101,15 +101,15 @@ describe("getPublicCatalogueApp", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it("shares one request between lookups made while it is in flight", async () => {
-      let release!: (r: Response) => void;
-      fetchMock.mockReturnValue(new Promise<Response>((resolve) => { release = resolve; }));
+    it("gives each lookup made while another is in flight its own request (#616)", async () => {
+      const releases: ((r: Response) => void)[] = [];
+      fetchMock.mockImplementation(() => new Promise<Response>((resolve) => { releases.push(resolve); }));
       const get = await load();
       const a = get("meet");
       const b = get("meet");
-      release(json({ apps: [good] }));
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      for (const release of releases) release(json({ apps: [good] }));
       expect(await Promise.all([a, b])).toEqual([good, good]);
-      expect(fetchMock).toHaveBeenCalledOnce();
     });
 
     it("does not cache a failure: the next lookup tries again", async () => {
