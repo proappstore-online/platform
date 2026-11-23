@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
@@ -83,11 +83,17 @@ nativeRoutes.post('/native/locations', async c => {
   return c.json({ acknowledged: points.map(p => p.id) });
 });
 
-nativeRoutes.get('/apps/:appId/native/locations', async c => {
-  c.header('Cache-Control', 'private, no-store');
-  const user = await requireUser(c), appId = c.req.param('appId');
+// Web reads: only the app's own origin (host-injected X-PAS-App) or an app-bound credential may ask.
+async function appUser(c: Context<{ Bindings: Env }>) {
+  const user = await requireUser(c), appId = c.req.param('appId')!;
   const boundApp = c.req.header(APP_CONTEXT_HEADER) || user.credentialContext?.appId;
   if (boundApp !== appId) throw new HttpError('Read location through the authorized app.', 403);
+  return { user, appId };
+}
+
+nativeRoutes.get('/apps/:appId/native/locations', async c => {
+  c.header('Cache-Control', 'private, no-store');
+  const { user, appId } = await appUser(c);
   const definition = (await nativeCatalog()).find(a => a.id === appId);
   if (!definition) throw new HttpError('Native location is unavailable for this app.', 404);
   const after = Number(c.req.query('after') ?? '0'), afterId = c.req.query('afterId') ?? '';
@@ -101,4 +107,21 @@ nativeRoutes.get('/apps/:appId/native/locations', async c => {
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.point_id > ?))
     ORDER BY p.recorded_at, cursorId LIMIT 500`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
   return c.json({ points: rows.results ?? [] });
+});
+
+// Lets the app's web UI show companion state before any point exists. Exposes no device identity.
+// Predicates mirror the locations read above, so status never says enabled when that read returns nothing.
+nativeRoutes.get('/apps/:appId/native/status', async c => {
+  c.header('Cache-Control', 'private, no-store');
+  const { user, appId } = await appUser(c);
+  const definition = (await nativeCatalog()).find(a => a.id === appId);
+  if (!definition) return c.json({ available: false, enabled: false, lastPointAt: null });
+  const now = Date.now();
+  const row = await c.env.DB.prepare(`SELECT COUNT(DISTINCT g.id) AS grants, MAX(p.recorded_at) AS lastPointAt
+    FROM native_grants g JOIN native_devices d ON d.id = g.device_id
+    JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
+    LEFT JOIN native_locations p ON p.grant_id = g.id AND p.recorded_at >= ?
+    WHERE g.app_id = ? AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ?`)
+    .bind(now - NATIVE_RETENTION_MS, appId, user.id, definition.version, now).first<{ grants: number; lastPointAt: number | null }>();
+  return c.json({ available: true, enabled: (row?.grants ?? 0) > 0, lastPointAt: row?.lastPointAt ?? null });
 });

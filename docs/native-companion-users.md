@@ -14,7 +14,7 @@ Sign in with the same Google or GitHub account you use in your PAS apps. Match t
 
 Review the app's location explanation and choose Enable. Grant precise location, then background access (Allow all the time) when Android asks. ProAppStore appears as the collector in Android's permission settings. Each app's separate permission appears inside ProAppStore.
 
-The first preview supports Ski's location service. The Ski website integration is still being built; its existing browser recorder is unchanged.
+The preview supports Ski and Run. Run adds locked-screen location only to a run you are recording.
 
 ## Control sharing
 

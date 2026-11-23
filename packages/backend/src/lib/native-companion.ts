@@ -4,12 +4,16 @@ import { HttpError } from './auth.js';
 import { readCapped } from '../routes/hooks.js';
 
 export const NATIVE_RETENTION_MS = 7 * 24 * 60 * 60_000;
-// Curated first integration; app declarations must never grant a capability by themselves.
+// Curated, reviewed recipients (list order is /native/me order); app declarations must never grant a capability by themselves.
 // A material disclosure change increments the version, invalidating existing grants.
 const NATIVE_CATALOG = [{
   id: 'ski', name: 'Ski', capability: 'location.background', version: '1',
   purpose: 'Automatically record your routes for Ski, including when Ski is closed.',
   disclosure: 'ProAppStore collects precise location in the background to record your routes for Ski. Coordinates are uploaded to the PAS platform and made available to Ski for your account. Platform copies expire after 7 days. You can pause collection or disconnect Ski at any time. Ski may retain rides you save separately.',
+}, {
+  id: 'run', name: 'Run', capability: 'location.background', version: '1',
+  purpose: 'Keep recording your runs and walks while your phone is locked or Run is closed.',
+  disclosure: 'ProAppStore collects precise location in the background to record your runs and walks for Run, including while your phone is locked and Run is closed. Coordinates are uploaded to the PAS platform and made available to Run for your account only. Run adds them only to an activity you are recording; it ignores location outside a recording. Platform copies expire after 7 days. You can pause collection or disconnect Run at any time. Runs you save stay in Run until you delete them or your Run account.',
 }] as const;
 
 interface NativeDevice { id: string; user_id: string; label: string; expires_at: number; }

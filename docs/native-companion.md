@@ -38,7 +38,7 @@ The Android implementation uses Kotlin, Compose/Material 3, Android LocationMana
 | Location | Explicitly enabled automatic collection, foreground service notification and Pause all action; precise and background permission checks. |
 | Offline | Durable SQLite queue; recipient grant snapshot per observation; only exact acknowledgements remove queued batches. |
 | Platform | Per-device/app grants, validated idempotent upload, app/user-isolated read, disconnect and seven-day raw buffer retention. |
-| Initial app | Reviewed Ski location integration in the platform catalog. This does not yet replace Ski's browser recorder or add a native control in its web UI. |
+| Recipient apps | Ski (first integration) and Run (runs and walks while locked). Each has its own reviewed disclosure in the platform catalog. |
 
 ## Native API, version 1
 
@@ -57,6 +57,7 @@ Base: `https://api.proappstore.online/v1`. Native credentials are accepted **onl
 | `POST /native/locations` | Batch of 1–100 observations, each with UUID, epoch-ms time, latitude, longitude, accuracy and captured grant IDs. |
 | `DELETE /native/device` | Revokes installation and cascades its grants/raw points. |
 | `GET /apps/:appId/native/locations?after=…&afterId=…` | Current signed-in web app user, bound to that app. Up to 500 points ordered by timestamp and composite cursor. |
+| `GET /apps/:appId/native/status` | Current signed-in web app user, bound to that app. `{ available, enabled, lastPointAt }` — no device identities. |
 
 No API accepts a device-supplied account identity. Upload recipients must be active grants for that credential's device. A publisher transfer or disclosure revision invalidates delivery/read access. A new grant cannot adopt pre-consent or previously queued data. The response acknowledges points that were saved or intentionally discarded because their recipient was revoked; the phone must not retry those into another grant.
 
@@ -88,7 +89,7 @@ An Android intent can bring PAS forward but cannot grant access. The initial cus
 1. Finish physical-device acceptance and production connection/consent tests; add credential management/rotation and verified App Links. Account linking beyond existing Google/GitHub providers remains a platform auth concern.
 2. Add a platform-owned web consent/request SDK surface with account-bound handoff and status. Connect Ski without changing its map provider; deduplicate native and browser recording explicitly.
 3. Add an app-worker native capability declaration, authenticated native event/RPC delivery, revocation-aware retries, quotas and downstream deletion. Reuse ADR-009; never permit an arbitrary app worker to enumerate users or read another app's stream.
-4. Review and register additional recipient apps such as Rideshare, with real disclosures and lifecycle tests.
+4. Review and register additional recipient apps (Run registered 2026-11; Rideshare pending) with real disclosures and lifecycle tests.
 5. Add lock-screen activity summaries/timers once app-specific session state is available. A native location service alone cannot infer a ski ride's timer semantics.
 6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
 

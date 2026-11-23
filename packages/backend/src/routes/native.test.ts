@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { mintSession, credentialContext } from '@proappstore/build-core';
 import { nativeAuthRoutes } from './native-auth.js';
 import { nativeRoutes } from './native.js';
-import { nativeHash, nativePoints, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
+import { nativeCatalog, nativeHash, nativePoints, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
 import { HttpError } from '../lib/auth.js';
 import { sqliteD1 } from '../sqlite-d1.js';
 import { makeEnv, TEST_SK } from '../test-helpers.js';
@@ -22,7 +22,7 @@ beforeEach(() => {
   db.sql.exec(`PRAGMA foreign_keys=ON;
     INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at) VALUES
       ('google:1','google','1','Alice',0,0),('google:2','google','2','Bob',0,0);
-    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('other','google:2',0);`);
+    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('run','google:1',0),('other','google:2',0);`);
 });
 async function pairing() {
   const verifier = 'b'.repeat(64);
@@ -52,9 +52,9 @@ async function device(uid = 'google:1') {
   expect(response.status).toBe(200);
   return await response.json() as { token: string; deviceId: string };
 }
-async function grant(token: string) {
-  const catalog = await (await request('/native/me', 'GET', undefined, token)).json() as { apps: { version: string }[] };
-  const response = await request('/native/apps/ski/location', 'PUT', { version: catalog.apps[0].version, enabled: true }, token);
+async function grant(token: string, appId = 'ski') {
+  const catalog = await (await request('/native/me', 'GET', undefined, token)).json() as { apps: { id: string; version: string }[] };
+  const response = await request(`/native/apps/${appId}/location`, 'PUT', { version: catalog.apps.find(a => a.id === appId)!.version, enabled: true }, token);
   expect(response.status).toBe(200);
   return (await response.json() as { grant: { id: string; consent_at: number } }).grant;
 }
@@ -151,5 +151,65 @@ describe('consumer native companion', () => {
     expect(db.sql.prepare('SELECT * FROM native_locations').all()).toHaveLength(0);
     await pruneNativeData(db, Date.now() + 100 * 24 * 60 * 60_000);
     expect(db.sql.prepare('SELECT * FROM native_devices').all()).toHaveLength(0);
+  });
+
+  describe('Run recipient and status read (#613)', () => {
+    type Status = { available: boolean; enabled: boolean; lastPointAt: number | null };
+    const status = async (token: string, appId = 'run') => request(`/apps/${appId}/native/status`, 'GET', undefined, token);
+    const statusOf = async (uid = 'google:1') => await (await status(await readToken(uid, 'run'))).json() as Status;
+    const pointIds = async (appId: string) =>
+      ((await (await request(`/apps/${appId}/native/locations`, 'GET', undefined, await readToken('google:1', appId))).json()) as { points: { id: string }[] }).points.map(p => p.id);
+
+    it('lists Run after Ski and grants it', async () => {
+      const d = await device();
+      const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string }[] };
+      expect(me.apps.map(a => a.id)).toEqual(['ski', 'run']);
+      expect((await grant(d.token, 'run')).id).toMatch(/^[a-f0-9]{64}$/);
+    });
+    it('delivers a point only to the app whose grant it carries', async () => {
+      const d = await device(), ski = await grant(d.token, 'ski'), run = await grant(d.token, 'run');
+      await request('/native/locations', 'POST', { points: [point('run-only', Date.now(), [run.id]), point('ski-only', Date.now(), [ski.id])] }, d.token);
+      expect(await pointIds('run')).toEqual(['run-only']);
+      expect(await pointIds('ski')).toEqual(['ski-only']);
+    });
+    it('gates status like the locations read and reports apps outside the catalog as unavailable', async () => {
+      const d = await device();
+      expect((await status(await readToken('google:1', 'ski'))).status).toBe(403);
+      expect((await status(d.token)).status).toBe(401);
+      const other = await status(await readToken('google:2', 'other'), 'other');
+      expect(other.status).toBe(200);
+      expect(await other.json()).toEqual({ available: false, enabled: false, lastPointAt: null });
+    });
+    it('tracks grant, upload, revocation, publisher transfer and device expiry', async () => {
+      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+      const d = await device(), g = await grant(d.token, 'run');
+      expect(await statusOf()).toEqual({ available: true, enabled: true, lastPointAt: null });
+      const at = Date.now();
+      await request('/native/locations', 'POST', { points: [point('p1', at, [g.id])] }, d.token);
+      expect(await statusOf()).toEqual({ available: true, enabled: true, lastPointAt: at });
+      await request('/native/apps/run/location', 'DELETE', undefined, d.token);
+      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+      await grant(d.token, 'run');
+      db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='run'");
+      expect((await statusOf()).enabled).toBe(false);
+      db.sql.exec("UPDATE apps SET creator_id='google:1' WHERE id='run'");
+      await grant(d.token, 'run');
+      expect((await statusOf()).enabled).toBe(true);
+      db.sql.exec('UPDATE native_devices SET expires_at=0');
+      expect((await statusOf()).enabled).toBe(false);
+    });
+    it("never reports another user's grant", async () => {
+      const bob = await device('google:2');
+      await grant(bob.token, 'run');
+      expect((await statusOf('google:2')).enabled).toBe(true);
+      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+    });
+    it('pins each contract version: a wording edit revokes every existing grant and must fail here', async () => {
+      const versions = Object.fromEntries((await nativeCatalog()).map(a => [a.id, a.version]));
+      expect(versions).toEqual({ 
+        ski: '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
+        run: 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
+       });
+    });
   });
 });
