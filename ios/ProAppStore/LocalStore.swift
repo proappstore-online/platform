@@ -164,9 +164,18 @@ final class LocalStore: @unchecked Sendable {
         let incoming = (try? JSONDecoder().decode([ConnectedApp].self, from: json)) ?? []
         try transaction {
             let blocked = blocked()
-            for old in apps() where old.grantId != nil && !blocked.contains(old.id) {
+            let previous = apps()
+            for old in previous where old.grantId != nil && !blocked.contains(old.id) {
                 let grant = incoming.first(where: { $0.id == old.id })?.grantId
                 if grant != old.grantId { try record(.grantLost, appId: old.id, detail: grant == nil ? "revoked" : "replaced") }
+            }
+            // A grant back after `grant_lost`, for example after re-consent on another path.
+            for new in incoming where new.grantId != nil && !blocked.contains(new.id) && previous.first(where: { $0.id == new.id })?.grantId == nil {
+                let last = try query("""
+                    SELECT kind FROM share_events WHERE app_id = ? AND kind IN ('enabled', 'disabled', 'grant_lost', 'grant_restored')
+                    ORDER BY at DESC, id DESC LIMIT 1
+                    """, [new.id]) { String(cString: sqlite3_column_text($0, 0)) }.first
+                if last == ShareEvent.Kind.grantLost.rawValue { try record(.grantRestored, appId: new.id) }
             }
             try setSetting("apps", String(decoding: json, as: UTF8.self))
         }
@@ -180,7 +189,10 @@ final class LocalStore: @unchecked Sendable {
         let allowed = Set(LocationPolicy.recipients(apps, blocked: excluded(), at: point.at))
         let retained = point.with(grants: point.grants.filter { allowed.contains($0) })
         if paused || retained.grants.isEmpty { return }
-        guard try count() < LocationPolicy.MAX_QUEUE else { throw CompanionError("Device storage queue is full. Connect to upload before resuming.") }
+        guard try count() < LocationPolicy.MAX_QUEUE else {
+            try? record(.queueFull)
+            throw CompanionError("Device storage queue is full. Connect to upload before resuming.")
+        }
         try transaction {
             try exec("INSERT INTO points(id, at, payload) VALUES (?, ?, ?)", [retained.id, retained.at, try json(retained)])
             // History is keyed by app id: grant ids change with every new consent.
@@ -239,8 +251,36 @@ final class LocalStore: @unchecked Sendable {
 
     // MARK: Sharing history (#621)
 
+    /// `detail` is cut to 120 characters: a short code or the server's `error` text, never a body or coordinates.
     func record(_ kind: ShareEvent.Kind, appId: String? = nil, detail: String = "", at: Int64 = CompanionRepository.now()) throws {
-        try exec("INSERT INTO share_events(at, app_id, kind, detail) VALUES (?, ?, ?, ?)", [at, appId ?? NSNull(), kind.rawValue, detail])
+        try exec("INSERT INTO share_events(at, app_id, kind, detail) VALUES (?, ?, ?, ?)", [at, appId ?? NSNull(), kind.rawValue, String(detail.prefix(120))])
+    }
+
+    /// Records `sync_failed` once per run of identical failures (an offline walk retries about every 15 s).
+    /// Returns whether it was recorded, so related events are de-duplicated the same way.
+    @discardableResult
+    func syncFailed(_ detail: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let failures = setting("syncFailures").flatMap { Int($0) } ?? 0
+        let new = failures == 0 || setting("lastSyncFailure") != String(detail.prefix(120))
+        try transaction {
+            if new { try record(.syncFailed, detail: detail) }
+            try setSetting("syncFailures", String(failures + 1))
+            try setSetting("lastSyncFailure", String(detail.prefix(120)))
+        }
+        return new
+    }
+
+    /// Ends a failure run with `sync_recovered`.
+    func syncSucceeded() throws {
+        lock.lock(); defer { lock.unlock() }
+        let failures = setting("syncFailures").flatMap { Int($0) } ?? 0
+        guard failures > 0 else { return }
+        try transaction {
+            try record(.syncRecovered, detail: "after \(failures) attempt\(failures == 1 ? "" : "s")")
+            try setSetting("syncFailures", "0")
+            try setSetting("lastSyncFailure", "")
+        }
     }
 
     /// Oldest first. Kinds this build does not know are skipped.

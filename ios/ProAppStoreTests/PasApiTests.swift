@@ -3,7 +3,7 @@ import XCTest
 
 /// Serves canned responses so PasApi and CompanionRepository run against no network.
 final class StubProtocol: URLProtocol {
-    struct Stub { var status = 200; var json: Any = [String: Any](); var redirect: URL? }
+    struct Stub { var status = 200; var json: Any = [String: Any](); var redirect: URL?; var offline = false }
     nonisolated(unsafe) static var handler: (URLRequest) -> Stub = { _ in Stub() }
     nonisolated(unsafe) static var seen: [URLRequest] = []
 
@@ -13,6 +13,7 @@ final class StubProtocol: URLProtocol {
     override func startLoading() {
         Self.seen.append(request)
         let stub = Self.handler(request)
+        if stub.offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
         let headers = stub.redirect.map { ["Location": $0.absoluteString] } ?? [:]
         let response = HTTPURLResponse(url: request.url!, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: headers)!
         if let target = stub.redirect { client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response) }
@@ -154,6 +155,46 @@ final class PasApiTests: XCTestCase {
         try await repository.sync()
         XCTAssertEqual(local.lastSyncError, "")
         XCTAssertEqual(local.lastSyncAttempt, local.lastSync)
+    }
+
+    // MARK: Activity log (#624)
+
+    private func logged(_ kinds: Set<ShareEvent.Kind> = [.syncFailed, .syncRecovered, .uploadRejected, .quota, .stopped]) throws -> [String] {
+        try local.events().filter { kinds.contains($0.kind) }.map { "\($0.kind.rawValue):\($0.detail)" }
+    }
+
+    func testAnOfflineRunLogsOneFailureAndOneRecovery() async throws {
+        let repository = try await connected()
+        StubProtocol.handler = { _ in .init(offline: true) }
+        for _ in 0..<3 { do { try await repository.sync(); XCTFail("offline must fail") } catch {} }
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        try await repository.sync()
+        let log = try logged()
+        XCTAssertEqual(log.count, 2, "\(log)")
+        XCTAssertTrue(log[0].hasPrefix("sync_failed:0 "), log[0])
+        XCTAssertEqual(log[1], "sync_recovered:after 3 attempts")
+    }
+
+    func testQuotaIsLogged() async throws {
+        let repository = try await connected()
+        respond(locations: .init(status: 429, json: ["error": "Upload limit reached. Retry later."]))
+        do { try await repository.sync() } catch {}
+        XCTAssertEqual(try logged(), ["sync_failed:429 Upload limit reached. Retry later.", "quota:429"])
+    }
+
+    func testAckMismatchIsLoggedAsRejected() async throws {
+        let repository = try await connected()
+        respond(locations: .init(json: ["acknowledged": ["a"]]))
+        do { try await repository.sync() } catch {}
+        XCTAssertEqual(try logged([.uploadRejected]), ["upload_rejected:partial_ack"])
+    }
+
+    func testUnauthorizedLogsTheStopAndTheFailureAndStillThrows() async throws {
+        let repository = try await connected()
+        respond(me: 401, locations: .init())
+        do { try await repository.sync(); XCTFail("401 must still throw") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, 401) }
+        XCTAssertEqual(try logged(), ["stopped:signed_out", "sync_failed:401 Device connection expired or was disconnected."])
+        XCTAssertEqual(local.message, "Device connection expired or was disconnected.")
     }
 
     /// #621: the sharing history is local only. Clearing, expiring and seeding it make no request.

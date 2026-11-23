@@ -72,9 +72,24 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         MainActor.assumeIsolated {
+            let old = (authorization, fullAccuracy)
             authorization = self.manager.authorizationStatus
             fullAccuracy = self.manager.accuracyAuthorization == .fullAccuracy
+            // Activity log: changes only, never the first report.
+            if old.0 != authorization { try? local.record(.permission, detail: "\(Self.name(old.0))→\(Self.name(authorization))") }
+            if old.1 != fullAccuracy { try? local.record(.permission, detail: fullAccuracy ? "approximate→precise" : "precise→approximate") }
             evaluate()
+        }
+    }
+
+    private static func name(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: "notDetermined"
+        case .authorizedWhenInUse: "whenInUse"
+        case .authorizedAlways: "always"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        @unknown default: "unknown"
         }
     }
 

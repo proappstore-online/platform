@@ -84,6 +84,11 @@ struct SharingDashboardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle("Sharing")
+            .toolbar {
+                if model.signedIn {
+                    NavigationLink { ActivityLogView(model: model) } label: { Label("Activity", systemImage: "list.bullet.rectangle") }
+                }
+            }
             .navigationDestination(for: String.self) { id in
                 if let app = model.apps.first(where: { $0.id == id }) { AppSharingView(app: app, model: model, collector: collector) }
             }

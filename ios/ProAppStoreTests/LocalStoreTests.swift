@@ -288,6 +288,25 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try local.track(appId: "ski", from: 0, to: 100).map(\.at), [10])
     }
 
+    func testEventDetailIsTruncatedAndCarriesNoCoordinates() throws {
+        let local = try store(apps: [app("ski", "g")])
+        try local.syncFailed("500 " + String(repeating: "x", count: 300))
+        try local.enqueue(point("p", at: 10, grants: ["g"]))
+        try local.pause("ski"); try local.block("ski")
+        let details = try local.events().map(\.detail)
+        XCTAssertEqual(details.map(\.count).max(), 120)
+        let coordinate = try NSRegularExpression(pattern: #"-?\d{1,3}\.\d{4,}"#)
+        for detail in details { XCTAssertNil(coordinate.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)), detail) }
+    }
+
+    func testARestoredGrantIsLoggedOnlyAfterItWasLost() throws {
+        let local = try store(apps: [app("ski", "g")])
+        var none = app("ski", "x"); none["grant"] = NSNull()
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [none]))
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [app("ski", "g2")]))
+        XCTAssertEqual(try events(local).map(\.kind), [.grantLost, .grantRestored])
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil

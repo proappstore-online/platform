@@ -64,6 +64,10 @@ struct AppSharingView: View {
                     .frame(height: 320)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 summary
+                NavigationLink { ActivityLogView(model: model, appId: app.id) } label: {
+                    HStack { Label("Activity", systemImage: "list.bullet.rectangle"); Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }
+                }
+                .buttonStyle(.plain)
                 timeline
             }
             .padding(24)

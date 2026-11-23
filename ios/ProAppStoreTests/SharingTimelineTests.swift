@@ -62,6 +62,14 @@ final class SharingTimelineTests: XCTestCase {
         XCTAssertEqual(sessions[0].endKind, .historyCleared)
     }
 
+    func testARestoredGrantStartsASessionAndEnableInsideItContinuesIt() {
+        let sessions = SharingTimeline.sessions([
+            e(.enabled, 0), e(.grantLost, 10 * min), e(.grantRestored, 20 * min), e(.enabled, 20 * min),
+        ], appId: "run")
+        XCTAssertEqual(sessions.map(\.start), [0, 20 * min])
+        XCTAssertNil(sessions[1].end)
+    }
+
     func testPeriodsCutASessionIntoSharedAndInactiveStretches() {
         let session = SharingTimeline.sessions([e(.enabled, 0), e(.paused, 10 * min), e(.resumed, 20 * min)], appId: "run")[0]
         XCTAssertEqual(session.periods(now: 30 * min), [

@@ -46,6 +46,9 @@ struct ShareEvent: Equatable {
         case enabled, disabled, paused, resumed
         case pausedAll = "paused_all", resumedAll = "resumed_all", stopped
         case grantLost = "grant_lost", historyCleared = "history_cleared"
+        // Activity log only (#624).
+        case syncFailed = "sync_failed", syncRecovered = "sync_recovered", uploadRejected = "upload_rejected", quota
+        case permission, queueFull = "queue_full", grantRestored = "grant_restored"
     }
 
     let id: Int64

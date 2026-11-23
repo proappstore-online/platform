@@ -45,6 +45,11 @@ final class ScreenshotTests: XCTestCase {
         }
         try local.pause("run")
         try backdate(.paused, to: pauseAt, in: local)
+        // #624: a recovered offline stretch and a permission change for the activity log.
+        try local.syncFailed("0 The Internet connection appears to be offline.")
+        try local.syncFailed("0 The Internet connection appears to be offline.")
+        try local.record(.permission, detail: "precise→approximate")
+        try local.record(.permission, detail: "approximate→precise")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]
         StubProtocol.handler = { request in
@@ -95,6 +100,13 @@ final class ScreenshotTests: XCTestCase {
             try await Task.sleep(for: .seconds(4))
             try save(detail, to: "\(output)/run-detail-\(name).png")
             detail.isHidden = true
+            let log = UIWindow(windowScene: scene)
+            log.overrideUserInterfaceStyle = style
+            log.rootViewController = UIHostingController(rootView: NavigationStack { ActivityLogView(model: model) })
+            log.makeKeyAndVisible()
+            try await Task.sleep(for: .seconds(2))
+            try save(log, to: "\(output)/activity-\(name).png")
+            log.isHidden = true
             // The whole dashboard, past the fold.
             let tall = UIWindow(windowScene: scene)
             tall.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: 1_900)
