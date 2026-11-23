@@ -104,6 +104,33 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(StubProtocol.seen.map(\.url!.path), ["/v1/native/auth/complete"])
     }
 
+    /// #645: a proof the server rejected is forgotten, so the next activation neither re-requests nor shows a stale code.
+    func testRejectedPairingProofIsCleared() async throws {
+        for status in [403, 409] {
+            try secure.write(["pairId": String(repeating: "a", count: 64), "verifier": String(repeating: "b", count: 64)])
+            StubProtocol.seen = []
+            StubProtocol.handler = { _ in .init(status: status, json: ["error": "Invalid or expired connection."]) }
+            let repository = CompanionRepository(local: local, secure: secure, api: api)
+            do { _ = try await repository.finishSignIn(); XCTFail("\(status) must fail") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, status) }
+            XCTAssertEqual(try secure.read(), [:])
+            XCTAssertEqual(repository.pairingCode(), "")
+            let finished = try await repository.finishSignIn()
+            XCTAssertFalse(finished)
+            XCTAssertEqual(StubProtocol.seen.count, 1, "no second request")
+        }
+    }
+
+    /// A network failure or a server error keeps the proof: the pairing may still complete.
+    func testTransientCompleteFailureKeepsThePairingProof() async throws {
+        try secure.write(["pairId": String(repeating: "a", count: 64), "verifier": String(repeating: "b", count: 64)])
+        let repository = CompanionRepository(local: local, secure: secure, api: api)
+        for stub in [StubProtocol.Stub(offline: true), StubProtocol.Stub(status: 503), StubProtocol.Stub(status: 429)] {
+            StubProtocol.handler = { _ in stub }
+            do { _ = try await repository.finishSignIn(); XCTFail("must fail") } catch {}
+            XCTAssertEqual(repository.pairingCode(), "AAAAAAAA")
+        }
+    }
+
     func testFullAcknowledgementEmptiesTheQueue() async throws {
         let repository = try await connected()
         respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
