@@ -22,7 +22,10 @@ function page(c: Ctx, body: string) {
   return c.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect ProAppStore</title><style>body{font:17px system-ui;max-width:440px;margin:64px auto;padding:24px;color:#241638;background:#faf8ff}a,button{display:block;margin:16px 0;padding:16px;border-radius:12px;background:#6d28d9;color:white;text-align:center;border:0;font:inherit}small{display:block;overflow-wrap:anywhere}</style><main>${body}</main></html>`);
 }
 nativeAuthRoutes.use('/native/auth/*', async (c, next) => {
-  c.header('Cache-Control', 'no-store'); c.header('Referrer-Policy', 'no-referrer');
+  c.header('Cache-Control', 'no-store');
+  // same-origin, not no-referrer: under no-referrer browsers send `Origin: null` on the approve
+  // form POST, which the Origin check below must reject. Cross-origin requests still get no referrer.
+  c.header('Referrer-Policy', 'same-origin');
   await next();
 });
 nativeAuthRoutes.post('/native/auth/start', async c => {

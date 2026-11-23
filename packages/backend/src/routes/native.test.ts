@@ -40,6 +40,8 @@ async function authorize(p: Awaited<ReturnType<typeof pairing>>, uid = 'google:1
     .bind(hash, JSON.stringify({ uid, login: 'Alice', roles: ['user'] }), Date.now() + 60_000, Date.now()).run();
   const callback = await request(`/native/auth/callback?code=${code}`, 'GET', undefined, undefined, { Cookie: p.cookie });
   expect(callback.status).toBe(200);
+  // Under no-referrer a real browser would POST the approve form with `Origin: null`.
+  expect(callback.headers.get('Referrer-Policy')).toBe('same-origin');
   const nonce = (await callback.text()).match(/name="nonce" value="([a-f0-9]+)"/)![1];
   const result = await app.request('https://api.proappstore.online/v1/native/auth/approve', { method: 'POST', headers: {
     Cookie: p.cookie, Origin: 'https://api.proappstore.online', 'Content-Type': 'application/x-www-form-urlencoded',
@@ -82,6 +84,7 @@ describe('consumer native companion', () => {
     const p = await pairing();
     expect((await request('/native/auth/callback?code=bad')).status).toBe(403);
     expect((await request('/native/auth/approve', 'POST', { nonce: 'bad' }, undefined, { Origin: 'https://ski.proappstore.online', Cookie: p.cookie })).status).toBe(403);
+    expect((await request('/native/auth/approve', 'POST', { nonce: 'bad' }, undefined, { Origin: 'null', Cookie: p.cookie })).status).toBe(403);
     db.sql.exec('UPDATE native_pairings SET expires_at=0');
     expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
   });
