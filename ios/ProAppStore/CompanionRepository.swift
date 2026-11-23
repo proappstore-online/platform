@@ -26,7 +26,7 @@ actor CompanionRepository {
 
     nonisolated func token() -> String? {
         do { return try secure.read()["token"].flatMap { $0.isEmpty ? nil : $0 } } catch {
-            try? local.setPaused(true)
+            try? local.setPaused(true, stopped: "unlock_failed")
             local.message = "The device connection could not be unlocked. Reconnect your account."
             return nil
         }
@@ -80,7 +80,8 @@ actor CompanionRepository {
             _ = try await api.request("PUT", "/native/apps/\(app.id)/location", token: credential,
                                       body: json(["version": app.version, "enabled": true]))
             try updateMe(try await api.request("GET", "/native/me", token: credential))
-            try local.unblock(app.id); try local.resume(app.id); try local.setPaused(false); local.message = ""
+            try local.unblock(app.id); try local.record(.enabled, appId: app.id)
+            try local.resume(app.id); try local.setPaused(false); local.message = ""
         }
     }
 
@@ -118,7 +119,7 @@ actor CompanionRepository {
                 }
                 local.lastSync = Self.now(); local.message = ""
             } catch {
-                if let failure = error as? ApiFailure, failure.status == 401 { try? local.setPaused(true) }
+                if let failure = error as? ApiFailure, failure.status == 401 { try? local.setPaused(true, stopped: "signed_out") }
                 local.message = (error as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
                 throw error
             }

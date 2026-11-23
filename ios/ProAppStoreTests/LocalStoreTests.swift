@@ -155,6 +155,112 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(reopened.pausedApps(), [])
     }
 
+    // MARK: Sharing history (#621)
+
+    private func history(_ local: LocalStore, _ where_: String = "1") throws -> [String] {
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db, "SELECT app_id || ':' || point_id || ':' || IFNULL(sent_at, 'q') FROM share_points WHERE \(where_) ORDER BY app_id, point_id", -1, &statement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        var rows: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW { rows.append(String(cString: sqlite3_column_text(statement, 0))) }
+        return rows
+    }
+
+    /// Events after setup: `store()`'s own setPaused(false) records a `resumed_all` at the real clock.
+    private func events(_ local: LocalStore) throws -> [ShareEvent] { try local.events().filter { $0.kind != .resumedAll } }
+
+    func testEnqueueWritesHistoryPerAppAndAcknowledgeMarksItSent() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
+        XCTAssertEqual(try history(local), ["run:p:q", "ski:p:q"])
+        try local.acknowledge(["p"], now: 50)
+        XCTAssertEqual(try local.count(), 0)
+        XCTAssertEqual(try history(local), ["run:p:50", "ski:p:50"])
+    }
+
+    func testBlockDeletesOnlyThatAppsUnsentHistory() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("sent", at: 10, grants: ["ski-g", "run-g"]))
+        try local.acknowledge(["sent"], now: 20)
+        try local.enqueue(point("queued", at: 30, grants: ["ski-g", "run-g"]))
+        try local.block("ski")
+        XCTAssertEqual(try history(local), ["run:queued:q", "run:sent:20", "ski:sent:20"])
+        XCTAssertEqual(try events(local).map(\.kind), [.disabled])
+    }
+
+    func testExpireAppliesHistoryWindowsAndKeepsTheNewestEventPerKind() throws {
+        let local = try store(apps: [app("ski", "g")])
+        let day: Int64 = 24 * 60 * 60 * 1000
+        let now = 40 * day
+        try local.enqueue(point("sent-old", at: now - 31 * day, grants: ["g"]))
+        try local.enqueue(point("sent-kept", at: now - 29 * day, grants: ["g"]))
+        try local.acknowledge(["sent-old", "sent-kept"], now: now - 28 * day)
+        try local.enqueue(point("unsent-old", at: now - 8 * day, grants: ["g"]))
+        try local.enqueue(point("unsent-kept", at: now - 6 * day, grants: ["g"]))
+        try local.record(.paused, appId: "ski", at: now - 35 * day)
+        try local.record(.paused, appId: "ski", at: now - 33 * day)
+        try local.record(.resumed, appId: "ski", at: now - 34 * day)
+        try local.record(.paused, appId: "ski", at: now - 1 * day)
+        try local.expire(now: now)
+        XCTAssertEqual(try history(local), ["ski:sent-kept:\(now - 28 * day)", "ski:unsent-kept:q"])
+        XCTAssertEqual(try events(local).map(\.at), [now - 34 * day, now - 33 * day, now - 1 * day])
+    }
+
+    func testExpireEnforcesTheHistoryCap() throws {
+        let local = try store(apps: [app("ski", "g")])
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, """
+            WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < \(LocationPolicy.HISTORY_MAX_POINTS + 5))
+            INSERT INTO share_points(app_id, point_id, at, lat, lng, accuracy, sent_at) SELECT 'ski', 'p' || i, 1000000 + i, 1, 2, 5, 1 FROM n
+            """, nil, nil, nil), SQLITE_OK)
+        try local.expire(now: 2_000_000)
+        XCTAssertEqual(try history(local).count, LocationPolicy.HISTORY_MAX_POINTS)
+        XCTAssertEqual(try history(local, "point_id IN ('p1', 'p5')").count, 0)  // the oldest go first
+    }
+
+    func testClearHistoryKeepsTheQueueAndReseedsCurrentState() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
+        try local.pause("run")
+        try local.setPaused(true)
+        try local.clearHistory(now: 99)
+        XCTAssertEqual(try local.count(), 1)
+        XCTAssertEqual(try history(local), [])
+        XCTAssertEqual(try local.events().map { "\($0.kind.rawValue):\($0.appId ?? "-"):\($0.at)" },
+                       ["history_cleared:-:99", "enabled:ski:99", "enabled:run:99", "paused:run:99", "paused_all:-:99"])
+        try local.clear()
+        XCTAssertEqual(try local.events(), [])
+        XCTAssertEqual(try history(local), [])
+    }
+
+    func testClearEmptiesHistory() throws {
+        let local = try store(apps: [app("ski", "g")])
+        try local.enqueue(point("p", at: 10, grants: ["g"]))
+        try local.pause("ski")
+        try local.clear()
+        XCTAssertEqual(try local.events(), [])
+        XCTAssertEqual(try history(local), [])
+    }
+
+    func testSeedOnAnEmptyHistoryDatesEnabledAtConsent() throws {
+        let local = try LocalStore(directory: directory)
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [app("run", "run-g")])) // consent_at 1
+        try local.seedIfEmpty(now: 500)
+        XCTAssertEqual(try local.events().map { "\($0.kind.rawValue):\($0.at):\($0.detail)" }, ["enabled:1:seeded", "paused_all:500:seeded"])
+        try local.seedIfEmpty(now: 600)
+        XCTAssertEqual(try local.events().count, 2) // only once
+    }
+
+    func testSaveAppsRecordsALostGrant() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        var revoked = app("run", "x"); revoked["grant"] = NSNull()
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [app("ski", "ski-new"), revoked]))
+        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" }, ["grant_lost:ski:replaced", "grant_lost:run:revoked"])
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil

@@ -4,6 +4,9 @@ import Foundation
 enum LocationPolicy {
     static let RETENTION_MS: Int64 = 7 * 24 * 60 * 60 * 1000
     static let MAX_QUEUE = 60_000
+    /// On-device sharing history (#621): kept 30 days, capped at about 20-30 MB worst case.
+    static let HISTORY_MS: Int64 = 30 * 24 * 60 * 60 * 1000
+    static let HISTORY_MAX_POINTS = 200_000
     /// Oldest fix accepted. Android uses 15 s; iOS delivers batches whose older entries are real
     /// route samples, so freshness is relative to the last accepted fix instead (ADR-016).
     static let MAX_FIX_AGE_MS: Int64 = 120_000

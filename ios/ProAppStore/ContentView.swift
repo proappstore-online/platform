@@ -33,6 +33,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         repository = CompanionRepository(local: local)
         collector = LocationCollector(repository: repository)
         super.init()
+        if repository.token() != nil { try? local.seedIfEmpty() }
         refresh()
     }
 
@@ -120,6 +121,12 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         refresh(); collector.evaluate()
     }
 
+    /// Local only: the queue, and so pending uploads, are kept.
+    func clearHistory() {
+        do { try local.clearHistory() } catch { self.error = error.localizedDescription }
+        refresh()
+    }
+
     /// Local writes, not `act`: pausing works offline and instantly.
     func pause(_ app: ConnectedApp) {
         do { try local.pause(app.id) } catch { self.error = error.localizedDescription }
@@ -141,6 +148,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.openURL) private var openURL
     @State private var disconnectPrompt = false
+    @State private var clearHistoryPrompt = false
 
     var body: some View {
         ScrollView {
@@ -164,6 +172,12 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Stops location sharing and deletes this phone’s pending updates and platform location copies. Saved rides in your apps are separate. An internet connection is needed to finish.")
+        }
+        .alert("Clear sharing history?", isPresented: $clearHistoryPrompt) {
+            Button("Clear history", role: .destructive) { model.clearHistory() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deletes the sharing map and timeline kept on this phone. Updates waiting to sync still upload.")
         }
     }
 
@@ -224,6 +238,7 @@ struct ContentView: View {
             }
         }
         Button("Manage account") { open("https://dashboard.proappstore.online") }
+        Button("Clear sharing history") { clearHistoryPrompt = true }
         Button("Disconnect this phone") { disconnectPrompt = true }.disabled(model.busy)
     }
 

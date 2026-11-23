@@ -141,4 +141,15 @@ final class PasApiTests: XCTestCase {
         XCTAssertFalse(local.paused)
         XCTAssertEqual(local.message, "Upload limit reached. Retry later.")
     }
+
+    /// #621: the sharing history is local only. Clearing, expiring and seeding it make no request.
+    func testHistoryMaintenanceMakesNoRequest() async throws {
+        _ = try await connected()
+        StubProtocol.seen = []
+        try local.seedIfEmpty()
+        try local.expire(now: CompanionRepository.now())
+        try local.clearHistory()
+        XCTAssertEqual(StubProtocol.seen.count, 0)
+        XCTAssertEqual(try local.count(), 2)
+    }
 }

@@ -30,7 +30,7 @@ Build and install from Xcode (developer preview; not on the App Store). Choose *
 
 ## Your data
 
-Location is stored privately on this phone while offline, then uploaded to the PAS platform for your enabled apps and account. Raw platform copies expire after seven days. Device queue entries also expire after seven days when synchronization runs. This preview does not use location for advertising.
+Location is stored privately on this phone while offline, then uploaded to the PAS platform for your enabled apps and account. Raw platform copies expire after seven days. Device queue entries expire after seven days when synchronization runs. On iPhone, ProAppStore also keeps a private history on the phone of the locations it shared with each app and when you enabled, paused or turned off sharing, so it can show your sharing map and timeline. That history never leaves the phone, is excluded from backups, is kept for 30 days, and is deleted by **Clear sharing history** or **Disconnect this phone**. This preview does not use location for advertising.
 
 Collection stops if required permissions are missing or the queue cannot safely save another update. Android power controls, force-stop and poor GPS can interrupt recording. ProAppStore cannot promise an uninterrupted or perfectly accurate route.
 

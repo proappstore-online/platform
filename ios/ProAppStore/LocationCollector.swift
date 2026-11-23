@@ -94,7 +94,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
             do {
                 try local.enqueue(point) // Re-filters recipients against current consent before insert.
             } catch {
-                try? local.setPaused(true)
+                try? local.setPaused(true, stopped: "storage_failed")
                 local.message = "Could not save location on this phone. Collection paused."
                 evaluate()
                 return

@@ -33,6 +33,17 @@ final class LocalStore: @unchecked Sendable {
         try exec("CREATE TABLE IF NOT EXISTS points(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
         try exec("CREATE INDEX IF NOT EXISTS points_at ON points(at)")
         try exec("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        // On-device sharing history (#621): never uploaded, same protected file as the queue.
+        try exec("""
+            CREATE TABLE IF NOT EXISTS share_events(id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, app_id TEXT,
+              kind TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '')
+            """)
+        try exec("CREATE INDEX IF NOT EXISTS share_events_app_at ON share_events(app_id, at)")
+        try exec("""
+            CREATE TABLE IF NOT EXISTS share_points(app_id TEXT NOT NULL, point_id TEXT NOT NULL, at INTEGER NOT NULL,
+              lat REAL NOT NULL, lng REAL NOT NULL, accuracy REAL NOT NULL, sent_at INTEGER, PRIMARY KEY(app_id, point_id))
+            """)
+        try exec("CREATE INDEX IF NOT EXISTS share_points_app_at ON share_points(app_id, at)")
         for path in [fileURL.path, fileURL.path + "-wal", fileURL.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
             try FileManager.default.setAttributes(protection, ofItemAtPath: path)
         }
@@ -48,8 +59,15 @@ final class LocalStore: @unchecked Sendable {
     // MARK: Settings
 
     var paused: Bool { setting("paused").map { $0 == "1" } ?? true }
-    /// Durable: a failed write throws, like Android's `check(commit())`.
-    func setPaused(_ value: Bool) throws { try setSetting("paused", value ? "1" : "0") }
+    /// Durable: a failed write throws, like Android's `check(commit())`. A change is recorded as `paused_all` /
+    /// `resumed_all`, or as `stopped` with `reason` when the system forces the stop.
+    func setPaused(_ value: Bool, stopped reason: String? = nil) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            if value != paused { try record(value ? (reason == nil ? .pausedAll : .stopped) : .resumedAll, detail: reason ?? "") }
+            try setSetting("paused", value ? "1" : "0")
+        }
+    }
     var lastSync: Int64 {
         get { setting("lastSync").flatMap { Int64($0) } ?? 0 }
         set { try? setSetting("lastSync", String(newValue)) }
@@ -75,9 +93,12 @@ final class LocalStore: @unchecked Sendable {
     func block(_ appId: String) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
+            if !blocked().contains(appId) { try record(.disabled, appId: appId) }
             try saveBlocked(blocked().union([appId]))
             // A disabled app is not "paused": re-enabling it starts sharing.
             try savePausedApps(pausedApps().subtracting([appId]))
+            // Never shared, and now never will be.
+            try exec("DELETE FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId])
             // Discard only this recipient. Other enabled apps retain their own queued copy.
             guard let revoked = apps().first(where: { $0.id == appId })?.grantId else { return }
             for p in try pending(limit: LocationPolicy.MAX_QUEUE) where p.grants.contains(revoked) {
@@ -103,12 +124,20 @@ final class LocalStore: @unchecked Sendable {
     /// Never rewrites the queue: points recorded before the pause were authorized when taken and still upload.
     func pause(_ appId: String) throws {
         lock.lock(); defer { lock.unlock() }
-        try savePausedApps(pausedApps().union([appId]))
+        guard !pausedApps().contains(appId) else { return }
+        try transaction {
+            try record(.paused, appId: appId)
+            try savePausedApps(pausedApps().union([appId]))
+        }
     }
 
     func resume(_ appId: String) throws {
         lock.lock(); defer { lock.unlock() }
-        try savePausedApps(pausedApps().subtracting([appId]))
+        guard pausedApps().contains(appId) else { return }
+        try transaction {
+            try record(.resumed, appId: appId)
+            try savePausedApps(pausedApps().subtracting([appId]))
+        }
     }
 
     /// Apps that must not receive new fixes: revoked, or paused by the user.
@@ -119,18 +148,38 @@ final class LocalStore: @unchecked Sendable {
         return (try? JSONDecoder().decode([ConnectedApp].self, from: raw)) ?? []
     }
 
-    /// The `apps` array of `GET /native/me`, stored as received.
-    func saveApps(_ json: Data) throws { try setSetting("apps", String(decoding: json, as: UTF8.self)) }
+    /// The `apps` array of `GET /native/me`, stored as received. A held grant that the server dropped or
+    /// replaced (publisher change, disclosure revision, app-account deletion) is recorded as `grant_lost`.
+    func saveApps(_ json: Data) throws {
+        lock.lock(); defer { lock.unlock() }
+        let incoming = (try? JSONDecoder().decode([ConnectedApp].self, from: json)) ?? []
+        try transaction {
+            let blocked = blocked()
+            for old in apps() where old.grantId != nil && !blocked.contains(old.id) {
+                let grant = incoming.first(where: { $0.id == old.id })?.grantId
+                if grant != old.grantId { try record(.grantLost, appId: old.id, detail: grant == nil ? "revoked" : "replaced") }
+            }
+            try setSetting("apps", String(decoding: json, as: UTF8.self))
+        }
+    }
 
     // MARK: Queue
 
     func enqueue(_ point: TrackPoint) throws {
         lock.lock(); defer { lock.unlock() }
-        let allowed = Set(LocationPolicy.recipients(apps(), blocked: excluded(), at: point.at))
+        let apps = apps()
+        let allowed = Set(LocationPolicy.recipients(apps, blocked: excluded(), at: point.at))
         let retained = point.with(grants: point.grants.filter { allowed.contains($0) })
         if paused || retained.grants.isEmpty { return }
         guard try count() < LocationPolicy.MAX_QUEUE else { throw CompanionError("Device storage queue is full. Connect to upload before resuming.") }
-        try exec("INSERT INTO points(id, at, payload) VALUES (?, ?, ?)", [retained.id, retained.at, try json(retained)])
+        try transaction {
+            try exec("INSERT INTO points(id, at, payload) VALUES (?, ?, ?)", [retained.id, retained.at, try json(retained)])
+            // History is keyed by app id: grant ids change with every new consent.
+            for app in apps where app.grantId.map(retained.grants.contains) == true {
+                try exec("INSERT OR IGNORE INTO share_points(app_id, point_id, at, lat, lng, accuracy) VALUES (?, ?, ?, ?, ?, ?)",
+                         [app.id, retained.id, retained.at, retained.lat, retained.lng, retained.accuracy])
+            }
+        }
     }
 
     func pending(limit: Int = 100) throws -> [TrackPoint] {
@@ -139,12 +188,33 @@ final class LocalStore: @unchecked Sendable {
         }
     }
 
-    func acknowledge(_ ids: [String]) throws {
+    /// `sent_at` means the server acknowledged it, which includes points it discarded for a revoked recipient.
+    func acknowledge(_ ids: [String], now: Int64 = CompanionRepository.now()) throws {
         lock.lock(); defer { lock.unlock() }
-        try transaction { for id in ids { try exec("DELETE FROM points WHERE id = ?", [id]) } }
+        try transaction {
+            for id in ids {
+                try exec("DELETE FROM points WHERE id = ?", [id])
+                try exec("UPDATE share_points SET sent_at = ? WHERE point_id = ? AND sent_at IS NULL", [now, id])
+            }
+        }
     }
 
-    func expire(now: Int64) throws { try exec("DELETE FROM points WHERE at < ?", [now - LocationPolicy.RETENTION_MS]) }
+    func expire(now: Int64) throws {
+        lock.lock(); defer { lock.unlock() }
+        let cutoff = now - LocationPolicy.HISTORY_MS
+        try transaction {
+            try exec("DELETE FROM points WHERE at < ?", [now - LocationPolicy.RETENTION_MS])
+            try exec("DELETE FROM share_points WHERE sent_at IS NULL AND at < ?", [now - LocationPolicy.RETENTION_MS]) // its queue copy just expired
+            try exec("DELETE FROM share_points WHERE at < ?", [cutoff])
+            try exec("DELETE FROM share_points WHERE rowid IN (SELECT rowid FROM share_points ORDER BY at DESC LIMIT -1 OFFSET ?)",
+                     [Int64(LocationPolicy.HISTORY_MAX_POINTS)])
+            // Keep the newest event of each (app, kind) before the cutoff, so state at the window start is known.
+            try exec("""
+                DELETE FROM share_events WHERE at < ? AND id NOT IN
+                  (SELECT MAX(id) FROM share_events WHERE at < ? GROUP BY app_id, kind)
+                """, [cutoff, cutoff])
+        }
+    }
 
     func count() throws -> Int { try query("SELECT COUNT(*) FROM points") { Int(sqlite3_column_int64($0, 0)) }.first ?? 0 }
 
@@ -153,7 +223,55 @@ final class LocalStore: @unchecked Sendable {
         try transaction {
             try exec("DELETE FROM points")
             try exec("DELETE FROM settings")
+            try exec("DELETE FROM share_events")
+            try exec("DELETE FROM share_points")
         }
+    }
+
+    // MARK: Sharing history (#621)
+
+    func record(_ kind: ShareEvent.Kind, appId: String? = nil, detail: String = "", at: Int64 = CompanionRepository.now()) throws {
+        try exec("INSERT INTO share_events(at, app_id, kind, detail) VALUES (?, ?, ?, ?)", [at, appId ?? NSNull(), kind.rawValue, detail])
+    }
+
+    /// Oldest first. Kinds this build does not know are skipped.
+    func events() throws -> [ShareEvent] {
+        try query("SELECT id, at, app_id, kind, detail FROM share_events ORDER BY at, id") { row -> ShareEvent? in
+            guard let kind = ShareEvent.Kind(rawValue: String(cString: sqlite3_column_text(row, 3))) else { return nil }
+            let appId = sqlite3_column_type(row, 2) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(row, 2))
+            return ShareEvent(id: sqlite3_column_int64(row, 0), at: sqlite3_column_int64(row, 1), appId: appId, kind: kind,
+                              detail: String(cString: sqlite3_column_text(row, 4)))
+        }.compactMap { $0 }
+    }
+
+    /// Deletes the history, keeps the queue (pending uploads still go), and re-seeds the current state at `now`.
+    /// `history_cleared` comes first: it ends open sessions, and the seeded `enabled` rows then start new ones.
+    func clearHistory(now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            try exec("DELETE FROM share_events")
+            try exec("DELETE FROM share_points")
+            try record(.historyCleared, at: now)
+            try seed(now: now, consentTime: false, detail: "")
+        }
+    }
+
+    /// Upgrade path: a phone with grants but no history gets sessions that start at each grant's consent time.
+    func seedIfEmpty(now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard try query("SELECT COUNT(*) FROM share_events") { sqlite3_column_int64($0, 0) }.first == 0 else { return }
+        try transaction { try seed(now: now, consentTime: true, detail: "seeded") }
+    }
+
+    private func seed(now: Int64, consentTime: Bool, detail: String) throws {
+        let blocked = blocked(), paused = pausedApps()
+        for app in apps() where app.grantId != nil && !blocked.contains(app.id) {
+            try record(.enabled, appId: app.id, detail: detail, at: consentTime ? min(app.consentAt, now) : now)
+        }
+        for app in apps() where app.grantId != nil && !blocked.contains(app.id) && paused.contains(app.id) {
+            try record(.paused, appId: app.id, detail: detail, at: now)
+        }
+        if self.paused { try record(.pausedAll, detail: detail, at: now) }
     }
 
     // MARK: SQLite
@@ -193,6 +311,8 @@ final class LocalStore: @unchecked Sendable {
             switch arg {
             case let value as Int64: rc = sqlite3_bind_int64(statement, index, value)
             case let value as String: rc = sqlite3_bind_text(statement, index, value, -1, transient)
+            case let value as Double: rc = sqlite3_bind_double(statement, index, value)
+            case is NSNull: rc = sqlite3_bind_null(statement, index)
             default: preconditionFailure("Unsupported SQLite binding")
             }
             guard rc == SQLITE_OK else { throw storageError() }
