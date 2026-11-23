@@ -28,7 +28,7 @@ data class CompanionState(
     val signedIn: Boolean = false, val name: String = "", val apps: List<ConnectedApp> = emptyList(),
     val blocked: Set<String> = emptySet(), val paused: Boolean = true, val running: Boolean = false,
     val permissions: Boolean = false, val queued: Int = 0, val message: String = "", val busy: Boolean = false,
-    val pairingCode: String = "", val lastSync: Long = 0,
+    val pairingCode: String = "", val lastSync: Long = 0, val pausedApps: Set<String> = emptySet(),
 )
 
 class MainActivity : ComponentActivity() {
@@ -48,6 +48,9 @@ class MainActivity : ComponentActivity() {
                     connect = { act { open(graph.repository.startSignIn()) } },
                     enable = { app -> act { graph.repository.enable(app); refresh(); if (LocationService.allowed(this@MainActivity)) maybeStart() else permissionExplanation = true } },
                     disable = { app -> act { graph.repository.disable(app) } },
+                    // Local writes, not `act`: pausing works offline and instantly.
+                    pauseApp = { app -> graph.local.pause(app.id); if (recipients().isEmpty()) stopService(Intent(this, LocationService::class.java)); refresh() },
+                    resumeApp = { app -> graph.local.resume(app.id); refresh(); maybeStart() },
                     pause = { graph.local.paused = true; stopService(Intent(this, LocationService::class.java)); refresh() },
                     resume = { graph.local.paused = false; refresh(); if (LocationService.allowed(this)) maybeStart() else permissionExplanation = true },
                     permissions = { permissionExplanation = true },
@@ -79,7 +82,7 @@ class MainActivity : ComponentActivity() {
     private fun refresh() {
         state = CompanionState(graph.repository.token() != null, graph.local.userName, graph.local.apps(), graph.local.blocked(),
             graph.local.paused, LocationService.running, LocationService.allowed(this), graph.local.count(), graph.local.message,
-            pairingCode = graph.repository.pairingCode(), lastSync = graph.local.lastSync)
+            pairingCode = graph.repository.pairingCode(), lastSync = graph.local.lastSync, pausedApps = graph.local.pausedApps())
     }
     private fun act(action: suspend () -> Unit) {
         if (working) return
@@ -90,8 +93,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun maybeStart() {
-        if (graph.repository.token() == null || graph.local.paused || !LocationService.allowed(this) ||
-            LocationPolicy.recipients(graph.local.apps(), graph.local.blocked(), System.currentTimeMillis()).isEmpty()) return
+        if (graph.repository.token() == null || graph.local.paused || !LocationService.allowed(this) || recipients().isEmpty()) return
         val prompt = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompt.getBoolean("notifications", false)) {
             prompt.edit().putBoolean("notifications", true).apply()
@@ -99,6 +101,7 @@ class MainActivity : ComponentActivity() {
         }
         try { LocationService.start(this) } catch (_: RuntimeException) { error = "Android could not start location sharing. Open ProAppStore and try again." }
     }
+    private fun recipients() = LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), System.currentTimeMillis())
     private fun requestLocation() {
         when {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ->
@@ -116,6 +119,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 internal fun PasScreen(
     state: CompanionState, connect: () -> Unit, enable: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit,
+    pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit,
     pause: () -> Unit, resume: () -> Unit, permissions: () -> Unit, sync: () -> Unit, disconnect: () -> Unit,
     privacy: () -> Unit, account: () -> Unit,
 ) {
@@ -134,7 +138,8 @@ internal fun PasScreen(
                 Text(state.name, style = MaterialTheme.typography.titleMedium)
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(when { state.paused -> "Location paused"; !state.permissions -> "Location permission needed"; state.running -> "Location sharing is on"; else -> "Location is not running" }, style = MaterialTheme.typography.titleLarge)
+                        val enabledApps = state.apps.filter { it.grantId != null && it.id !in state.blocked }
+                        Text(when { state.paused -> "Location paused"; enabledApps.isNotEmpty() && enabledApps.all { it.id in state.pausedApps } -> "All apps paused"; !state.permissions -> "Location permission needed"; state.running -> "Location sharing is on"; else -> "Location is not running" }, style = MaterialTheme.typography.titleLarge)
                         if (!state.permissions) Button(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
                         else if (state.paused) Button(onClick = resume, enabled = !state.busy && state.apps.any { it.grantId != null && it.id !in state.blocked }) { Text("Resume location") }
                         else OutlinedButton(onClick = pause) { Text("Pause all") }
@@ -151,9 +156,17 @@ internal fun PasScreen(
                             Text(app.name, style = MaterialTheme.typography.titleMedium)
                             Text("Background location", style = MaterialTheme.typography.bodyMedium)
                             val enabled = app.grantId != null && app.id !in state.blocked
-                            Text(if (enabled) "Enabled" else "Off", color = MaterialTheme.colorScheme.primary)
+                            val appPaused = app.id in state.pausedApps
+                            Text(if (!enabled) "Off" else if (appPaused) "Paused" else "Sharing", color = MaterialTheme.colorScheme.primary)
                             if (app.id in state.blocked) Text("Disabled on this phone. Server revocation will finish when connected.", style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { if (enabled) disable(app) else consent = app }, enabled = !state.busy) { Text(if (enabled) "Disable" else "Enable") }
+                            Row {
+                                if (enabled) {
+                                    if (appPaused) TextButton(onClick = { resumeApp(app) }, enabled = !state.paused) { Text("Resume") }
+                                    else TextButton(onClick = { pauseApp(app) }) { Text("Pause") }
+                                }
+                                TextButton(onClick = { if (enabled) disable(app) else consent = app }, enabled = !state.busy) { Text(if (enabled) "Disable" else "Enable") }
+                            }
+                            if (state.paused && enabled && appPaused) Text("All sharing is paused. Resume location to continue.", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }

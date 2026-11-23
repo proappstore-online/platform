@@ -15,7 +15,7 @@ class CompanionTest {
     @get:Rule val compose = createComposeRule()
     private val ski = ConnectedApp("ski", "Ski", "Record routes", "Ski receives precise location even when closed. You can revoke access.", "1", null)
     private fun screen(state: CompanionState, enable: (ConnectedApp) -> Unit = {}) {
-        compose.setContent { MaterialTheme { PasScreen(state, {}, enable, {}, {}, {}, {}, {}, {}, {}, {}) } }
+        compose.setContent { MaterialTheme { PasScreen(state, {}, enable, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}) } }
     }
     @Test fun consumerLandingHasSignInWithoutDeveloperTools() {
         screen(CompanionState())
@@ -63,6 +63,53 @@ class CompanionTest {
         reopened.acknowledge(listOf("point"))
         assertEquals(0, reopened.count())
         reopened.clear(); reopened.close()
+    }
+    // Per-app pause (#626, ported from #620)
+    private fun store(): LocalStore {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val local = LocalStore(context)
+        local.clear()
+        fun app(id: String, grant: String) = JSONObject().put("id", id).put("name", id).put("purpose", "Routes").put("disclosure", "Disclosure").put("version", "1")
+            .put("grant", JSONObject().put("id", grant).put("consent_at", 1))
+        local.saveApps(JSONArray().put(app("ski", "ski-g")).put(app("run", "run-g")))
+        local.paused = false
+        return local
+    }
+    @Test fun pauseFiltersNewPointsToTheOtherRecipient() {
+        val local = store()
+        local.pause("ski")
+        local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
+        assertEquals(listOf("run-g"), local.pending().single().grants)
+        local.pause("run")
+        local.enqueue(TrackPoint("q", 11, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
+        assertEquals(1, local.count())
+        local.clear(); local.close()
+    }
+    @Test fun pauseLeavesQueuedPointsUntouched() {
+        val local = store()
+        local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
+        local.pause("ski")
+        assertEquals(listOf("ski-g", "run-g"), local.pending().single().grants)
+        local.clear(); local.close()
+    }
+    @Test fun resumeRestoresTaggingAndBlockClearsThePause() {
+        val local = store()
+        local.pause("ski"); local.resume("ski")
+        local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
+        assertEquals(listOf("ski-g", "run-g"), local.pending().single().grants)
+        local.pause("ski"); local.block("ski")
+        assertEquals(emptySet<String>(), local.pausedApps())
+        assertEquals(setOf("ski"), local.excluded())
+        local.clear(); local.close()
+    }
+    @Test fun pausesSurviveReopenAndClearEmptiesThem() {
+        val local = store()
+        local.pause("ski"); local.close()
+        val reopened = LocalStore(ApplicationProvider.getApplicationContext())
+        assertEquals(setOf("ski"), reopened.pausedApps())
+        reopened.clear()
+        assertEquals(emptySet<String>(), reopened.pausedApps())
+        reopened.close()
     }
     @Test fun credentialRoundTripUsesKeystoreAndCanBeCleared() {
         val context = ApplicationProvider.getApplicationContext<Context>()

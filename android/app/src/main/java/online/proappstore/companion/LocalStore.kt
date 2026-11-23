@@ -29,7 +29,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
     @Synchronized fun blocked(): Set<String> = prefs.getStringSet("blocked", emptySet())!!.toSet()
     @Synchronized fun block(appId: String) {
         val next = blocked() + appId
-        check(prefs.edit().putStringSet("blocked", next).commit())
+        // A disabled app is not "paused": re-enabling it starts sharing.
+        check(prefs.edit().putStringSet("blocked", next).putStringSet("pausedApps", pausedApps() - appId).commit())
         // Discard only this recipient. Other enabled apps retain their own queued copy.
         val revoked = apps().find { it.id == appId }?.grantId ?: return
         val db = writableDatabase
@@ -45,6 +46,13 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         } finally { db.endTransaction() }
     }
     @Synchronized fun unblock(appId: String) { check(prefs.edit().putStringSet("blocked", blocked() - appId).commit()) }
+    /** Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform copy are untouched, and resuming needs no new disclosure. */
+    @Synchronized fun pausedApps(): Set<String> = prefs.getStringSet("pausedApps", emptySet())!!.toSet()
+    /** Never rewrites the queue: points recorded before the pause were authorized when taken and still upload. */
+    @Synchronized fun pause(appId: String) { check(prefs.edit().putStringSet("pausedApps", pausedApps() + appId).commit()) }
+    @Synchronized fun resume(appId: String) { check(prefs.edit().putStringSet("pausedApps", pausedApps() - appId).commit()) }
+    /** Apps that must not receive new fixes: revoked, or paused by the user. */
+    @Synchronized fun excluded(): Set<String> = blocked() + pausedApps()
     @Synchronized fun apps(): List<ConnectedApp> {
         val array = JSONArray(prefs.getString("apps", "[]"))
         return (0 until array.length()).map { i ->
@@ -54,7 +62,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
     }
     @Synchronized fun saveApps(apps: JSONArray) { check(prefs.edit().putString("apps", apps.toString()).commit()) }
     @Synchronized fun enqueue(point: TrackPoint) {
-        val allowed = LocationPolicy.recipients(apps(), blocked(), point.at).toSet()
+        val allowed = LocationPolicy.recipients(apps(), excluded(), point.at).toSet()
         val retained = point.copy(grants = point.grants.filter { it in allowed })
         if (paused || retained.grants.isEmpty()) return
         check(count() < LocationPolicy.MAX_QUEUE) { "Device storage queue is full. Connect to upload before resuming." }

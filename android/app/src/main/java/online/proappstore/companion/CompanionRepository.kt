@@ -48,7 +48,7 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         if (app.id in local.blocked()) api.request("DELETE", "/native/apps/${app.id}/location", credential)
         api.request("PUT", "/native/apps/${app.id}/location", credential, JSONObject().put("version", app.version).put("enabled", true))
         updateMe(api.request("GET", "/native/me", credential))
-        local.unblock(app.id); local.paused = false; local.message = ""
+        local.unblock(app.id); local.resume(app.id); local.paused = false; local.message = ""
     } }
     suspend fun disable(app: ConnectedApp) = withContext(Dispatchers.IO) {
         local.block(app.id) // Immediate, durable local stop even without network; recipient removed from the queue.

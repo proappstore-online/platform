@@ -52,11 +52,11 @@ class LocationService : Service(), LocationListenerCompat {
         }
         return START_STICKY
     }
-    private fun recipients(): List<String> = LocationPolicy.recipients(graph.local.apps(), graph.local.blocked(), System.currentTimeMillis())
+    private fun recipients(): List<String> = LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), System.currentTimeMillis())
     override fun onLocationChanged(location: Location) {
         if (graph.local.paused || !allowed(this) || location.time <= lastFixAt) return
         val point = TrackPoint(UUID.randomUUID().toString(), location.time, location.latitude, location.longitude, location.accuracy,
-            LocationPolicy.recipients(graph.local.apps(), graph.local.blocked(), location.time))
+            LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), location.time))
         if (!LocationPolicy.valid(point, System.currentTimeMillis())) return
         lastFixAt = point.at
         scope.launch {
@@ -80,7 +80,7 @@ class LocationService : Service(), LocationListenerCompat {
     private fun notification(): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, LocationService::class.java).setAction(PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val apps = graph.local.apps().filter { it.grantId != null && it.id !in graph.local.blocked() }.joinToString { it.name }
+        val apps = graph.local.apps().filter { it.grantId != null && it.id !in graph.local.excluded() }.joinToString { it.name }
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_location).setContentTitle("ProAppStore location sharing")
             .setContentText(if (lastFixAt == 0L || System.currentTimeMillis() - lastFixAt > 30_000) "Waiting for GPS · $apps" else "Sharing with $apps")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(0, "Pause all", pause).build()

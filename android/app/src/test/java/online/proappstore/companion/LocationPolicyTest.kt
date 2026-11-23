@@ -11,6 +11,12 @@ class LocationPolicyTest {
         assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app), setOf("ski"), 1001))
         assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app.copy(grantId = null)), emptySet(), 1001))
     }
+    /** #626: with every granted app paused or revoked there is no recipient, which is the condition LocationService stops on. */
+    @Test fun noRecipientsWhenEveryGrantedAppIsExcluded() {
+        val run = ConnectedApp("run", "Run", "Routes", "Disclosure", "1", "grant-two", 1000)
+        assertEquals(listOf("grant-two"), LocationPolicy.recipients(listOf(app, run), setOf("ski"), 2000))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app, run), setOf("ski", "run"), 2000))
+    }
     @Test fun gpsMustBeFreshAccurateAndHaveRecipients() {
         val p = TrackPoint("point", 20_000, -36.4, 148.4, 5f, listOf("grant-one"))
         assertTrue(LocationPolicy.valid(p, 20_000))

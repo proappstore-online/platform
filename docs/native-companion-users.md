@@ -23,7 +23,7 @@ Build and install from Xcode (developer preview; not on the App Store). Choose *
 ## Control sharing
 
 - **Pause all** stops new location collection. Already collected updates may still sync.
-- **Pause an app** (iPhone) stops sending new location to that app only. It keeps your consent, so **Resume** needs no new approval. If every app is paused, ProAppStore stops using location. The app is not told you paused; it just stops receiving new points.
+- **Pause an app** stops sending new location to that app only. It keeps your consent, so **Resume** needs no new approval. If every app is paused, ProAppStore stops using location. The app is not told you paused; it just stops receiving new points.
 - **Disable an app** immediately stops that recipient on your phone. If offline, its platform disconnection finishes when the phone reconnects; ProAppStore displays that pending state.
 - **Disconnect this phone** stops collection and deletes its pending device updates and raw platform copies. Internet is required to finish disconnection.
 - Rides or other results already saved separately inside an app are managed by that app.
