@@ -102,6 +102,7 @@ import { googleCalendarRoutes } from './routes/google-calendar.js';
 import { ownershipRoutes } from './routes/ownership.js';
 import { appDirectoryRoutes } from './routes/app-directory.js';
 import { ideaBuildersRoutes } from './routes/idea-builders.js';
+import { hostProbeStatus, runHostProbe } from './lib/host-probe.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -307,6 +308,8 @@ app.onError(async (err, c) => {
 
 app.get('/', (c) => c.json({ ok: true, service: 'proappstore-api' }));
 app.get('/health', (c) => c.json({ ok: true }));
+// #656: the latest concurrent-burst probe of live app roots (lib/host-probe.ts). Public app ids and times only.
+app.get('/health/host-probe', async (c) => c.json(await hostProbeStatus(c.env.DB), 200, { 'Cache-Control': 'no-store' }));
 
 // ── API documentation ──────────────────────────────────────────
 // OpenAPI 3.1 spec (generated from the route table) + a browsable Swagger UI.
@@ -476,6 +479,8 @@ export default {
     ctx.waitUntil(retryDueDeliveries(env.DB, tickAt));
     // #456: a ProAgentStore verifier run whose agent has gone quiet runs headlessly instead.
     ctx.waitUntil(fallBackStalePagsRuns(env, tickAt).catch((e) => console.error(`[pags] timeout sweep failed: ${(e as Error).message}`)));
+    // #656: concurrent bursts at live app roots, so a cross-request failure (#616) cannot stay green.
+    ctx.waitUntil(runHostProbe({ env, now: tickAt }).catch((e) => console.error(`[host-probe] failed: ${(e as Error).message}`)));
     // The pre-existing checks remain every fifteen minutes even though the
     // Worker now receives a five-minute tick for scheduled app actions.
     if (new Date(tickAt).getUTCMinutes() % 15 !== 0) return;

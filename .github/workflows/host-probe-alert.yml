@@ -1,0 +1,64 @@
+name: Host probe alert
+
+# #656 (#653): turns the backend's concurrent-burst probe of live app roots
+# (packages/backend/src/lib/host-probe.ts, every five-minute Worker cron tick)
+# into something a human sees: one open issue, commented on while it lasts.
+#
+# The backend dispatches this workflow when the probe starts failing (its
+# GITHUB_TOKEN, actions:write). The hourly schedule is a backstop: GitHub runs
+# it late and irregularly, which is fine for a backstop and is why the probe
+# itself does not live here. It also catches a probe that has stopped running.
+# Reads only the public status endpoint; no secrets.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: host-probe-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update the host-probe issue when the probe is failing or stale
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATUS_URL: https://api.proappstore.online/health/host-probe
+          TITLE: 'Host probe: live app roots fail under concurrent requests'
+        run: |
+          set -euo pipefail
+          now=$(( $(date +%s) * 1000 ))
+          if status=$(curl -fsS --retry 3 --max-time 15 "$STATUS_URL"); then
+            echo "$status"
+            ok=$(jq -r '.ok' <<<"$status")
+            updated=$(jq -r '.updatedAt // 0' <<<"$status")
+            if [ "$ok" = "false" ]; then
+              reason="The latest probe failed: \`$(jq -r '.lastError' <<<"$status")\` (app=failed/sent; \`catalogue\` = catalogue.json unreadable)."
+            elif [ $(( now - updated )) -gt $(( 30 * 60 * 1000 )) ]; then
+              reason="The probe has not reported for over 30 minutes (updatedAt=$updated): the backend cron may not be running."
+            else
+              echo "Probe healthy."; exit 0
+            fi
+          else
+            reason="$STATUS_URL is unreachable."
+          fi
+
+          body=$(printf '%s\n\nStatus: %s\nRun: %s/%s/actions/runs/%s\n\nThe probe sends bursts of concurrent GETs to the root of `run` and a rotating sample of apps (packages/backend/src/lib/host-probe.ts). A host failing only under overlapping requests is the #616 class: look for state shared across requests, then roll back the host (`wrangler rollback` in packages/host) if a deploy caused it.' \
+            "$reason" "$STATUS_URL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          num=$(gh issue list --state open --limit 200 --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
+          echo "::error::$reason"
+          exit 1

@@ -93,20 +93,23 @@ async function probeOne(fetchImpl: typeof fetch, env: Env, appId: string, token:
   }
 }
 
-/** Dispatch the fleet fan-out for one app. Returns false (never throws) when it cannot. */
-async function dispatchRedeploy(fetchImpl: typeof fetch, token: string, appId: string): Promise<boolean> {
+/**
+ * Dispatch a workflow of this repo (REDEPLOY_WORKFLOW's owner/repo/ref) with GITHUB_TOKEN
+ * (actions:write). Returns false (never throws) when it cannot. Also used by the host probe (#656).
+ */
+export async function dispatchPlatformWorkflow(fetchImpl: typeof fetch, token: string, file: string, inputs: Record<string, string>): Promise<boolean> {
   try {
     const res = await fetchImpl(
-      `https://api.github.com/repos/${REDEPLOY_WORKFLOW.owner}/${REDEPLOY_WORKFLOW.repo}/actions/workflows/${REDEPLOY_WORKFLOW.file}/dispatches`,
+      `https://api.github.com/repos/${REDEPLOY_WORKFLOW.owner}/${REDEPLOY_WORKFLOW.repo}/actions/workflows/${file}/dispatches`,
       {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/vnd.github+json',
           'Content-Type': 'application/json',
-          'User-Agent': 'proappstore-api session-key-drift',
+          'User-Agent': 'proappstore-api',
         },
-        body: JSON.stringify({ ref: REDEPLOY_WORKFLOW.ref, inputs: { app_id: appId } }),
+        body: JSON.stringify({ ref: REDEPLOY_WORKFLOW.ref, inputs }),
       },
     );
     return res.status === 204;
@@ -143,7 +146,7 @@ export async function checkSessionKeyDrift(opts: DriftOptions): Promise<DriftRep
     if (!env.GITHUB_TOKEN) {
       dispatchSkipped = 'GITHUB_TOKEN is not configured — run redeploy-data-workers.yml by hand';
     } else {
-      for (const appId of drifted) if (await dispatchRedeploy(fetchImpl, env.GITHUB_TOKEN, appId)) dispatched.push(appId);
+      for (const appId of drifted) if (await dispatchPlatformWorkflow(fetchImpl, env.GITHUB_TOKEN, REDEPLOY_WORKFLOW.file, { app_id: appId })) dispatched.push(appId);
       if (dispatched.length < drifted.length) dispatchSkipped = 'GitHub refused one or more workflow dispatches (token needs actions:write on proappstore-online/platform)';
     }
   }

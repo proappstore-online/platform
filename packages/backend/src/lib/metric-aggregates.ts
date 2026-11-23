@@ -75,8 +75,8 @@ export async function incrementMetrics(
   }
 }
 
-/** Pipeline components whose health is recorded (#391). `''` app id = platform-wide. */
-export type HealthComponent = 'aggregates' | 'evaluator' | 'prune';
+/** Pipeline components whose health is recorded (#391; host_probe: #656). `''` app id = platform-wide. */
+export type HealthComponent = 'aggregates' | 'evaluator' | 'prune' | 'host_probe';
 
 function healthStatement(db: D1Database, component: HealthComponent, appId: string, ok: boolean, error: string | null, nowMs: number): D1PreparedStatement {
   return db.prepare(
