@@ -36,6 +36,7 @@ import { serveMarketingSite } from "./marketing-site.js";
 import { rewriteMetaTags } from "./meta-rewriter.js";
 import { getOperatorGate, isUnderPrefix, refuseUnlessOperator } from "./operator-gate.js";
 import { getEmbedOrigins } from "./embed-origins.js";
+import { handleInstallHandoff, injectInstallHandoff, wantsInstallHandoff } from "./install-handoff.js";
 import { applyIsolation, getIsolationMode, isScriptKey } from "./isolation.js";
 import { handlePlatformMediation } from "./platform-mediation.js";
 import { getPublicCatalogueApp } from "./public-catalogue.js";
@@ -163,6 +164,10 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
   // #402: same-origin visitor analytics, signed in or not (after the private-app gate).
   const analyticsResponse = await handleAnalyticsMediation(request, env, route);
   if (analyticsResponse) return analyticsResponse;
+
+  // #628: the companion's install hint script, same origin, after the private-app gate.
+  const installResponse = handleInstallHandoff(request);
+  if (installResponse) return installResponse;
 
   const mediationResponse = await handlePlatformMediation(request, env, route, ctx);
   if (mediationResponse) return mediationResponse;
@@ -387,6 +392,9 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
       },
       `${url.origin}${root ? "/" : url.pathname}`,
     );
+    // #628: only a companion "Open" (`?install=1`) gets the install script. HTML is
+    // never edge-cached and the cache key is the full URL, so the variants cannot mix.
+    if (wantsInstallHandoff(url)) response = injectInstallHandoff(response);
   }
 
   // Edge cache: store the response so next request skips R2 + D1. GET only:
