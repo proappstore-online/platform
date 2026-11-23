@@ -394,7 +394,7 @@ describe('consumer native companion', () => {
       db.sql.prepare('UPDATE native_grants SET consent_at = 0 WHERE id = ?').run(g.id);
       const at = Date.now() - 60_000;
       for (let i = 0; i < 4; i++) {
-        const samples = Array.from({ length: 300 }, (_, j) => sample(`b${String(i * 300 + j).padStart(4, '0')}`, at, [g.id]));
+        const samples = Array.from({ length: 300 }, (_, j) => sample(String(i * 300 + j).padStart(36, '0'), at, [g.id]));
         expect((await request('/native/heart-rate', 'POST', { samples }, d.token)).status).toBe(200);
       }
       const first = await (await read(readToken('google:1', 'run'))).json() as { samples: { at: number; cursorId: string }[] };
@@ -402,6 +402,14 @@ describe('consumer native companion', () => {
       const last = first.samples.at(-1)!;
       const rest = await (await request(`/apps/run/native/heart-rate?after=${last.at}&afterId=${encodeURIComponent(last.cursorId)}`, 'GET', undefined, await readToken('google:1', 'run'))).json() as { samples: unknown[] };
       expect(rest.samples).toHaveLength(201);
+    });
+    it('accepts the largest batch the validator allows: 300 samples, 80-char ids, 10 grants (#671)', async () => {
+      const d = await device(), g = await hrGrant(d.token), now = Date.now();
+      const grants = [g.id, ...Array.from({ length: 9 }, (_, i) => String(i).repeat(64))];
+      const samples = Array.from({ length: 300 }, (_, i) => sample(String(i).padStart(80, '0'), now, grants, 250));
+      expect(JSON.stringify({ samples }).length).toBeGreaterThan(240_000);
+      expect((await request('/native/heart-rate', 'POST', { samples }, d.token)).status).toBe(200);
+      expect(stored()).toHaveLength(300);
     });
     it('revoking heart rate erases it while Run location still reads, and the reverse', async () => {
       const d = await device(), hr = await hrGrant(d.token), loc = await grant(d.token, 'run');

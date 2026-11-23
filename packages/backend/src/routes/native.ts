@@ -118,7 +118,8 @@ nativeRoutes.post('/native/locations', async c => {
 nativeRoutes.post('/native/heart-rate', async c => {
   const device = await nativeDevice(c), now = Date.now();
   await uploadQuota(c.env.DB, `native-hr:${device.id}`, now);
-  const samples = nativeHeartRateSamples((await nativeBody(c, 40_000)).samples, now);
+  // #671: at least the validator's worst case (300 samples, 80-char ids, 10 grants, bpm 250 = 240,013 bytes).
+  const samples = nativeHeartRateSamples((await nativeBody(c, 256_000)).samples, now);
   const grants = await nativeGrants(c.env.DB, device.id);
   const statements: D1PreparedStatement[] = [];
   for (const sample of samples) for (const grant of grants) {
