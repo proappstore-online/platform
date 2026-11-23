@@ -144,7 +144,7 @@ describe("install.js behaviour (#628)", () => {
   });
 
   it("a second tap while the prompt is open does not prompt again, and a throwing prompt still removes the bar", async () => {
-    const { listeners, buttons, hosts } = page();
+    const { listeners, buttons } = page();
     const prompt = vi.fn();
     listeners.beforeinstallprompt!({ preventDefault: () => {}, prompt, userChoice: new Promise(() => {}) });
     await flush();
