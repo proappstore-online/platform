@@ -6,7 +6,7 @@ Architecture and delivery status: [platform documentation](../docs/native-compan
 
 ## Build
 
-Prerequisites: Xcode 16 or later. [XcodeGen](https://github.com/yonaskolb/XcodeGen) only when `project.yml` changes; the generated `ProAppStore.xcodeproj` is committed.
+Prerequisites: Xcode 16 or later. [XcodeGen](https://github.com/yonaskolb/XcodeGen) **2.45.4** (the version `.github/workflows/ios.yml` pins; others generate different output) only when `project.yml` changes; the generated `ProAppStore.xcodeproj` is committed.
 
 ```sh
 cd ios && xcodegen generate && git diff --exit-code -- ProAppStore.xcodeproj   # project matches project.yml

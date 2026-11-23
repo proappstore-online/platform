@@ -2,6 +2,8 @@
 name: ProAppStore
 options:
   createIntermediateGroups: true
+  # Explicit so the generated LastUpgradeCheck does not follow XcodeGen's default (2.47 changed it).
+  xcodeVersion: "16.0"
   developmentLanguage: en
 configFiles:
   Debug: Config/Base.xcconfig
