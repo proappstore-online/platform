@@ -9,8 +9,10 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var authorization: CLAuthorizationStatus
     @Published private(set) var fullAccuracy: Bool
     @Published private(set) var running = false
-    /// Time of the last accepted fix, in memory only.
+    /// Time and place of the last accepted fix, in memory only: the map's live dot. Never a second location
+    /// source (no MapKit user location).
     @Published private(set) var lastFixAt: Date?
+    @Published private(set) var lastFix: CLLocationCoordinate2D?
 
     private let manager = CLLocationManager()
     private let repository: CompanionRepository
@@ -93,7 +95,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
                                    accuracy: location.horizontalAccuracy, grants: recipients(at: at))
             guard LocationPolicy.valid(point, now: CompanionRepository.now(), lastFixAt: lastAcceptedAt) else { continue }
             lastAcceptedAt = point.at
-            lastFixAt = location.timestamp
+            lastFixAt = location.timestamp; lastFix = location.coordinate
             do {
                 try local.enqueue(point) // Re-filters recipients against current consent before insert.
             } catch {

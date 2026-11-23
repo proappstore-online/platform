@@ -83,6 +83,18 @@ final class ScreenshotTests: XCTestCase {
                 try save(window, to: "\(output)/\(tab == .sharing ? "sharing" : "settings")-\(name).png")
                 window.isHidden = true
             }
+            // #623: Run's detail with its session expanded.
+            let run = try XCTUnwrap(model.apps.first { $0.id == "run" })
+            let session = try XCTUnwrap(SharingTimeline.sessions(model.events, appId: "run").last)
+            let detail = UIWindow(windowScene: scene)
+            detail.overrideUserInterfaceStyle = style
+            detail.rootViewController = UIHostingController(rootView: NavigationStack {
+                AppSharingView(app: run, model: model, collector: model.collector, expanded: [session.start])
+            })
+            detail.makeKeyAndVisible()
+            try await Task.sleep(for: .seconds(4))
+            try save(detail, to: "\(output)/run-detail-\(name).png")
+            detail.isHidden = true
             // The whole dashboard, past the fold.
             let tall = UIWindow(windowScene: scene)
             tall.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: 1_900)

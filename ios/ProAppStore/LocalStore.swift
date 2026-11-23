@@ -265,6 +265,14 @@ final class LocalStore: @unchecked Sendable {
         try query("SELECT COUNT(*) FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId]) { Int(sqlite3_column_int64($0, 0)) }.first ?? 0
     }
 
+    /// This app's shared points in `[from, to]`, oldest first.
+    func track(appId: String, from: Int64, to: Int64) throws -> [TrackSample] {
+        try query("SELECT at, lat, lng, accuracy, sent_at FROM share_points WHERE app_id = ? AND at BETWEEN ? AND ? ORDER BY at", [appId, from, to]) { row in
+            TrackSample(at: sqlite3_column_int64(row, 0), lat: sqlite3_column_double(row, 1), lng: sqlite3_column_double(row, 2),
+                        accuracy: sqlite3_column_double(row, 3), sentAt: sqlite3_column_type(row, 4) == SQLITE_NULL ? nil : sqlite3_column_int64(row, 4))
+        }
+    }
+
     /// Deletes the history, keeps the queue (pending uploads still go), and re-seeds the current state at `now`.
     /// `history_cleared` comes first: it ends open sessions, and the seeded `enabled` rows then start new ones.
     func clearHistory(now: Int64 = CompanionRepository.now()) throws {

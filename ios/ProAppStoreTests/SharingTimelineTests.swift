@@ -61,4 +61,13 @@ final class SharingTimelineTests: XCTestCase {
         XCTAssertEqual(sessions[0].inactive, [InactiveInterval(start: 10 * min, end: 20 * min, cause: .system("signed_out"))])
         XCTAssertEqual(sessions[0].endKind, .historyCleared)
     }
+
+    func testPeriodsCutASessionIntoSharedAndInactiveStretches() {
+        let session = SharingTimeline.sessions([e(.enabled, 0), e(.paused, 10 * min), e(.resumed, 20 * min)], appId: "run")[0]
+        XCTAssertEqual(session.periods(now: 30 * min), [
+            SharingPeriod(start: 0, end: 10 * min, cause: nil),
+            SharingPeriod(start: 10 * min, end: 20 * min, cause: .you),
+            SharingPeriod(start: 20 * min, end: 30 * min, cause: nil),
+        ])
+    }
 }

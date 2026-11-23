@@ -68,6 +68,10 @@ struct SharingDashboardView: View {
     @ObservedObject var model: CompanionModel
     @ObservedObject var collector: LocationCollector
     @StateObject private var device = DeviceStatus()
+    /// Apps hidden from the overview map. Not persisted.
+    @State private var hidden: Set<String> = []
+    @State private var tracks: [MapTrack] = []
+    @State private var fullMap = false
 
     var body: some View {
         NavigationStack {
@@ -80,6 +84,55 @@ struct SharingDashboardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle("Sharing")
+            .navigationDestination(for: String.self) { id in
+                if let app = model.apps.first(where: { $0.id == id }) { AppSharingView(app: app, model: model, collector: collector) }
+            }
+        }
+        .task(id: TrackKey(range: SharingTimeline.today(), queued: model.queued, lastSync: model.lastSync)) {
+            tracks = await TrackLoader.load(model.repository.local, apps: granted, all: model.apps, range: SharingTimeline.today())
+        }
+        .fullScreenCover(isPresented: $fullMap) {
+            NavigationStack {
+                overviewMap(interactive: true)
+                    .ignoresSafeArea(edges: .bottom)
+                    .navigationTitle("Today")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { Button("Done") { fullMap = false } }
+            }
+        }
+    }
+
+    private var liveFix: CLLocationCoordinate2D? { collector.running ? collector.lastFix : nil }
+
+    private func overviewMap(interactive: Bool) -> some View {
+        SharingMapView(tracks: tracks.filter { !hidden.contains($0.id) }, liveFix: liveFix, liveFixAt: collector.lastFixAt, interactive: interactive)
+    }
+
+    /// Today's track for every app with a grant, plus the live dot. Tap to open full screen.
+    @ViewBuilder private var overview: some View {
+        overviewMap(interactive: false)
+            .frame(height: UIScreen.main.bounds.height * 0.4)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+            .onTapGesture { fullMap = true }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Today's sharing map. Opens full screen.")
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                ForEach(granted) { app in
+                    let on = !hidden.contains(app.id)
+                    let color = TrackPalette.color(for: app.id, in: model.apps)
+                    Button {
+                        if on { hidden.insert(app.id) } else { hidden.remove(app.id) }
+                    } label: {
+                        Label(app.name, systemImage: on ? "checkmark.circle.fill" : "circle")
+                            .font(.subheadline).padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(color.opacity(on ? 0.2 : 0.06), in: Capsule()).foregroundStyle(on ? color : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityValue(on ? "Shown" : "Hidden")
+                }
+            }
         }
     }
 
@@ -94,6 +147,7 @@ struct SharingDashboardView: View {
     private var available: [ConnectedApp] { model.apps.filter { $0.grantId == nil && !model.blocked.contains($0.id) } }
 
     @ViewBuilder private var dashboard: some View {
+        if !granted.isEmpty { overview }
         header
         if model.apps.isEmpty { Text("No supported native features are available for your apps yet.") }
         ForEach(granted) { app in row(app) }
@@ -168,12 +222,17 @@ struct SharingDashboardView: View {
         let shared = SharingTimeline.sessions(model.events, appId: app.id).reduce(0) { $0 + $1.sharedMs(within: today) }
         return GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(app.name).font(.headline)
-                    Spacer()
-                    Text(state.label).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(state.color.opacity(0.15), in: Capsule()).foregroundStyle(state.color)
+                NavigationLink(value: app.id) {
+                    HStack {
+                        Circle().fill(TrackPalette.color(for: app.id, in: model.apps)).frame(width: 10, height: 10)
+                        Text(app.name).font(.headline)
+                        Spacer()
+                        Text(state.label).font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(state.color.opacity(0.15), in: Capsule()).foregroundStyle(state.color)
+                        Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                    }
                 }
+                .buttonStyle(.plain)
                 if state == .turningOff {
                     Text("Disabled on this phone. Server revocation will finish when connected.").font(.footnote)
                 }
@@ -263,9 +322,5 @@ struct SharingDashboardView: View {
         Date(timeIntervalSince1970: Double(ms) / 1000).formatted(.relative(presentation: .named))
     }
 
-    /// "1 h 12 min", "8 min".
-    private func duration(_ ms: Int64) -> String {
-        let minutes = ms / 60_000
-        return minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) min"
-    }
+    private func duration(_ ms: Int64) -> String { AppSharingView.duration(ms) }
 }

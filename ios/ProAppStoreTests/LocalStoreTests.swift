@@ -276,6 +276,18 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertNil(try local.lastUpload("ski"))
     }
 
+    func testTrackReturnsOnlyThatAppsRowsInRangeInOrder() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.enqueue(point("b", at: 20, grants: ["run-g"]))
+        try local.enqueue(point("a", at: 10, grants: ["ski-g", "run-g"]))
+        try local.enqueue(point("c", at: 30, grants: ["run-g"]))
+        try local.enqueue(point("d", at: 40, grants: ["run-g"]))
+        try local.acknowledge(["a"], now: 99)
+        XCTAssertEqual(try local.track(appId: "run", from: 10, to: 30).map(\.at), [10, 20, 30])
+        XCTAssertEqual(try local.track(appId: "run", from: 10, to: 30).map(\.sentAt), [99, nil, nil])
+        XCTAssertEqual(try local.track(appId: "ski", from: 0, to: 100).map(\.at), [10])
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil
