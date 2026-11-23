@@ -19,6 +19,11 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     private var local: LocalStore { repository.local }
     private var lastAcceptedAt: Int64 = 0
     private var lastSyncAttempt = Date.distantPast
+    private var emitter = EmitFilter()
+    /// CoreLocation's motion state while collecting (#639): stationary turns GPS off and holds back jitter.
+    private var stationary = false
+    private var motion: Task<Void, Never>?
+    private var activity: CLBackgroundActivitySession?
 
     init(repository: CompanionRepository) {
         self.repository = repository
@@ -26,8 +31,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
         fullAccuracy = manager.accuracyAuthorization == .fullAccuracy
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 5                        // metres; Run's engine coalesces <3 m anyway
+        apply(stationary: false)                          // best accuracy, 5 m distance filter
         manager.activityType = .fitness
         manager.pausesLocationUpdatesAutomatically = false // v1: runs until Pause all, like Android's FGS
         manager.allowsBackgroundLocationUpdates = true     // requires UIBackgroundModes=location
@@ -50,14 +54,43 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     /// location event), activation, every authorization change and every delivered fix.
     func evaluate() {
         if repository.token() != nil && !local.paused && permitted && !recipients(at: CompanionRepository.now()).isEmpty {
-            if !running { manager.startUpdatingLocation(); running = true }
+            if !running {
+                emitter = EmitFilter() // a resumed session starts with a point, not a heartbeat later
+                manager.startUpdatingLocation(); running = true
+                watchMotion()
+            }
             // Relaunch hook after iOS terminates the app.
             if authorization == .authorizedAlways { manager.startMonitoringSignificantLocationChanges() }
         } else {
             manager.stopUpdatingLocation()
             manager.stopMonitoringSignificantLocationChanges()
             if running { running = false }
+            motion?.cancel(); motion = nil
+            activity?.invalidate(); activity = nil
+            apply(stationary: false)
         }
+    }
+
+    /// Motion state only: points still come from `manager`. `liveUpdates` pauses itself while the phone is still,
+    /// and the background activity session keeps its updates coming while locked, under While Using too.
+    private func watchMotion() {
+        activity = CLBackgroundActivitySession()
+        motion = Task { [weak self] in
+            do {
+                for try await update in CLLocationUpdate.liveUpdates(.fitness) {
+                    guard !Task.isCancelled else { return }
+                    self?.apply(stationary: update.isStationary)
+                }
+            } catch {}
+        }
+    }
+
+    private func apply(stationary value: Bool) {
+        if stationary && !value { emitter.motionResumed() }
+        stationary = value
+        let tracking = LocationPolicy.tracking(stationary: value)
+        if manager.desiredAccuracy != tracking.accuracy { manager.desiredAccuracy = tracking.accuracy }
+        if manager.distanceFilter != tracking.distanceFilter { manager.distanceFilter = tracking.distanceFilter }
     }
 
     func flush() {
@@ -111,6 +144,9 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
             guard LocationPolicy.valid(point, now: CompanionRepository.now(), lastFixAt: lastAcceptedAt) else { continue }
             lastAcceptedAt = point.at
             lastFixAt = location.timestamp; lastFix = location.coordinate
+            // #639: only a move beyond the fixes' accuracy, or the heartbeat, becomes a point.
+            guard let reason = emitter.accept(location, stationary: stationary) else { continue }
+            if stationary && reason == .moved { apply(stationary: false) } // motion updates missed the start of a move
             do {
                 try local.enqueue(point) // Re-filters recipients against current consent before insert.
             } catch {

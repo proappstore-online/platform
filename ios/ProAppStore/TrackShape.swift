@@ -19,12 +19,14 @@ enum TrackShape {
         let pending: Bool
     }
 
-    /// Splits wherever consecutive samples are more than `maxGap` apart (pauses, stops and OS gaps are never
-    /// bridged by a straight line; ADR-015) and wherever upload state changes. Then thins by stride to at most
-    /// about `maxPoints` coordinates in total, always keeping each segment's first and last sample.
-    static func segments(_ samples: [TrackSample], maxGap: Int64 = 60_000, maxPoints: Int = 5_000) -> [Segment] {
+    /// Draws only samples at `maxAccuracy` or better: coarse fixes (indoors, or heartbeats while stationary) would
+    /// scribble (#639). Splits wherever consecutive drawn samples are more than `maxGap` apart (pauses, stops and OS
+    /// gaps are never bridged by a straight line; ADR-015) and wherever upload state changes. Then thins by stride to
+    /// at most about `maxPoints` coordinates in total, always keeping each segment's first and last sample.
+    static func segments(_ samples: [TrackSample], maxGap: Int64 = 60_000, maxPoints: Int = 5_000,
+                         maxAccuracy: Double = LocationPolicy.PRECISE_M) -> [Segment] {
         var segments: [Segment] = []
-        for sample in samples {
+        for sample in samples where sample.accuracy <= maxAccuracy {
             let pending = sample.sentAt == nil
             if let last = segments.last?.samples.last, sample.at - last.at <= maxGap, segments[segments.count - 1].pending == pending {
                 segments[segments.count - 1].samples.append(sample)

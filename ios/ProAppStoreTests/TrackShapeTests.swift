@@ -2,7 +2,7 @@ import XCTest
 @testable import ProAppStore
 
 final class TrackShapeTests: XCTestCase {
-    private func s(_ at: Int64, sent: Int64? = 1) -> TrackSample { TrackSample(at: at, lat: 1, lng: 2, accuracy: 5, sentAt: sent) }
+    private func s(_ at: Int64, sent: Int64? = 1, accuracy: Double = 5) -> TrackSample { TrackSample(at: at, lat: 1, lng: 2, accuracy: accuracy, sentAt: sent) }
 
     func testAGapOverAMinuteSplitsAndOneUnderDoesNot() {
         XCTAssertEqual(TrackShape.segments([s(0), s(61_000)]).count, 2)
@@ -30,5 +30,12 @@ final class TrackShapeTests: XCTestCase {
 
     func testEmptyInputGivesNoSegments() {
         XCTAssertEqual(TrackShape.segments([]), [])
+    }
+
+    /// #639: the map draws only fixes at 25 m or better; a coarse fix neither draws nor bridges a gap.
+    func testOnlyFixesAt25MetresOrBetterAreDrawn() {
+        let segments = TrackShape.segments([s(0, accuracy: 3), s(10_000, accuracy: 25), s(20_000, accuracy: 25.1), s(30_000, accuracy: 53), s(40_000, accuracy: 4)])
+        XCTAssertEqual(segments.map { $0.samples.map(\.at) }, [[0, 10_000, 40_000]])
+        XCTAssertEqual(TrackShape.segments([s(0, accuracy: 40), s(1_000, accuracy: 65)]), [])
     }
 }
