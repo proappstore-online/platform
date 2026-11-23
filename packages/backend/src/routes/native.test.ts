@@ -89,6 +89,16 @@ describe('consumer native companion', () => {
     db.sql.exec('UPDATE native_pairings SET expires_at=0');
     expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
   });
+  it('binds a pairing to the first browser that opens it; only that browser may reopen it (#650)', async () => {
+    const p = await pairing();
+    const reload = await request(`/native/auth/authorize?id=${p.id}`, 'GET', undefined, undefined, { Cookie: p.cookie });
+    expect(reload.status).toBe(200);
+    expect(reload.headers.get('Set-Cookie')!.split(';')[0]).toBe(p.cookie);
+    expect((await request(`/native/auth/authorize?id=${p.id}`)).status).toBe(403);
+    const forged = `${p.cookie.split('=')[0]}=${p.id}.${'c'.repeat(64)}`;
+    expect((await request(`/native/auth/authorize?id=${p.id}`, 'GET', undefined, undefined, { Cookie: forged })).status).toBe(403);
+    await authorize(p);
+  });
   it('stores only explicitly granted, post-consent points and makes retries idempotent', async () => {
     const d = await device(), g = await grant(d.token);
     const points = [point('valid', g.consent_at, [g.id]), point('old', g.consent_at - 1, [g.id]), point('unknown', g.consent_at, ['f'.repeat(64)])];

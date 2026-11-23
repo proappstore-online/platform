@@ -41,8 +41,15 @@ nativeAuthRoutes.get('/native/auth/authorize', async c => {
   const id = c.req.query('id') ?? '';
   const pairing = hex(id) ? await row(c, id) : null;
   if (!pairing || pairing.approved || pairing.user_id) throw new HttpError('Connection expired. Start again from the ProAppStore app on your phone.', 400);
-  const nonce = nativeRandom();
-  await c.env.DB.prepare('UPDATE native_pairings SET browser_hash = ? WHERE id = ? AND approved = 0 AND user_id IS NULL').bind(await nativeHash(nonce), id).run();
+  // The first browser to open the link owns this pairing; only it may reopen it (#650).
+  const [cookieId, cookieNonce] = (getCookie(c, COOKIE) ?? '').split('.');
+  let nonce: string;
+  if (pairing.browser_hash && cookieId === id && hex(cookieNonce) && await nativeHash(cookieNonce) === pairing.browser_hash) nonce = cookieNonce;
+  else {
+    nonce = nativeRandom();
+    const bound = await c.env.DB.prepare('UPDATE native_pairings SET browser_hash = ? WHERE id = ? AND approved = 0 AND user_id IS NULL AND browser_hash IS NULL').bind(await nativeHash(nonce), id).run();
+    if (!bound.meta.changes) throw new HttpError('This connection was opened in another browser. Start again from the ProAppStore app on your phone.', 403);
+  }
   setCookie(c, COOKIE, `${id}.${nonce}`, { secure: true, httpOnly: true, sameSite: 'Lax', path: '/', maxAge: PAIRING_MS / 1000 });
   const returnTo = `${base(c)}${PREFIX}/callback`;
   const login = (provider: string) => `${base(c)}/v1/auth/${provider}/start?response_mode=query&return_to=${encodeURIComponent(returnTo)}`;
