@@ -64,6 +64,20 @@ final class DeviceStatus: ObservableObject {
     deinit { monitor.cancel() }
 }
 
+/// Pause or Resume for one enabled app. Resume waits for Pause all to be off.
+struct PauseResumeButton: View {
+    let app: ConnectedApp
+    @ObservedObject var model: CompanionModel
+
+    var body: some View {
+        if model.pausedApps.contains(app.id) {
+            Button("Resume") { model.resume(app) }.buttonStyle(.borderedProminent).disabled(model.paused)
+        } else {
+            Button("Pause") { model.pause(app) }.buttonStyle(.bordered)
+        }
+    }
+}
+
 struct SharingDashboardView: View {
     @ObservedObject var model: CompanionModel
     @ObservedObject var collector: LocationCollector
@@ -221,8 +235,7 @@ struct SharingDashboardView: View {
     // MARK: App rows
 
     private func row(_ app: ConnectedApp) -> some View {
-        let state = SharingState.of(granted: app.grantId != nil, blocked: model.blocked.contains(app.id),
-                                    appPaused: model.pausedApps.contains(app.id), pausedAll: model.paused, running: collector.running)
+        let state = model.state(app, running: collector.running)
         let today = SharingTimeline.today()
         let shared = SharingTimeline.sessions(model.events, appId: app.id).reduce(0) { $0 + $1.sharedMs(within: today) }
         return GroupBox {
@@ -246,11 +259,7 @@ struct SharingDashboardView: View {
                 LabeledContent("Waiting to upload", value: "\(model.pendingByApp[app.id] ?? 0)")
                 if model.enabled(app) {
                     HStack {
-                        if model.pausedApps.contains(app.id) {
-                            Button("Resume") { model.resume(app) }.buttonStyle(.borderedProminent).disabled(model.paused)
-                        } else {
-                            Button("Pause") { model.pause(app) }.buttonStyle(.bordered)
-                        }
+                        PauseResumeButton(app: app, model: model)
                         Spacer()
                         // Not a one-tap button beside Pause: turning off deletes the app's platform copy.
                         Menu {

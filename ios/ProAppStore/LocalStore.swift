@@ -98,18 +98,15 @@ final class LocalStore: @unchecked Sendable {
         set { try? setSetting("deviceLabel", newValue) }
     }
 
-    func blocked() -> Set<String> {
-        guard let raw = setting("blocked")?.data(using: .utf8), let ids = try? JSONDecoder().decode([String].self, from: raw) else { return [] }
-        return Set(ids)
-    }
+    func blocked() -> Set<String> { ids("blocked") }
 
     func block(_ appId: String) throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
             if !blocked().contains(appId) { try record(.disabled, appId: appId) }
-            try saveBlocked(blocked().union([appId]))
+            try saveIds("blocked", blocked().union([appId]))
             // A disabled app is not "paused": re-enabling it starts sharing.
-            try savePausedApps(pausedApps().subtracting([appId]))
+            try saveIds("pausedApps", pausedApps().subtracting([appId]))
             // Never shared, and now never will be.
             try exec("DELETE FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId])
             // Discard only this recipient. Other enabled apps retain their own queued copy.
@@ -124,15 +121,12 @@ final class LocalStore: @unchecked Sendable {
 
     func unblock(_ appId: String) throws {
         lock.lock(); defer { lock.unlock() }
-        try saveBlocked(blocked().subtracting([appId]))
+        try saveIds("blocked", blocked().subtracting([appId]))
     }
 
     /// Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform
     /// copy are untouched, and resuming needs no new disclosure.
-    func pausedApps() -> Set<String> {
-        guard let raw = setting("pausedApps")?.data(using: .utf8), let ids = try? JSONDecoder().decode([String].self, from: raw) else { return [] }
-        return Set(ids)
-    }
+    func pausedApps() -> Set<String> { ids("pausedApps") }
 
     /// Never rewrites the queue: points recorded before the pause were authorized when taken and still upload.
     func pause(_ appId: String) throws {
@@ -140,7 +134,7 @@ final class LocalStore: @unchecked Sendable {
         guard !pausedApps().contains(appId) else { return }
         try transaction {
             try record(.paused, appId: appId)
-            try savePausedApps(pausedApps().union([appId]))
+            try saveIds("pausedApps", pausedApps().union([appId]))
         }
     }
 
@@ -149,7 +143,7 @@ final class LocalStore: @unchecked Sendable {
         guard pausedApps().contains(appId) else { return }
         try transaction {
             try record(.resumed, appId: appId)
-            try savePausedApps(pausedApps().subtracting([appId]))
+            try saveIds("pausedApps", pausedApps().subtracting([appId]))
         }
     }
 
@@ -355,11 +349,13 @@ final class LocalStore: @unchecked Sendable {
     private func setSetting(_ key: String, _ value: String) throws {
         try exec("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key, value])
     }
-    private func saveBlocked(_ ids: Set<String>) throws {
-        try setSetting("blocked", String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
+    /// A set of app ids, stored as a sorted JSON array.
+    private func ids(_ key: String) -> Set<String> {
+        guard let raw = setting(key)?.data(using: .utf8), let ids = try? JSONDecoder().decode([String].self, from: raw) else { return [] }
+        return Set(ids)
     }
-    private func savePausedApps(_ ids: Set<String>) throws {
-        try setSetting("pausedApps", String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
+    private func saveIds(_ key: String, _ ids: Set<String>) throws {
+        try setSetting(key, String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
     }
     private func json(_ point: TrackPoint) throws -> String { String(decoding: try JSONEncoder().encode(point), as: UTF8.self) }
 

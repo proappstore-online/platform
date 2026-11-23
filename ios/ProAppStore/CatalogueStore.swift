@@ -2,19 +2,18 @@ import Foundation
 
 /// The credential-free client for the public catalogue and its images (ADR-017 decision 4). It is not `PasApi`,
 /// which is the device credential's only gate: no `Authorization`, no cookies, no URL cache, no redirects.
-final class PublicFetch: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class PublicFetch: Sendable {
     static let shared = PublicFetch()
-    private var session: URLSession!
+    private let session: URLSession
 
     /// `configuration` exists for tests (a URLProtocol stub).
     init(configuration: URLSessionConfiguration = .ephemeral) {
-        super.init()
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 30
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
-        session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        session = URLSession(configuration: configuration, delegate: RefuseRedirects(), delegateQueue: nil)
     }
 
     func get(_ url: URL, headers: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
@@ -23,11 +22,6 @@ final class PublicFetch: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (data, http)
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
     }
 }
 

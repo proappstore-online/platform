@@ -83,20 +83,13 @@ struct AppSharingView: View {
     // MARK: Summary
 
     @ViewBuilder private var summary: some View {
-        let state = SharingState.of(granted: app.grantId != nil, blocked: model.blocked.contains(app.id),
-                                    appPaused: model.pausedApps.contains(app.id), pausedAll: model.paused, running: collector.running)
+        let state = model.state(app, running: collector.running)
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text(state.label).font(.headline).foregroundStyle(state.color)
                     Spacer()
-                    if model.enabled(app) {
-                        if model.pausedApps.contains(app.id) {
-                            Button("Resume") { model.resume(app) }.buttonStyle(.borderedProminent).disabled(model.paused)
-                        } else {
-                            Button("Pause") { model.pause(app) }.buttonStyle(.bordered)
-                        }
-                    }
+                    if model.enabled(app) { PauseResumeButton(app: app, model: model) }
                 }
                 LabeledContent("Shared today", value: Self.duration(sessions.reduce(0) { $0 + $1.sharedMs(within: SharingTimeline.today()) }))
                 if let current, current.end == nil {

@@ -50,6 +50,10 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func enabled(_ app: ConnectedApp) -> Bool { app.grantId != nil && !blocked.contains(app.id) }
     /// Enabled, not paused for this app, and Pause all is off.
     func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && !pausedApps.contains(app.id) && !paused }
+    /// The app's state chip; `running` is the collector's.
+    func state(_ app: ConnectedApp, running: Bool) -> SharingState {
+        SharingState.of(granted: app.grantId != nil, blocked: blocked.contains(app.id), appPaused: pausedApps.contains(app.id), pausedAll: paused, running: running)
+    }
 
     func refresh() {
         signedIn = repository.token() != nil
