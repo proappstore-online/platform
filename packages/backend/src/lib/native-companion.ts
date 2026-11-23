@@ -4,8 +4,15 @@ import { HttpError } from './auth.js';
 import { readCapped } from '../routes/hooks.js';
 
 export const NATIVE_RETENTION_MS = 7 * 24 * 60 * 60_000;
-// Curated, reviewed recipients (list order is /native/me order); app declarations must never grant a capability by themselves.
-// A material disclosure change increments the version, invalidating existing grants.
+export const NATIVE_LOCATION = 'location.background';
+// ADR-018 §1: platform facts per native capability id. Not consent text and not hashed; a change that would contradict an
+// existing disclosure (say, longer retention) must edit that disclosure in the same change.
+export const NATIVE_CAPABILITIES = {
+  [NATIVE_LOCATION]: { name: 'Location', flow: 'collect', retentionMs: NATIVE_RETENTION_MS },
+} as const satisfies Record<string, { name: string; flow: 'collect' | 'deliver' | 'act'; retentionMs?: number }>;
+// Curated, reviewed recipients, one per (app, capability) (list order is /native/me order); app declarations must never grant
+// a capability by themselves. Each entry's hash is its contract version (see nativeCatalog): never reshape an existing entry,
+// not even to add a field, or every grant for it is revoked.
 const NATIVE_CATALOG = [{
   id: 'ski', name: 'Ski', capability: 'location.background', version: '1',
   purpose: 'Automatically record your routes for Ski, including when Ski is closed.',
@@ -17,7 +24,7 @@ const NATIVE_CATALOG = [{
 }] as const;
 
 interface NativeDevice { id: string; user_id: string; label: string; expires_at: number; }
-interface NativeGrant { id: string; app_id: string; consent_at: number; contract_version: string; publisher_id: string; }
+interface NativeGrant { id: string; app_id: string; capability: string; consent_at: number; contract_version: string; publisher_id: string; }
 interface NativePoint { id: string; at: number; lat: number; lng: number; accuracy: number; grants: string[]; }
 export function nativeRandom(): string { return Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join(''); }
 export async function nativeHash(value: string): Promise<string> {
@@ -26,6 +33,14 @@ export async function nativeHash(value: string): Promise<string> {
 export async function nativeCatalog() {
   // The receipt is bound to the actual disclosure, not a version an author might forget to bump.
   return Promise.all(NATIVE_CATALOG.map(async a => ({ ...a, version: await nativeHash(JSON.stringify(a)) })));
+}
+/** The reviewed entry for one (app, capability), or undefined: the only way a route picks an entry. */
+export async function nativeEntry(appId: string, capability: string) {
+  return (await nativeCatalog()).find(a => a.id === appId && a.capability === capability);
+}
+/** Display facts of the reviewed native capabilities an app has, for its public listing (ADR-018 §8). */
+export function nativeCapabilitiesOf(appId: string): { id: string; name: string }[] {
+  return NATIVE_CATALOG.filter(a => a.id === appId).map(a => ({ id: a.capability, name: NATIVE_CAPABILITIES[a.capability].name }));
 }
 export async function nativeBody(c: Context<{ Bindings: Env }>, max = 4096): Promise<Record<string, unknown>> {
   const bytes = await readCapped(c.req.raw, max);
@@ -44,11 +59,11 @@ export async function nativeDevice(c: Context<{ Bindings: Env }>): Promise<Nativ
   return row;
 }
 export async function nativeGrants(db: D1Database, deviceId: string): Promise<NativeGrant[]> {
-  const rows = await db.prepare(`SELECT g.id, g.app_id, g.consent_at, g.contract_version, g.publisher_id
+  const rows = await db.prepare(`SELECT g.id, g.app_id, g.capability, g.consent_at, g.contract_version, g.publisher_id
     FROM native_grants g JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
     WHERE g.device_id = ?`).bind(deviceId).all<NativeGrant>();
   const catalog = await nativeCatalog();
-  return (rows.results ?? []).filter(g => catalog.some(a => a.id === g.app_id && a.version === g.contract_version));
+  return (rows.results ?? []).filter(g => catalog.some(a => a.id === g.app_id && a.capability === g.capability && a.version === g.contract_version));
 }
 export function nativePoints(value: unknown, now: number): NativePoint[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 100) throw new HttpError('Send 1 to 100 location points.', 400);

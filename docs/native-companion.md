@@ -52,13 +52,17 @@ Base: `https://api.proappstore.online/v1`. Native credentials are accepted **onl
 | `GET /native/auth/callback?code=…` | Redeems PAS one-time code server-side; displays account/device confirmation. No location grant is created. |
 | `POST /native/auth/approve` | Bound browser, exact platform Origin and CSRF nonce; approves account connection. |
 | `POST /native/auth/complete` | Installation presents pending ID and original random verifier; 202 while pending; atomically consumes approval and issues a narrow credential. |
-| `GET /native/me` | Device account, installation expiry, reviewed capability catalog and current grants. |
-| `PUT /native/apps/:appId/location` | Device submits `enabled: true` and current disclosure version after native confirmation. |
-| `DELETE /native/apps/:appId/location` | Revokes this installation's grant and its raw platform points. |
+| `GET /native/me` | Device account, installation expiry and current grants. `apps` lists the reviewed **location** entries only, in the original shape shipped clients decode; `capabilities` lists every reviewed (app, capability) entry as `{ appId, appName, capability, name, purpose, disclosure, version, grant }` (ADR-018 §7). |
+| `PUT /native/apps/:appId/location` | Device submits `enabled: true` and current disclosure version after native confirmation. Same as the capability path below with `location.background`. |
+| `DELETE /native/apps/:appId/location` | Revokes this installation's location grant for the app and its raw platform points. Other capability grants are untouched. |
+| `PUT /native/apps/:appId/capabilities/:capability` | Enables one reviewed (app, capability) entry: `enabled: true` and that entry's current version. 404 for a pair with no reviewed entry. |
+| `DELETE /native/apps/:appId/capabilities/:capability` | Revokes this installation's grant for that one capability; the app's other grants are untouched. |
 | `POST /native/locations` | Batch of 1–100 observations, each with UUID, epoch-ms time, latitude, longitude, accuracy and captured grant IDs. |
 | `DELETE /native/device` | Revokes installation and cascades its grants/raw points. |
 | `GET /apps/:appId/native/locations?after=…&afterId=…` | Current signed-in web app user, bound to that app. Up to 500 points ordered by timestamp and composite cursor. |
-| `GET /apps/:appId/native/status` | Current signed-in web app user, bound to that app. `{ available, enabled, lastPointAt }` — no device identities. |
+| `GET /apps/:appId/native/status` | Current signed-in web app user, bound to that app. `{ available, enabled, lastPointAt, capabilities }` — the top-level fields are location's; `capabilities` maps each capability id the app has an entry for to `{ available, enabled, lastAt }`. No device identities. |
+
+The public listing (`GET /v1/storefront/apps/:id` and each item of `GET /v1/storefront/apps`) carries `nativeCapabilities: [{ id, name }]` from the same registry, `[]` when the app has none.
 
 No API accepts a device-supplied account identity. Upload recipients must be active grants for that credential's device. A publisher transfer or disclosure revision invalidates delivery/read access. A new grant cannot adopt pre-consent or previously queued data. The response acknowledges points that were saved or intentionally discarded because their recipient was revoked; the phone must not retry those into another grant.
 
@@ -95,17 +99,8 @@ An Android intent can bring PAS forward but cannot grant access. The initial cus
 5. Add lock-screen activity summaries/timers once app-specific session state is available. A native location service alone cannot infer a ski ride's timer semantics.
 6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
 
-## Future capability families
+## Further native capabilities
 
-| Capability | Potential user feature | Additional work |
-|---|---|---|
-| Notifications | App-specific alerts | Native push transport, app grants, channels, user controls. |
-| Geofencing | Arrival/departure automation | Region limits, accuracy disclosure, background permission and retry semantics. |
-| Bluetooth | Devices and sensors | Pairing, permissions, supported protocols, isolation. |
-| Health | User-approved activity data | Health Connect scopes, health-data policies and data deletion. |
-| Media | Playback and controls | User-visible sessions and audio/service policies. |
-| Transfers | Reliable user-requested uploads | Scoped file access and OS transfer scheduling. |
-
-These are roadmap items, not permissions requested by the initial build. A universal **permission and capability architecture** is feasible; unrestricted background execution is not.
+The companion grants more than location through the native capability registry: reviewed (app, capability) entries in `packages/backend/src/lib/native-companion.ts`, each with its own consent, data-flow shape, retention and server enforcement. See [ADR-018](./adr/018-native-capability-registry.md). The capability backlog is [#636](https://github.com/proappstore-online/platform/issues/636).
 
 Build and local tests: [`android/README.md`](https://github.com/proappstore-online/platform/blob/main/android/README.md).

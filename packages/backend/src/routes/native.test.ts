@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { mintSession, credentialContext } from '@proappstore/build-core';
 import { nativeAuthRoutes } from './native-auth.js';
 import { nativeRoutes } from './native.js';
+import { listingsRoutes } from './listings.js';
 import { nativeCatalog, nativeHash, nativePoints, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
 import { HttpError } from '../lib/auth.js';
 import { sqliteD1 } from '../sqlite-d1.js';
@@ -10,7 +11,7 @@ import { makeEnv, TEST_SK } from '../test-helpers.js';
 import type { Env } from '../types.js';
 
 const app = new Hono<{ Bindings: Env }>();
-app.route('/v1', nativeAuthRoutes); app.route('/v1', nativeRoutes);
+app.route('/v1', nativeAuthRoutes); app.route('/v1', nativeRoutes); app.route('/v1', listingsRoutes);
 app.onError((e, c) => c.json({ error: e.message }, (e instanceof HttpError ? e.status : 500) as 400));
 let db: ReturnType<typeof sqliteD1>, env: Env;
 const request = (path: string, method = 'GET', body?: unknown, token?: string, headers = {}) => app.request(`https://api.proappstore.online/v1${path}`, {
@@ -157,7 +158,10 @@ describe('consumer native companion', () => {
   });
 
   describe('Run recipient and status read (#613)', () => {
-    type Status = { available: boolean; enabled: boolean; lastPointAt: number | null };
+    type Status = { available: boolean; enabled: boolean; lastPointAt: number | null; capabilities: Record<string, unknown> };
+    // ADR-018 §6: the top-level fields stay location's; `capabilities` repeats them per capability id.
+    const runStatus = (enabled: boolean, lastPointAt: number | null) =>
+      ({ available: true, enabled, lastPointAt, capabilities: { 'location.background': { available: true, enabled, lastAt: lastPointAt } } });
     const status = async (token: string, appId = 'run') => request(`/apps/${appId}/native/status`, 'GET', undefined, token);
     const statusOf = async (uid = 'google:1') => await (await status(await readToken(uid, 'run'))).json() as Status;
     const pointIds = async (appId: string) =>
@@ -181,17 +185,17 @@ describe('consumer native companion', () => {
       expect((await status(d.token)).status).toBe(401);
       const other = await status(await readToken('google:2', 'other'), 'other');
       expect(other.status).toBe(200);
-      expect(await other.json()).toEqual({ available: false, enabled: false, lastPointAt: null });
+      expect(await other.json()).toEqual({ available: false, enabled: false, lastPointAt: null, capabilities: {} });
     });
     it('tracks grant, upload, revocation, publisher transfer and device expiry', async () => {
-      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+      expect(await statusOf()).toEqual(runStatus(false, null));
       const d = await device(), g = await grant(d.token, 'run');
-      expect(await statusOf()).toEqual({ available: true, enabled: true, lastPointAt: null });
+      expect(await statusOf()).toEqual(runStatus(true, null));
       const at = Date.now();
       await request('/native/locations', 'POST', { points: [point('p1', at, [g.id])] }, d.token);
-      expect(await statusOf()).toEqual({ available: true, enabled: true, lastPointAt: at });
+      expect(await statusOf()).toEqual(runStatus(true, at));
       await request('/native/apps/run/location', 'DELETE', undefined, d.token);
-      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+      expect(await statusOf()).toEqual(runStatus(false, null));
       await grant(d.token, 'run');
       db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='run'");
       expect((await statusOf()).enabled).toBe(false);
@@ -205,7 +209,7 @@ describe('consumer native companion', () => {
       const bob = await device('google:2');
       await grant(bob.token, 'run');
       expect((await statusOf('google:2')).enabled).toBe(true);
-      expect(await statusOf()).toEqual({ available: true, enabled: false, lastPointAt: null });
+      expect(await statusOf()).toEqual(runStatus(false, null));
     });
     it('pins each contract version: a wording edit revokes every existing grant and must fail here', async () => {
       const versions = Object.fromEntries((await nativeCatalog()).map(a => [a.id, a.version]));
@@ -213,6 +217,95 @@ describe('consumer native companion', () => {
         ski: '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
         run: 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
        });
+    });
+  });
+
+  describe('native capability registry (#629, ADR-018)', () => {
+    // No second reviewed entry exists yet, so another capability's grant is inserted directly, as a later capability would.
+    const otherGrant = async (deviceId: string, appId = 'run') => {
+      const id = 'e'.repeat(64);
+      db.sql.prepare(`INSERT INTO native_grants (id, device_id, app_id, publisher_id, capability, contract_version, consent_at)
+        VALUES (?, ?, ?, 'google:1', 'test.other', 'v-other', 0)`).run(id, deviceId, appId);
+      return id;
+    };
+    const hasOther = () => db.sql.prepare("SELECT 1 FROM native_grants WHERE capability = 'test.other'").all().length === 1;
+
+    it("revoking or re-enabling location never touches the app's other capability grant", async () => {
+      const d = await device();
+      await otherGrant(d.deviceId);
+      await grant(d.token, 'run');
+      expect((await request('/native/apps/run/location', 'DELETE', undefined, d.token)).status).toBe(200);
+      expect(hasOther()).toBe(true);
+      await grant(d.token, 'run');
+      // An obsolete location grant is replaced; the replace delete must be scoped to location too.
+      db.sql.exec("UPDATE native_grants SET contract_version = 'stale' WHERE capability = 'location.background'");
+      await grant(d.token, 'run');
+      expect(hasOther()).toBe(true);
+      expect((await request('/native/apps/run/capabilities/location.background', 'DELETE', undefined, d.token)).status).toBe(200);
+      expect(hasOther()).toBe(true);
+      expect(db.sql.prepare("SELECT 1 FROM native_grants WHERE capability = 'location.background'").all()).toHaveLength(0);
+    });
+    it('a point naming another capability grant is acknowledged and stored nowhere, and never read as location', async () => {
+      const d = await device(), other = await otherGrant(d.deviceId), loc = await grant(d.token, 'run');
+      // Same app and contract version as the location grant: only the capability tells them apart.
+      db.sql.exec("UPDATE native_grants SET contract_version = (SELECT contract_version FROM native_grants WHERE capability = 'location.background') WHERE capability = 'test.other'");
+      const response = await request('/native/locations', 'POST', { points: [point('x', Date.now(), [other]), point('y', Date.now(), [other, loc.id])] }, d.token);
+      expect(await response.json()).toEqual({ acknowledged: ['x', 'y'] });
+      expect(db.sql.prepare('SELECT grant_id, point_id FROM native_locations').all()).toEqual([{ grant_id: loc.id, point_id: 'y' }]);
+      // Even a row that got under it some other way is never served as the app's location.
+      db.sql.prepare("INSERT INTO native_locations VALUES (?, 'z', ?, 1, 2, 3)").run(other, Date.now());
+      const read = await request('/apps/run/native/locations', 'GET', undefined, await readToken('google:1', 'run'));
+      expect((await read.json() as { points: { id: string }[] }).points.map(p => p.id)).toEqual(['y']);
+    });
+    it('status reports location from location grants only, even when another grant carries the same version', async () => {
+      const d = await device(), runVersion = (await nativeCatalog())[1].version;
+      await otherGrant(d.deviceId);
+      db.sql.prepare("UPDATE native_grants SET contract_version = ? WHERE capability = 'test.other'").run(runVersion);
+      const read = await request('/apps/run/native/status', 'GET', undefined, await readToken('google:1', 'run'));
+      expect(await read.json()).toEqual({ available: true, enabled: false, lastPointAt: null,
+        capabilities: { 'location.background': { available: true, enabled: false, lastAt: null } } });
+      // nativeGrants never offers it as the app's grant either: /native/me shows Run's location as not granted.
+      const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string; grant: unknown }[] };
+      expect(me.apps.find(a => a.id === 'run')!.grant).toBeNull();
+    });
+    it('/native/me keeps `apps` exactly as shipped clients decode it, and adds `capabilities`', async () => {
+      const d = await device(), g = await grant(d.token, 'run');
+      await otherGrant(d.deviceId);
+      const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: Record<string, unknown>[]; capabilities: Record<string, unknown>[] };
+      const catalog = await nativeCatalog();
+      // The pre-registry shape: one location entry per app, catalog fields then its location grant, in today's key order.
+      expect(me.apps.map(a => Object.keys(a))).toEqual(catalog.map(() => ['id', 'name', 'capability', 'version', 'purpose', 'disclosure', 'grant']));
+      expect(me.apps).toEqual(catalog.map(a => ({ ...a, grant: null })).map(a => a.id === 'run' ? { ...a, grant: me.apps[1].grant } : a));
+      expect(Object.keys(me.apps[1].grant as object)).toEqual(['id', 'app_id', 'consent_at', 'contract_version', 'publisher_id']);
+      expect((me.apps[1].grant as { id: string }).id).toBe(g.id);
+      expect(me.capabilities).toEqual(catalog.map(a => ({
+        appId: a.id, appName: a.name, capability: 'location.background', name: 'Location', purpose: a.purpose, disclosure: a.disclosure,
+        version: a.version, grant: a.id === 'run' ? me.apps[1].grant : null,
+      })));
+    });
+    it('PUT …/capabilities/:capability behaves exactly like PUT …/location', async () => {
+      const d = await device(), path = '/native/apps/ski/capabilities/location.background';
+      const version = (await nativeCatalog())[0].version;
+      expect((await request('/native/apps/other/capabilities/location.background', 'PUT', { version, enabled: true }, d.token)).status).toBe(404);
+      expect((await request('/native/apps/ski/capabilities/test.other', 'PUT', { version, enabled: true }, d.token)).status).toBe(404);
+      expect((await request(path, 'PUT', { version: '0', enabled: true }, d.token)).status).toBe(400);
+      expect((await request(path, 'PUT', { version, enabled: false }, d.token)).status).toBe(400);
+      const created = await (await request(path, 'PUT', { version, enabled: true }, d.token)).json() as { grant: { id: string } };
+      // Idempotent across both paths: the same grant either way.
+      expect((await (await request('/native/apps/ski/location', 'PUT', { version, enabled: true }, d.token)).json() as { grant: { id: string } }).grant.id).toBe(created.grant.id);
+      await db.prepare('INSERT INTO per_app_deleted_users (app_id, user_id, deleted_by, deleted_at) VALUES (?, ?, ?, ?)').bind('ski', 'google:1', 'google:1', Date.now()).run();
+      expect((await request(path, 'PUT', { version, enabled: true }, d.token)).status).toBe(403);
+    });
+    it('the storefront listing names each app\'s reviewed native capabilities, never via `permissions`', async () => {
+      const detail = async (id: string) => await (await request(`/storefront/apps/${id}`)).json() as { nativeCapabilities: unknown; permissions: unknown[] };
+      expect((await detail('run')).nativeCapabilities).toEqual([{ id: 'location.background', name: 'Location' }]);
+      expect((await detail('ski')).nativeCapabilities).toEqual([{ id: 'location.background', name: 'Location' }]);
+      expect((await detail('other')).nativeCapabilities).toEqual([]);
+      expect((await detail('run')).permissions).toEqual([]);
+      const cards = await (await request('/storefront/apps')).json() as { apps: { appId: string; nativeCapabilities: unknown }[] };
+      expect(Object.fromEntries(cards.apps.map(a => [a.appId, a.nativeCapabilities]))).toEqual({
+        ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }], other: [],
+      });
     });
   });
 });

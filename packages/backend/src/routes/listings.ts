@@ -7,6 +7,7 @@ import { withinModerationRate } from '../lib/ai-budget.js';
 import { getAppVisibility } from '../lib/visibility.js';
 import { publicMembers } from '../lib/public-team.js';
 import { listingPermissionIds, listingPermissions } from '../lib/app-permissions.js';
+import { nativeCapabilitiesOf } from '../lib/native-companion.js';
 import { aboutOrigin } from './enquiries.js';
 import type { ListingRow, ListingPatch } from './listing-types.js';
 import { rowToDto, emptyDto } from './listing-types.js';
@@ -86,7 +87,9 @@ listingsRoutes.get('/storefront/apps/:id', wrap(async (c) => {
   // Short cache: lets edits propagate quickly while still absorbing
   // bursts from popular apps.
   c.header('Cache-Control', 'public, max-age=60');
-  return c.json({ ...publicDto, permissions, customDomain: domain?.domain ?? null });
+  // #629 (ADR-018 §8): the reviewed native capabilities the companion can grant this app. Not `permissions`, which is what
+  // the app itself declares or uses in the browser.
+  return c.json({ ...publicDto, permissions, nativeCapabilities: nativeCapabilitiesOf(appId), customDomain: domain?.domain ?? null });
 }));
 
 /**
@@ -160,6 +163,7 @@ listingsRoutes.get('/storefront/apps', wrap(async (c) => {
     updatedAt: r.updated_at ?? 0,
     // #437: the card's permission icon row (ids; names and icons come with the detail).
     permissions: listingPermissionIds(r.declared_json, r.detected_json),
+    nativeCapabilities: nativeCapabilitiesOf(r.app_id),
     // #497: the app's about- marketing site, only while one is active (and a revision the host will serve); null otherwise, so an
     // unpublished site drops out of the inventory within the 60s cache. Not the owner-typed `websiteUrl` of the per-app listing.
     websiteUrl: r.marketing_revision && MARKETING_REVISION.test(r.marketing_revision) ? aboutOrigin(r.app_id) : null,
