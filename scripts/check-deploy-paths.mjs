@@ -15,6 +15,10 @@
 // is an unrelated deploy on every change to that package. Type-only imports do
 // not bundle and are ignored.
 //
+// #637: it also requires deploy-backend.yml to be the only workflow that applies
+// D1 migrations (it runs the workerd + real-D1 gate first) and the only deploy
+// workflow triggered by 'migrations/**'.
+//
 //   node scripts/check-deploy-paths.mjs        exit 1 with every mismatch
 //
 // Run by CI (.github/workflows/ci.yml, check job) and listed in CLAUDE.md's
@@ -184,12 +188,26 @@ export function problemsFor(workflow, pkg, yaml) {
   return problems;
 }
 
+/** #637: the one workflow allowed to apply D1 migrations, after its runtime gate. */
+const MIGRATIONS_WORKFLOW = 'deploy-backend.yml';
+
+/** Problems with one workflow (its YAML text) applying or deploying on migrations it does not own. */
+export function migrationProblems(workflow, yaml) {
+  if (workflow === MIGRATIONS_WORKFLOW) return [];
+  const problems = [];
+  const code = yaml.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+  if (/migrations\s+apply/.test(code)) problems.push(`${workflow}: runs \`migrations apply\` — only ${MIGRATIONS_WORKFLOW} applies D1 migrations, after its runtime gate`);
+  if (DEPLOYS[workflow] && triggerPaths(yaml).has('migrations/**')) problems.push(`${workflow}: triggers on 'migrations/**' — a migration deploys only ${MIGRATIONS_WORKFLOW}`);
+  return problems;
+}
+
 /** The whole repo: every deploy workflow against its package. */
 export function checkDeployPaths() {
   const problems = [];
   const map = {};
-  for (const f of readdirSync(workflowsDir).filter((n) => /^deploy-.*\.ya?ml$/.test(n))) {
-    if (!DEPLOYS[f]) problems.push(`${f}: not in DEPLOYS — map it to the package it deploys`);
+  for (const f of readdirSync(workflowsDir).filter((n) => /\.ya?ml$/.test(n))) {
+    if (/^deploy-/.test(f) && !DEPLOYS[f]) problems.push(`${f}: not in DEPLOYS — map it to the package it deploys`);
+    problems.push(...migrationProblems(f, readFileSync(join(workflowsDir, f), 'utf8')));
   }
   for (const [workflow, pkg] of Object.entries(DEPLOYS)) {
     const path = join(workflowsDir, workflow);
@@ -211,10 +229,11 @@ function main() {
   const { problems, map } = checkDeployPaths();
   for (const [workflow, deps] of Object.entries(map)) console.log(`${workflow.padEnd(24)} ${DEPLOYS[workflow]} ← ${deps.join(', ') || '(no workspace packages)'}`);
   if (problems.length) {
-    console.error(`\n✗ deploy path filters out of step with workspace imports:\n  ${problems.join('\n  ')}`);
+    console.error(`\n✗ deploy workflows out of step with workspace imports or migration ownership:\n  ${problems.join('\n  ')}`);
     process.exit(1);
   }
   console.log('\n✓ every deploy workflow triggers on exactly the workspace packages its worker bundles.');
+  console.log(`✓ only ${MIGRATIONS_WORKFLOW} applies or deploys on D1 migrations.`);
 }
 
 if (resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1] ?? '')) main();

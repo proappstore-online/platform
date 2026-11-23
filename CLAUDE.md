@@ -23,8 +23,11 @@ Two consequences worth internalising before your first commit:
   - A new import of a workspace package means adding its glob. A new deploy workflow means adding it
     to `DEPLOYS` in the script. A new codegen embed means adding it to `EMBEDS`.
 - **`deploy-backend.yml` applies D1 migrations to the live database before deploying**
-  (`pnpm exec wrangler d1 migrations apply pas --remote`). There is no staging step in that path. A
-  migration you push has run in production by the time you read the log.
+  (`pnpm exec wrangler d1 migrations apply pas --remote`), after its workerd + real-D1 runtime gate.
+  There is no staging step in that path. A migration you push has run in production by the time you
+  read the log. It is the only workflow that applies migrations or triggers on `migrations/**`;
+  `deploy-agent-teams.yml` only waits, read-only, for them to be applied. `check-deploy-paths.mjs`
+  fails CI if any other workflow runs `migrations apply` (#637).
 
 Never release from local: no `wrangler deploy`, no `npm publish`. `publish.yml` publishes the npm
 packages and commits the version bumps back.
@@ -59,7 +62,7 @@ Run from this directory before committing. Keep this list equal to the gates in
 pnpm install --frozen-lockfile
 pnpm -r --filter './packages/*' build
 bash scripts/check-design-system.sh .              # banned CSS aliases, html.dark, theme storage key
-node scripts/check-deploy-paths.mjs                # deploy paths: list every workspace package the worker bundles
+node scripts/check-deploy-paths.mjs                # deploy paths track bundled packages; only deploy-backend applies migrations
 pnpm knip                                          # dead exports, unused files and dependencies (knip.json)
 pnpm -r typecheck
 pnpm test                                          # vitest, from the workspace root

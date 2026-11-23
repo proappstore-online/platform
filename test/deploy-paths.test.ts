@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error -- a plain .mjs CI script, no type declarations
-import { bundledDeps, checkDeployPaths, deploysTriggeredBy, packageDirs, problemsFor, runtimeImports, triggerPackages, triggerPaths } from '../scripts/check-deploy-paths.mjs';
+import { bundledDeps, checkDeployPaths, deploysTriggeredBy, migrationProblems, packageDirs, problemsFor, runtimeImports, triggerPackages, triggerPaths } from '../scripts/check-deploy-paths.mjs';
 
 // #322: a deploy workflow must trigger on every workspace package its worker
 // bundles, and on nothing else. scripts/check-deploy-paths.mjs computes the
@@ -97,5 +97,24 @@ describe('deploy path filters track workspace imports (#322)', () => {
         `deploy-backend.yml: missing '${gatePath}' required by its pre-deploy gate`,
       );
     }
+  });
+
+  it('only deploy-backend.yml applies D1 migrations or deploys on them (#637)', () => {
+    const backend = readFileSync('.github/workflows/deploy-backend.yml', 'utf8');
+    const agentTeams = readFileSync('.github/workflows/deploy-agent-teams.yml', 'utf8');
+    expect(backend).toMatch(/migrations apply pas --remote/);
+    expect(migrationProblems('deploy-backend.yml', backend)).toEqual([]);
+    expect(migrationProblems('deploy-agent-teams.yml', agentTeams)).toEqual([]);
+    // Putting the pre-#637 step and trigger back must fail the check.
+    const reverted = agentTeams
+      .replace("      - '.github/workflows/deploy-agent-teams.yml'\n", "      - 'migrations/**'\n      - '.github/workflows/deploy-agent-teams.yml'\n")
+      .replace('wrangler d1 migrations list pas --remote', 'wrangler d1 migrations apply pas --remote');
+    expect(migrationProblems('deploy-agent-teams.yml', reverted)).toEqual([
+      expect.stringMatching(/runs `migrations apply`/),
+      expect.stringMatching(/triggers on 'migrations\/\*\*'/),
+    ]);
+    // Any workflow, not only deploy-*: a comment mentioning it is fine.
+    expect(migrationProblems('ci.yml', '# never migrations apply here\njobs: {}\n')).toEqual([]);
+    expect(migrationProblems('ci.yml', 'run: pnpm exec wrangler d1 migrations apply pas --remote\n')).toHaveLength(1);
   });
 });
