@@ -14,6 +14,7 @@ import type { AppWorkerExports } from './app-worker-host.js';
 import { deleteSpilledBody, hookBodyOf, APP_EVENT_MAX_RETRIES, APP_EVENTS_DLQ, type AppEventMessage } from './app-event-queue.js';
 import { invokeWorkerRun, recordFailure, recordSuccess, WORKER_RUN_PREFIX } from './scheduled-actions.js';
 import { deliverHook } from '../routes/hooks.js';
+import { deadLetterNativeRelay, deliverNativeRelay } from './native-relay.js';
 
 type Msg = Message<AppEventMessage>;
 
@@ -69,9 +70,18 @@ async function noteFailedTry(env: Env, m: AppEventMessage, error: string, retryi
   }
 }
 
+/** A native relay message (#654): its own row and rules (lib/native-relay.ts), the same retry backoff. */
+async function handleNativeRelay(env: Env, message: Msg): Promise<void> {
+  const result = await deliverNativeRelay(env, message.body);
+  if (result.ack) { message.ack(); return; }
+  console.error(`[app-events] native ${message.body.app_id}/${message.body.name} attempt ${message.attempts} failed: ${result.error}`);
+  message.retry({ delaySeconds: 2 ** message.attempts * 10 });
+}
+
 async function handleEvent(env: Env, message: Msg, ctx?: AppWorkerExports): Promise<void> {
   const m = message.body;
   if (m.v !== 1) { console.error(`[app-events] dropping message with unknown version ${String(m.v)}`); message.ack(); return; }
+  if (m.type === 'native') return handleNativeRelay(env, message);
   if (!(await ownsCurrentAttempt(env, m))) {
     console.warn(`[app-events] dropping stale ${m.type} ${m.app_id}/${m.name} id=${m.id}`);
     message.ack();
@@ -117,6 +127,7 @@ async function failQueued(env: Env, m: AppEventMessage, message: string, hookSta
 
 async function deadLetter(env: Env, message: Msg): Promise<void> {
   const m = message.body;
+  if (m.type === 'native') return deadLetterNativeRelay(env, m);
   if (!(await ownsCurrentAttempt(env, m))) return;
   const text = `dead-lettered after ${APP_EVENT_MAX_RETRIES + 1} attempts`;
   // The consumer kept the last try's error on the row: say what it was.

@@ -14,7 +14,7 @@ Sign in with the same Google or GitHub account you use in your PAS apps. Match t
 
 Review the app's location explanation and choose Enable. Grant precise location, then background access (Allow all the time) when Android asks. ProAppStore appears as the collector in Android's permission settings. Each app's separate permission appears inside ProAppStore.
 
-The preview supports Ski and Run. Run adds locked-screen location only to a run you are recording.
+The preview supports Ski, Run and Rideshare. Run adds locked-screen location only to a run you are recording. Rideshare receives each new position within seconds and uses it only while you are online as a driver or on a trip.
 
 **Open** on an app takes you to it in Chrome. If the app isn't installed yet, it offers an **Install** button. Tap it to add the app to your home screen.
 

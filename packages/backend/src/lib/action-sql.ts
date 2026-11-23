@@ -86,7 +86,9 @@ export const MCP_VIA_VALUE = 'mcp';
 export type ActionState = 'staged' | 'live';
 
 // 'billing' (#507): the platform's own checkout runs it, to decide who may buy; no session, worker or hook can.
-export const ACTION_CALLERS = ['user', 'worker', 'hook', 'billing'] as const;
+// 'native' (#654): the companion relay runs it as the device's owner with an accepted location; only the reviewed native catalog
+// binds it (NATIVE_RELAYS), and registration refuses it on any other action.
+export const ACTION_CALLERS = ['user', 'worker', 'hook', 'billing', 'native'] as const;
 export type ActionCaller = (typeof ACTION_CALLERS)[number];
 
 /** The action's callers, with the default applied. */

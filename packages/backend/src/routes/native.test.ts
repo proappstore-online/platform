@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { mintSession, credentialContext } from '@proappstore/build-core';
 import { nativeAuthRoutes } from './native-auth.js';
 import { nativeRoutes } from './native.js';
 import { listingsRoutes } from './listings.js';
-import { nativeCatalog, nativeHash, nativePoints, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
+import { nativeCatalog, nativeHash, nativePoints, NATIVE_RELAYS, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
+import { handleAppEventBatch } from '../lib/app-event-consumer.js';
+import type { AppEventMessage } from '../lib/app-event-queue.js';
+import type { ToolManifest } from '../lib/action-sql.js';
+import { validateToolSet } from '../lib/manifest/tool-set.js';
 import { HttpError } from '../lib/auth.js';
 import { sqliteD1 } from '../sqlite-d1.js';
 import { makeEnv, TEST_SK } from '../test-helpers.js';
@@ -23,7 +27,7 @@ beforeEach(() => {
   db.sql.exec(`PRAGMA foreign_keys=ON;
     INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at) VALUES
       ('google:1','google','1','Alice',0,0),('google:2','google','2','Bob',0,0);
-    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('run','google:1',0),('other','google:2',0);`);
+    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('run','google:1',0),('loopride','google:1',0),('other','google:2',0);`);
 });
 async function pairing() {
   const verifier = 'b'.repeat(64);
@@ -180,7 +184,7 @@ describe('consumer native companion', () => {
     it('lists Run after Ski and grants it', async () => {
       const d = await device();
       const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string }[] };
-      expect(me.apps.map(a => a.id)).toEqual(['ski', 'run']);
+      expect(me.apps.map(a => a.id)).toEqual(['ski', 'run', 'loopride']);
       expect((await grant(d.token, 'run')).id).toMatch(/^[a-f0-9]{64}$/);
     });
     it('delivers a point only to the app whose grant it carries', async () => {
@@ -226,6 +230,7 @@ describe('consumer native companion', () => {
       expect(versions).toEqual({ 
         ski: '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
         run: 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
+        loopride: '4b323484af0bd058ac60d5a64ab508a5044ca92ce6f27a2d105aaf9ffe6778b8',
        });
     });
   });
@@ -314,8 +319,150 @@ describe('consumer native companion', () => {
       expect((await detail('run')).permissions).toEqual([]);
       const cards = await (await request('/storefront/apps')).json() as { apps: { appId: string; nativeCapabilities: unknown }[] };
       expect(Object.fromEntries(cards.apps.map(a => [a.appId, a.nativeCapabilities]))).toEqual({
-        ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }], other: [],
+        ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }],
+        loopride: [{ id: 'location.background', name: 'Location' }], other: [],
       });
+    });
+  });
+
+  describe('Rideshare recipient and location relay (#654)', () => {
+    const RELAY = {
+      name: 'native_driver_location', description: 'Driver position from the companion', operation: 'execute', requires_auth: true, callers: ['native'],
+      params: { lat: { type: 'number' }, lng: { type: 'number' }, accuracy: { type: 'number' }, at: { type: 'timestamp_ms' } },
+      sql: 'INSERT INTO driver_locations (driver_id, lat, lng, accuracy, at) VALUES (:__user_id, :lat, :lng, :accuracy, :at)',
+    };
+    let sent: { m: AppEventMessage; delaySeconds?: number }[], calls: { url: string; body: { sql: string; params: unknown[] } }[];
+    let answer: () => Promise<Response>;
+    beforeEach(async () => {
+      sent = []; calls = []; answer = async () => Response.json({ meta: { changes: 1 } });
+      env.APP_EVENTS = { send: async (m: AppEventMessage, o?: { delaySeconds?: number }) => { sent.push({ m, ...(o ? { delaySeconds: o.delaySeconds } : {}) }); } } as unknown as Env['APP_EVENTS'];
+      vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push({ url, body: JSON.parse(String(init.body)) }); return answer(); }));
+      await db.prepare("INSERT INTO app_tools (app_id, name, manifest, source, state, created_at, updated_at) VALUES ('loopride', ?, ?, 'code', 'live', 1, 1)")
+        .bind(RELAY.name, JSON.stringify(RELAY)).run();
+    });
+    afterEach(() => { vi.unstubAllGlobals(); });
+    /** Run the queued messages through the real app-events consumer, as one batch. */
+    const drain = async (attempts = 1) => {
+      const outcome: string[] = [];
+      const messages = sent.splice(0).map(({ m }) => ({ body: m, attempts, ack: () => outcome.push('ack'), retry: () => outcome.push('retry') }));
+      await handleAppEventBatch({ queue: 'pas-app-events', messages } as unknown as MessageBatch<AppEventMessage>, env);
+      return outcome;
+    };
+    const upload = (token: string, points: ReturnType<typeof point>[]) => request('/native/locations', 'POST', { points }, token);
+    const relayRow = () => db.sql.prepare('SELECT status, delivered_at FROM native_relays').get();
+    /** A grant whose consent predates the test's points. */
+    const relayGrant = async (token: string) => {
+      const g = await grant(token, 'loopride');
+      db.sql.prepare('UPDATE native_grants SET consent_at = 0 WHERE id = ?').run(g.id);
+      return g;
+    };
+
+    it('lists Rideshare with its disclosure and reports it available; only Rideshare names a relay', async () => {
+      const d = await device();
+      const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string; name: string; disclosure: string }[] };
+      const rideshare = me.apps.find(a => a.id === 'loopride')!;
+      expect(rideshare.name).toBe('Rideshare');
+      expect(rideshare.disclosure).toMatch(/dispatch while you are online as a driver.*your rider while you are on their trip.*expire after 7 days.*24 hours/);
+      const status = await request('/apps/loopride/native/status', 'GET', undefined, await readToken('google:1', 'loopride'));
+      expect(await status.json()).toMatchObject({ available: true, enabled: false });
+      expect(Object.keys(NATIVE_RELAYS)).toEqual(['loopride']);
+    });
+    it("runs the action as the device's owner with the newest point of an upload, and nothing about the device", async () => {
+      const d = await device(), g = await relayGrant(d.token), now = Date.now();
+      await upload(d.token, [{ ...point('a', now - 2000, [g.id]), lat: 1 }, { ...point('c', now, [g.id]), lat: 3 }, { ...point('b', now - 1000, [g.id]), lat: 2 }]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.delaySeconds).toBeUndefined();
+      expect(sent[0]!.m).toMatchObject({ type: 'native', app_id: 'loopride', id: 'google:1', name: 'native_driver_location' });
+      expect(await drain()).toEqual(['ack']);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toContain('/execute');
+      expect(calls[0]!.body.params).toEqual(['google:1', 3, 148.4, 5, now]);
+      expect(JSON.stringify(calls[0]!.body)).not.toMatch(new RegExp(`${d.deviceId}|My Pixel|${g.id}`));
+      expect(relayRow()).toEqual({ status: 'idle', delivered_at: now });
+      // A retried upload saves nothing new and relays nothing.
+      await upload(d.token, [point('c', now, [g.id])]);
+      expect(sent).toHaveLength(0);
+    });
+    it('coalesces uploads into the queued delivery and spaces deliveries 3 s apart', async () => {
+      const d = await device(), g = await relayGrant(d.token), now = Date.now();
+      await upload(d.token, [point('a', now - 3000, [g.id])]);
+      await upload(d.token, [point('b', now - 2000, [g.id])]);
+      expect(sent).toHaveLength(1);
+      await drain();
+      expect(calls.map(c => c.body.params[4])).toEqual([now - 2000]);
+      // The delivery just ran: the next one waits until 3 s after it.
+      await upload(d.token, [point('c', now - 1000, [g.id])]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.delaySeconds).toBeGreaterThanOrEqual(2);
+      expect(sent[0]!.delaySeconds).toBeLessThanOrEqual(3);
+      // A point saved while a delivery runs coalesced into it, so that delivery re-arms the relay for it.
+      answer = async () => { answer = async () => Response.json({ meta: { changes: 1 } }); await upload(d.token, [point('d', now, [g.id])]); return Response.json({ meta: { changes: 1 } }); };
+      await drain();
+      expect(calls.map(c => c.body.params[4])).toEqual([now - 2000, now - 1000]);
+      expect(sent).toHaveLength(1);
+      await drain();
+      expect(calls.map(c => c.body.params[4])).toEqual([now - 2000, now - 1000, now]);
+      expect(sent).toHaveLength(0);
+    });
+    it('relays nothing without a grant, for another app, or for Ski and Run', async () => {
+      const d = await device(), ski = await grant(d.token, 'ski'), run = await grant(d.token, 'run');
+      await upload(d.token, [point('s', Date.now(), [ski.id]), point('r', Date.now(), [run.id])]);
+      expect(sent).toHaveLength(0);
+      const bob = await device('google:2'), bobRun = await grant(bob.token, 'run');
+      await upload(bob.token, [point('b', Date.now(), [bobRun.id])]);
+      expect(sent).toHaveLength(0);
+      expect(db.sql.prepare('SELECT 1 FROM native_relays').all()).toHaveLength(0);
+    });
+    it.each([
+      ['revocation', (d: { token: string }) => request('/native/apps/loopride/location', 'DELETE', undefined, d.token)],
+      ['publisher transfer', async () => { db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='loopride'"); }],
+      ['disclosure change', async () => { db.sql.exec("UPDATE native_grants SET contract_version='stale'"); }],
+      ['device expiry', async () => { db.sql.exec('UPDATE native_devices SET expires_at=0'); }],
+    ])('a %s between upload and delivery stops the delivery', async (_, change) => {
+      const d = await device(), g = await relayGrant(d.token);
+      await upload(d.token, [point('p', Date.now(), [g.id])]);
+      expect(sent).toHaveLength(1);
+      await change(d);
+      expect(await drain()).toEqual(['ack']);
+      expect(calls).toHaveLength(0);
+      expect(relayRow()).toEqual({ status: 'idle', delivered_at: null });
+    });
+    it('retries a data-worker failure, drops a point the action refuses once, and frees the row on dead-letter', async () => {
+      const d = await device(), g = await relayGrant(d.token), now = Date.now();
+      answer = async () => new Response('down', { status: 503 });
+      await upload(d.token, [point('a', now - 1000, [g.id])]);
+      const queued = [...sent];
+      expect(await drain()).toEqual(['retry']);
+      expect(relayRow()).toMatchObject({ status: 'queued' });
+      sent.push(...queued);
+      await handleAppEventBatch({ queue: 'pas-app-events-dlq', messages: sent.splice(0).map(({ m }) => ({ body: m, attempts: 1, ack() {}, retry() {} })) } as unknown as MessageBatch<AppEventMessage>, env);
+      expect(relayRow()).toEqual({ status: 'idle', delivered_at: null });
+      // A 4xx is the action refusing this point: it is given up on, not retried, and not tried again in a loop.
+      answer = async () => new Response('constraint', { status: 400 });
+      await upload(d.token, [point('b', now, [g.id])]);
+      expect(await drain()).toEqual(['ack']);
+      expect(relayRow()).toEqual({ status: 'idle', delivered_at: now });
+      expect(sent).toHaveLength(0);
+    });
+    it('refuses an action whose manifest is no longer a relay action at delivery', async () => {
+      const d = await device(), g = await relayGrant(d.token);
+      db.sql.prepare("UPDATE app_tools SET manifest = ? WHERE app_id = 'loopride'").run(JSON.stringify({ ...RELAY, callers: ['user', 'native'] }));
+      await upload(d.token, [point('p', Date.now(), [g.id])]);
+      expect(await drain()).toEqual(['ack']);
+      expect(calls).toHaveLength(0);
+    });
+    it('registration refuses a "native" caller anywhere but the reviewed relay action, in its exact shape', async () => {
+      const register = async (appId: string, over: Record<string, unknown>) =>
+        ((await validateToolSet([{ ...RELAY, ...over } as ToolManifest], undefined, appId))?.payload.error ?? null) as string | null;
+      expect(await register('loopride', {})).toBeNull();
+      expect(await register('run', {})).toMatch(/reserved for the action the reviewed native catalog relays to, and this app has none/);
+      expect(await register('loopride', { name: 'set_location' })).toMatch(/reserved .*\("native_driver_location"\)/);
+      expect(await register('loopride', { callers: ['user', 'native'] })).toMatch(/callers: \["native"\] only/);
+      expect(await register('loopride', { operation: 'query', sql: 'SELECT :lat + :lng + :accuracy + :at AS v FROM drivers WHERE id = :__user_id LIMIT 1' })).toMatch(/execute or batch/);
+      expect(await register('loopride', { auth: { app_roles: ['driver'] } })).toMatch(/role-gated/);
+      expect(await register('loopride', { params: { ...RELAY.params, speed: { type: 'number' } } })).toMatch(/exactly the params/);
+      expect(await register('loopride', { params: { ...RELAY.params, lat: { type: 'string' } } })).toMatch(/exactly the params/);
+      expect(await register('loopride', { callers: ['natives'] })).toMatch(/callers must be a non-empty array of .*"native"/);
     });
   });
 });

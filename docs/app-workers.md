@@ -92,7 +92,10 @@ Outbound `fetch` to the Internet works: it leaves through the platform's egress 
 ### `callers` (per action)
 
 Who may run the action: any of `"user"`, `"worker"` and `"hook"`. The default is
-`["user"]`, so existing actions behave as before.
+`["user"]`, so existing actions behave as before. Two platform callers are reserved:
+`"billing"` (see [app billing](./app-billing.md)) and `"native"`, which only the
+companion's reviewed live relay can bind (see
+[native companion](./native-companion.md#live-relay)).
 
 - An action whose `callers` lacks `"user"` is refused on the HTTP actions route
   and hidden from the app's MCP tools. A worker-only or hook-only write can never

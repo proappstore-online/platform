@@ -1,6 +1,7 @@
 import { writesReservedTable } from '../../../../data-worker/src/reserved-tables.js';
 import type { Env } from '../../types.js';
-import type { ToolManifest } from '../action-sql.js';
+import { actionCallers, type ToolManifest } from '../action-sql.js';
+import { nativeRelayActionError } from '../native-companion.js';
 import { dataWorkerUrl } from '../data-worker-url.js';
 import { MAX_SCHEDULED_ACTIONS_PER_APP, validateManifest, type ToolSource } from './tool.js';
 
@@ -107,6 +108,8 @@ export async function validateToolSet(
   for (const tool of tools) {
     const err = validateManifest(tool, opts);
     if (err) return { status: 400, payload: { error: `tool "${tool?.name}": ${err}` } };
+    const relayErr = actionCallers(tool).includes('native') ? nativeRelayActionError(appId, tool) : null;
+    if (relayErr) return { status: 400, payload: { error: `tool "${tool.name}": ${relayErr}` } };
   }
 
   // #508: `_pas_*` tables are the platform's (the entitlement mirror). An action may read them and JOIN them; it may not write one,

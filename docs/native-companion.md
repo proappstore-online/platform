@@ -39,7 +39,8 @@ The Android implementation uses Kotlin, Compose/Material 3, Android LocationMana
 | Location | Explicitly enabled automatic collection, foreground service notification and Pause all action; precise and background permission checks. |
 | Offline | Durable SQLite queue; recipient grant snapshot per observation; only exact acknowledgements remove queued batches. |
 | Platform | Per-device/app grants, validated idempotent upload, app/user-isolated read, disconnect and seven-day raw buffer retention. |
-| Recipient apps | Ski (first integration) and Run (runs and walks while locked). Each has its own reviewed disclosure in the platform catalog. |
+| Recipient apps | Ski (first integration), Run (runs and walks while locked) and Rideshare (`loopride`, drivers' live position for dispatch and the rider). Each has its own reviewed disclosure in the platform catalog. |
+| Live relay | Rideshare's accepted points run its `native_driver_location` action as the driver within seconds (see [Live relay](#live-relay)). Ski and Run have no relay; they read on return. |
 
 ## Native API, version 1
 
@@ -68,6 +69,18 @@ No API accepts a device-supplied account identity. Upload recipients must be act
 
 The read cursor is `(at, cursorId)`, not timestamp alone: multiple devices can produce observations at the same millisecond. Read access checks current authorization again. App-owned workers do not yet have a native RPC; do not give them a device credential or bypass the user/app scope checks.
 
+## Live relay
+
+A reading app can only catch up when its page is open. Rideshare needs a locked phone's driver to stay visible to dispatch and to the rider, so its catalog entry has a **relay** (#654): points its grants accept are run into one app action, as the driver.
+
+- **Binding.** `NATIVE_RELAYS` in `packages/backend/src/lib/native-companion.ts` maps an app to its relay action. It is kept apart from `NATIVE_CATALOG`, so adding it changed no entry's hash. Only `loopride` has one, mapped to `native_driver_location`. An app's manifest cannot choose to receive points.
+- **The action.** It must list `"native"` as its only caller (`"callers": ["native"]`), be an `execute` or `batch` action with `requires_auth: true` and no role gate or `step_up`, and declare exactly the params `lat` (`number`), `lng` (`number`), `accuracy` (`number`, metres) and `at` (`integer` or `timestamp_ms`, epoch ms of the fix). `:__user_id` is the device's owner, and the usual `:__user_id` scoping lint applies. Registration refuses `"native"` on any other action, in any other app, or in any other shape. Delivery checks the same rules again. No session, app token, worker or hook can call it, and MCP does not list it.
+- **What the action gets.** Only those four params. No device id, device label or grant id reaches the app.
+- **Delivery.** When `POST /native/locations` saves a new point for a relayed app, the upload arms that (app, user) on the app-events queue (`pas-app-events`). The delivery reads the **newest** current point when it runs, using the read's own authorization (`NATIVE_LOCATION_SCOPE`). An upload made while a delivery is queued coalesces into it. Only a point newer than the last one relayed is sent. Deliveries for one (app, user) are at least 3 s apart. A point saved while a delivery runs is relayed by a follow-up delivery 3 s later.
+- **Stopping.** Revocation, a publisher transfer, a disclosure (contract) change and device expiry stop delivery, including for a point already queued. The predicates are the read's, so the relay can never send a point the read would not return.
+- **Failures.** A data-worker 5xx is retried with the queue's backoff (5 retries, then dead-lettered). A 4xx means the action refused the point: it is dropped and not retried. A lost or dead-lettered delivery frees the relay, and the next upload re-arms it. The relay stores no location of its own: `native_relays` (migration 0147) holds only scheduling state.
+- **Quotas.** Relayed runs do not count toward the app's hook quota. They are bounded by the upload limit (200 uploads per device per 15 minutes) and the 3 s spacing.
+
 ## Permissions and data lifecycle
 
 - OS permission authorizes PAS to collect. A PAS app grant authorizes a specific recipient. Neither substitutes for the other.
@@ -94,8 +107,8 @@ An Android intent can bring PAS forward but cannot grant access. The initial cus
 
 1. Finish physical-device acceptance and production connection/consent tests; add credential management/rotation and verified App Links. Account linking beyond existing Google/GitHub providers remains a platform auth concern.
 2. Add a platform-owned web consent/request SDK surface with account-bound handoff and status. Connect Ski without changing its map provider; deduplicate native and browser recording explicitly.
-3. Add an app-worker native capability declaration, authenticated native event/RPC delivery, revocation-aware retries, quotas and downstream deletion. Reuse ADR-009; never permit an arbitrary app worker to enumerate users or read another app's stream.
-4. Review and register additional recipient apps (Run registered 2026-11; Rideshare pending) with real disclosures and lifecycle tests.
+3. Add an app-worker native capability declaration, authenticated native event/RPC delivery, revocation-aware retries, quotas and downstream deletion. Reuse ADR-009; never permit an arbitrary app worker to enumerate users or read another app's stream. The catalog-bound [live relay](#live-relay) into one app action (#654) is the first such delivery. A general worker RPC remains open.
+4. Review and register additional recipient apps (Run and Rideshare registered 2026-11) with real disclosures and lifecycle tests.
 5. Add lock-screen activity summaries/timers once app-specific session state is available. A native location service alone cannot infer a ski ride's timer semantics.
 6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
 

@@ -3,8 +3,10 @@ import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import {
-  nativeBody, nativeCatalog, nativeEntry, NATIVE_CAPABILITIES, NATIVE_LOCATION, NATIVE_RETENTION_MS, nativeDevice, nativeGrants, nativePoints, nativeRandom,
+  nativeBody, nativeCatalog, nativeEntry, NATIVE_CAPABILITIES, NATIVE_LOCATION, NATIVE_LOCATION_SCOPE, NATIVE_RETENTION_MS, nativeDevice, nativeGrants, nativePoints,
+  nativeRandom, nativeRelayOf,
 } from '../lib/native-companion.js';
+import { armNativeRelay } from '../lib/native-relay.js';
 
 export const nativeRoutes = new Hono<{ Bindings: Env }>();
 nativeRoutes.use('/native/*', async (c, next) => { c.header('Cache-Control', 'private, no-store'); await next(); });
@@ -86,7 +88,7 @@ nativeRoutes.post('/native/locations', async c => {
   const body = await nativeBody(c, 80_000);
   const points = nativePoints(body.points, now);
   const grants = await nativeGrants(c.env.DB, device.id);
-  const statements: D1PreparedStatement[] = [];
+  const statements: D1PreparedStatement[] = [], statementApps: string[] = [];
   for (const point of points) for (const grant of grants) {
     if (!point.grants.includes(grant.id) || point.at < grant.consent_at) continue;
     // Recheck consent and publisher AT THE WRITE, including a revocation concurrent with this request.
@@ -95,8 +97,14 @@ nativeRoutes.post('/native/locations', async c => {
       JOIN native_devices d ON d.id = g.device_id
       WHERE g.id = ? AND g.device_id = ? AND g.capability = 'location.background' AND g.contract_version = ? AND d.expires_at > ?`)
       .bind(point.id, point.at, point.lat, point.lng, point.accuracy, grant.id, device.id, grant.contract_version, now));
+    statementApps.push(grant.app_id);
   }
-  if (statements.length) await c.env.DB.batch(statements);
+  const saved = statements.length ? await c.env.DB.batch(statements) : [];
+  // #654: an app with a reviewed relay gets its newest point run into its action. A relay failure never fails the upload:
+  // the points are saved and stay readable, and the next upload arms the relay again.
+  for (const appId of new Set(statementApps.filter((appId, i) => saved[i]?.meta?.changes && nativeRelayOf(appId)))) {
+    await armNativeRelay(c.env, appId, device.user_id, now).catch(e => console.error(`[native-relay] ${appId}: could not queue a delivery: ${String((e as Error)?.message ?? e)}`));
+  }
   // Revoked recipients are intentionally discarded, never retried into a subsequent grant.
   return c.json({ acknowledged: points.map(p => p.id) });
 });
@@ -119,9 +127,7 @@ nativeRoutes.get('/apps/:appId/native/locations', async c => {
   // Composite cursor remains stable when several devices produce points at the same timestamp.
   const rows = await c.env.DB.prepare(`SELECT p.point_id AS id, p.grant_id AS grantId, p.recorded_at AS at,
     p.latitude AS lat, p.longitude AS lng, p.accuracy, p.grant_id || ':' || p.point_id AS cursorId
-    FROM native_locations p JOIN native_grants g ON g.id = p.grant_id JOIN native_devices d ON d.id = g.device_id
-    JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
-    WHERE g.app_id = ? AND g.capability = 'location.background' AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ? AND p.recorded_at >= ?
+    ${NATIVE_LOCATION_SCOPE}
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.point_id > ?))
     ORDER BY p.recorded_at, cursorId LIMIT 500`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
   return c.json({ points: rows.results ?? [] });

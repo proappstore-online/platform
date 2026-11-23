@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from './auth.js';
 import { readCapped } from '../routes/hooks.js';
+import { actionCallers, type ToolManifest } from './action-sql.js';
 
 export const NATIVE_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const NATIVE_LOCATION = 'location.background';
@@ -21,7 +22,53 @@ const NATIVE_CATALOG = [{
   id: 'run', name: 'Run', capability: 'location.background', version: '1',
   purpose: 'Keep recording your runs and walks while your phone is locked or Run is closed.',
   disclosure: 'ProAppStore collects precise location in the background to record your runs and walks for Run, including while your phone is locked and Run is closed. Coordinates are uploaded to the PAS platform and made available to Run for your account only. Run adds them only to an activity you are recording; it ignores location outside a recording. Platform copies expire after 7 days. You can pause collection or disconnect Run at any time. Runs you save stay in Run until you delete them or your Run account.',
+}, {
+  id: 'loopride', name: 'Rideshare', capability: 'location.background', version: '1',
+  purpose: 'Keep dispatch and your rider seeing where you are while you drive, including when your phone is locked or Rideshare is closed.',
+  disclosure: 'ProAppStore collects precise location in the background and sends each new position to Rideshare for your account, including while your phone is locked and Rideshare is closed. Rideshare shares it with dispatch while you are online as a driver, to offer you nearby rides, and with your rider while you are on their trip, so they can follow you. Rideshare ignores location while you are offline. Platform copies expire after 7 days. Rideshare keeps your position for 24 hours at most. You can pause collection or disconnect Rideshare at any time.',
 }] as const;
+/**
+ * #654: the app action an entry's accepted points are relayed into, as the device's owner. Kept apart from NATIVE_CATALOG so
+ * the hashed entries are untouched; an entry's disclosure must already say who receives its points live. Only this map binds an
+ * action to the "native" caller: an app's manifest can list the caller but cannot choose to receive points.
+ */
+export const NATIVE_RELAYS: Readonly<Record<string, { capability: typeof NATIVE_LOCATION; action: string }>> = {
+  loopride: { capability: NATIVE_LOCATION, action: 'native_driver_location' },
+};
+/** The app's relay, or undefined. */
+export function nativeRelayOf(appId: string) { return Object.hasOwn(NATIVE_RELAYS, appId) ? NATIVE_RELAYS[appId] : undefined; }
+/** The params a relay action receives, and the types it must declare for them. */
+const NATIVE_RELAY_PARAMS: Record<string, readonly string[]> = { lat: ['number'], lng: ['number'], accuracy: ['number'], at: ['integer', 'timestamp_ms'] };
+/**
+ * Why `tool` cannot be the app's relay action, or null. Checked at registration and again at every delivery. Callers exactly
+ * ["native"]: a location the action receives always came from the companion, never from a session, worker or hook.
+ */
+export function nativeRelayActionError(appId: string, tool: ToolManifest): string | null {
+  const relay = nativeRelayOf(appId);
+  if (relay?.action !== tool.name) {
+    return `callers "native" is reserved for the action the reviewed native catalog relays to${relay ? ` ("${relay.action}")` : ', and this app has none'}`;
+  }
+  const callers = actionCallers(tool);
+  if (callers.length !== 1 || callers[0] !== 'native') return `"${tool.name}" must declare callers: ["native"] only, so no user, worker or hook can submit a location as the device's owner`;
+  if (tool.operation !== 'execute' && tool.operation !== 'batch') return `"${tool.name}" must be an execute or batch action`;
+  if (tool.requires_auth !== true) return `"${tool.name}" must require auth: it runs as the device's owner`;
+  if (tool.auth?.app_roles?.length || tool.auth?.platform_roles?.length) return `"${tool.name}" cannot be role-gated: the relay holds no role`;
+  if (tool.step_up) return `"${tool.name}" cannot require step-up: no one signs in for a relayed point`;
+  const params = tool.params ?? {};
+  const names = Object.keys(params);
+  if (names.length !== 4 || Object.entries(NATIVE_RELAY_PARAMS).some(([n, types]) => !types.includes(params[n]?.type ?? ''))) {
+    return `"${tool.name}" must declare exactly the params lat (number), lng (number), accuracy (number) and at (integer or timestamp_ms)`;
+  }
+  return null;
+}
+/**
+ * The location read's authorization (#613): current publisher, current contract, unexpired device, retention. The relay
+ * (#654) uses the same, so a revocation, publisher transfer, disclosure change or device expiry stops both. Binds, in order:
+ * app id, user id, contract version, now, retention floor.
+ */
+export const NATIVE_LOCATION_SCOPE = `FROM native_locations p JOIN native_grants g ON g.id = p.grant_id JOIN native_devices d ON d.id = g.device_id
+    JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
+    WHERE g.app_id = ? AND g.capability = 'location.background' AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ? AND p.recorded_at >= ?`;
 
 interface NativeDevice { id: string; user_id: string; label: string; expires_at: number; }
 interface NativeGrant { id: string; app_id: string; capability: string; consent_at: number; contract_version: string; publisher_id: string; }

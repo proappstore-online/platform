@@ -24,10 +24,10 @@ export const HOOK_BODY_PREFIX = '_hook-bodies/';
 
 export interface AppEventMessage {
   v: 1;
-  /** Envelope id: the run id (schedules) or delivery row id (hooks) — stable across retries. */
+  /** Envelope id: the run id (schedules), delivery row id (hooks) or the device owner's user id (native relay, #654) — stable across retries. */
   id: string;
   app_id: string;
-  type: 'schedule' | 'hook';
+  type: 'schedule' | 'hook' | 'native';
   name: string;
   /** The attempt number of the first try; the consumer adds the queue's own retries. */
   attempt: number;
@@ -35,14 +35,14 @@ export interface AppEventMessage {
   attempt_token: string;
   issued_at: number;
   payload: unknown;
-  ref: { table: 'scheduled_action_runs' | 'app_hook_deliveries'; id: string };
+  ref: { table: 'scheduled_action_runs' | 'app_hook_deliveries' | 'native_relays'; id: string };
   /** A hook body over the message limit lives here in R2 instead of `payload.body`. */
   body_key?: string;
 }
 
-export async function sendAppEvent(env: Env, message: AppEventMessage): Promise<void> {
+export async function sendAppEvent(env: Env, message: AppEventMessage, delaySeconds = 0): Promise<void> {
   if (!env.APP_EVENTS) throw new Error('the APP_EVENTS queue binding is missing');
-  await env.APP_EVENTS.send(message);
+  await (delaySeconds > 0 ? env.APP_EVENTS.send(message, { delaySeconds }) : env.APP_EVENTS.send(message));
 }
 
 export function scheduleMessage(run: { runId: string; appId: string; schedule: string; params: Record<string, unknown>; queuedToken: string }, now: number): AppEventMessage {
