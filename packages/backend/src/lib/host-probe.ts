@@ -21,7 +21,7 @@ import type { Env } from '../types.js';
 import { recordHealth } from './metric-aggregates.js';
 import { dispatchPlatformWorkflow } from './session-key-drift.js';
 
-const CATALOGUE_URL = 'https://proappstore.online/catalogue.json';
+export const CATALOGUE_URL = 'https://proappstore.online/catalogue.json';
 export const BURST = 8;
 export const SAMPLE = 3;
 /** Always probed: the app the #616 outage was first seen on. */

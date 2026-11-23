@@ -247,7 +247,8 @@ semicolons, no DDL, every `:param` declared) and caps apps at 500 tools.
 not live yet (no enabled worker, no live action), new and changed actions
 register **staged**. A staged action can be called only by the app's owner and
 team (and its worker, hooks and scheduler) until the owner promotes it
-(`POST /v1/apps/:appId/tools/promote`) or the app worker is enabled. In a live
+(`POST /v1/apps/:appId/tools/promote`), the app worker is enabled, or the app
+is listed in the public store, which promotes it automatically (#658). In a live
 app, a deploy's new and changed actions register live. Owners can exercise any
 action without running it with `"dry_run": true`. See
 [MCP app tools](./mcp-app-tools.md#staged-until-the-app-goes-live-428).

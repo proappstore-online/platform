@@ -1526,8 +1526,8 @@ code action is **staged** or **live** (`app_tools.state`).
 - **Live:** callable by anyone the action's own auth admits, as before.
 
 An app is **live** when its worker is enabled, its go-live is recorded
-(`app_go_live`: set by enabling the worker or by a promote, never cleared by a
-deploy), or it already serves a live action. Every app that existed when
+(`app_go_live`: set by enabling the worker, by a promote or by a store listing,
+never cleared by a deploy), or it already serves a live action. Every app that existed when
 migration 0109 ran is recorded live, so clearing a live app's tools and
 redeploying does not stage them (#429).
 
@@ -1545,6 +1545,12 @@ redeploying does not stage them (#429).
   `{ promoted, not_staged, staged_remaining }`. Once one action is live the app
   is live, so later deploys register new actions live.
 - Enabling the app worker promotes every staged action.
+- **A store listing is going live (#658).** An app listed in the public store
+  (`proappstore.online/catalogue.json`) goes live automatically: every fifteen
+  minutes the backend cron promotes the staged code actions of each listed app
+  that has not gone live yet, and records it (`went_live_by = 'catalogue'`).
+  It never demotes: a delisted app stays live. An unlisted app stays staged
+  until its owner promotes it or enables its worker.
 
 **Visibility:**
 - `GET /v1/apps/:appId/tools` shows `state` to the team, and hides staged actions

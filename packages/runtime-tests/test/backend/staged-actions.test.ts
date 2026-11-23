@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../../backend/src/types';
 import { replaceAppTools } from '../../../backend/src/routes/tools';
 import { disableAppWorker } from '../../../backend/src/lib/app-worker-host';
+import { goLiveListedApps } from '../../../backend/src/lib/catalogue-go-live';
 import { BASE, json, mockNetwork, resetTables, seedApp, seedUser, session } from './helpers';
 
 const env = providedEnv as unknown as Env;
@@ -199,6 +200,23 @@ describe('staged actions (#428)', () => {
     const next = await register([listMine, addNote]);
     expect(next.body.staged).toEqual([]);
     expect(await states()).toEqual({ add_note: 'live', list_mine: 'live' });
+  });
+
+  it('a listed app goes live from the catalogue sweep, and stays live through later deploys (#658)', async () => {
+    await register([listMine]);
+    const catalogue = (ids: string[]) => (async () => Response.json({ apps: ids.map((id) => ({ id })) })) as unknown as typeof fetch;
+    expect(await goLiveListedApps({ env, fetchImpl: catalogue(['club']) })).toEqual(['club']);
+    expect(await env.DB.prepare("SELECT went_live_by FROM app_go_live WHERE app_id = 'club'").first()).toEqual({ went_live_by: 'catalogue' });
+    expect(await states()).toEqual({ list_mine: 'live' });
+    runs('query');
+    expect((await call('list_mine', await session('gh:2'))).status).toBe(200);
+    // Cleared and redeployed with a new action: registered live, because app_go_live is recorded.
+    expect((await SELF.fetch(`${BASE}/v1/apps/club/tools`, json('DELETE', undefined, await owner()))).status).toBe(200);
+    const next = await register([listMine, addNote]);
+    expect(next.body.staged).toEqual([]);
+    expect(await states()).toEqual({ add_note: 'live', list_mine: 'live' });
+    // Already recorded: the next tick does nothing.
+    expect(await goLiveListedApps({ env, fetchImpl: catalogue(['club']) })).toEqual([]);
   });
 
   it('enabling the app worker is going live: staged actions are promoted, later ones register live', async () => {

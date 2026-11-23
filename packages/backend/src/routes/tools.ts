@@ -561,6 +561,26 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   return c.json({ tools });
 });
 
+/**
+ * The app goes live (#428, #429): its staged code actions (every one, or `names`)
+ * become callable by its users, and the go-live is recorded in app_go_live, so later
+ * deploys register live even after the app's tools were cleared. Never demotes.
+ * Recorded after the promote, so a failure before it leaves the app to be retried.
+ * Shared by the owner's promote and the catalogue sweep (#658). Returns the promoted names.
+ */
+export async function promoteStaged(db: D1Database, appId: string, by: string, names?: string[]): Promise<string[]> {
+  const promoted = names
+    ? await db.prepare(
+        `UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged'
+           AND name IN (SELECT value FROM json_each(?)) RETURNING name`,
+      ).bind(appId, JSON.stringify(names)).all<{ name: string }>()
+    : await db.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged' RETURNING name")
+      .bind(appId).all<{ name: string }>();
+  await db.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)')
+    .bind(appId, Date.now(), by).run();
+  return (promoted.results ?? []).map((r) => r.name).sort();
+}
+
 // ── POST /v1/apps/:appId/tools/promote — staged actions go live (#428) ──
 // Body `{ names?: string[] }`: those actions, or every staged one. The owner (or
 // a platform admin) decides when the app's users may call what is registered;
@@ -575,18 +595,7 @@ toolsRoutes.post('/apps/:appId/tools/promote', async (c) => {
     return c.json({ error: 'names must be a non-empty array of action names' }, 400);
   }
   const list = names as string[] | undefined;
-  const promoted = list
-    ? await c.env.DB.prepare(
-        `UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged'
-           AND name IN (SELECT value FROM json_each(?)) RETURNING name`,
-      ).bind(appId, JSON.stringify(list)).all<{ name: string }>()
-    : await c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND source = 'code' AND state = 'staged' RETURNING name")
-      .bind(appId).all<{ name: string }>();
-  const done = (promoted.results ?? []).map((r) => r.name).sort();
-  // Promoting is the app going live (#429): recorded, so later deploys register live
-  // even after the app's tools were cleared.
-  await c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)')
-    .bind(appId, Date.now(), owner.id).run();
+  const done = await promoteStaged(c.env.DB, appId, owner.id, list);
   const remaining = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM app_tools WHERE app_id = ? AND state = 'staged'")
     .bind(appId).first<{ n: number }>();
   console.log(`[tools] promoted app=${appId} ${done.join(',') || '(none)'}`);

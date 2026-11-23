@@ -697,7 +697,8 @@ new apps until an admin reopens it. Apps already running are not affected.
 then are staged: only the owner, team, worker, hooks and scheduler can call them.
 The enable promotes them all to live, and every later deploy registers new and
 changed actions live. An app without a worker goes live by
-`POST /v1/apps/:appId/tools/promote`. See
+`POST /v1/apps/:appId/tools/promote`, or by being listed in the public store,
+which promotes it automatically (#658). See
 [MCP app tools](./mcp-app-tools.md#staged-until-the-app-goes-live-428).
 
 The owner commands use your `pas login` session.

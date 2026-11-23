@@ -134,7 +134,8 @@ and read the run log for the three lines that must be present —
   `list_app_tools` marks them for the team. Exercise them with
   `app.actions.call(name, params, { dryRun: true })` (validates, authorizes and
   binds, runs nothing). Go live by enabling the app worker or
-  `POST /v1/apps/<app>/tools/promote`. A user getting 403 `action is staged`
+  `POST /v1/apps/<app>/tools/promote`; a listing in the public store goes live
+  automatically within fifteen minutes (#658). A user getting 403 `action is staged`
   means the app has not gone live, not that the deploy failed.
 - Smoke: `qa_list_runs` shows the deploy-triggered run for this SHA passing;
   if the app has no automatic run, `qa_run`, then `qa_list_runs` and

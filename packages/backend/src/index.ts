@@ -103,6 +103,7 @@ import { ownershipRoutes } from './routes/ownership.js';
 import { appDirectoryRoutes } from './routes/app-directory.js';
 import { ideaBuildersRoutes } from './routes/idea-builders.js';
 import { hostProbeStatus, runHostProbe } from './lib/host-probe.js';
+import { goLiveListedApps } from './lib/catalogue-go-live.js';
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -488,6 +489,8 @@ export default {
     // #381: the payout run (runScheduledPayouts) was removed and is no longer scheduled (#450).
     // #275: close new app-worker enables when today's account-wide usage passes the ceiling.
     ctx.waitUntil(checkAccountCeiling(env, tickAt).catch((e) => console.error(`[app-worker-usage] account check failed: ${(e as Error).message}`)));
+    // #658: an app listed in the public catalogue goes live — its staged actions are promoted once.
+    ctx.waitUntil(goLiveListedApps({ env }).catch((e) => console.error(`[catalogue-go-live] failed: ${(e as Error).message}`)));
     // #307: once a day, delete review uploads older than the app's retention (default 30 days).
     if (new Date(tickAt).getUTCHours() === 3 && new Date(tickAt).getUTCMinutes() === 45) {
       ctx.waitUntil(reapReviewUploads(env, tickAt).catch((e) => console.error(`[review-retention] run failed: ${(e as Error).message}`)));
