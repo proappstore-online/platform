@@ -103,5 +103,17 @@ jobs:
             ' "$payload" "$domain")
             pnpm exec wrangler d1 execute pas --remote --command "$sql"
           done
+      # #657 (#653): a release that fails only under overlapping requests (#616) passes any
+      # single-request smoke. Burst several live app roots; on any 5xx, roll the Worker back.
+      - name: Verify with concurrent bursts across live apps
+        id: burst
+        run: node scripts/smoke-host-burst.mjs
+      - name: Roll back the host Worker
+        if: failure() && steps.burst.outcome == 'failure'
+        working-directory: packages/host
+        run: pnpm exec wrangler rollback --yes --message "deploy-host run ${{ github.run_id }} failed the concurrent-burst check (#657)"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Smoke default-open capability headers on a live app (#436)
         run: node scripts/smoke-capability-headers.mjs https://chess-academy.proappstore.online/
