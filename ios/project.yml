@@ -1,0 +1,39 @@
+# XcodeGen spec: the source of truth for ProAppStore.xcodeproj. Regenerate with `xcodegen generate`.
+name: ProAppStore
+options:
+  createIntermediateGroups: true
+  developmentLanguage: en
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  ProAppStore:
+    type: application
+    platform: iOS
+    sources: [ProAppStore]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PAS_BUNDLE_ID)
+        INFOPLIST_FILE: ProAppStore/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+  ProAppStoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ProAppStoreTests]
+    dependencies:
+      - target: ProAppStore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PAS_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+schemes:
+  ProAppStore:
+    build:
+      targets:
+        ProAppStore: all
+        ProAppStoreTests: [test]
+    test:
+      targets: [ProAppStoreTests]

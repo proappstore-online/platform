@@ -4,7 +4,7 @@ description: "Apple and Google Play policy findings for the PAS background compa
 
 # Native companion: store approval investigation
 
-Researched **2026-11-06**. This is a documented engineering assessment, not approval from either store. Current scope is Android only. Recheck policies at submission.
+Researched **2026-11-06**. This is a documented engineering assessment, not approval from either store. Android has a release pipeline; iOS is a developer-installed preview (ADR-016) with no App Store or TestFlight submission. Recheck policies at submission.
 
 ## Exact product assessed
 

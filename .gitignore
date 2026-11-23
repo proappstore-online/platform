@@ -19,3 +19,6 @@ artifacts/google-consent/
 artifacts/verification/
 
 artifacts/referral-browser/
+
+# xcodebuild -derivedDataPath used by ios/ and .github/workflows/ios.yml (#612)
+/build/ios/

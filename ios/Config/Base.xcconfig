@@ -1,0 +1,7 @@
+// Shared build settings. Personal signing (DEVELOPMENT_TEAM, or a unique PAS_BUNDLE_ID) goes in the
+// untracked Config/Local.xcconfig.
+PAS_BUNDLE_ID = online.proappstore.companion
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SWIFT_VERSION = 5.0
+
+#include? "Local.xcconfig"

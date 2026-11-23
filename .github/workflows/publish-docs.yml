@@ -162,7 +162,7 @@ jobs:
             - SDK: sdk-overview.md
             - Offline apps: offline-apps.md
             - Native Companion:
-                - Android user guide: native-companion-users.md
+                - Phone user guide: native-companion-users.md
                 - Architecture and API: native-companion.md
                 - Android releases: native-android-release.md
                 - Store review research: native-companion-review.md
@@ -197,6 +197,7 @@ jobs:
                 - App Workers: adr/009-app-workers.md
                 - Offline content: adr/012-offline-content.md
                 - Native companion: adr/015-native-companion.md
+                - iOS companion: adr/016-ios-native-companion.md
           YAML
           python -m zensical build
           python scripts/verify-docs-metadata.py site

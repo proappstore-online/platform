@@ -37,7 +37,7 @@ nativeAuthRoutes.post('/native/auth/start', async c => {
 nativeAuthRoutes.get('/native/auth/authorize', async c => {
   const id = c.req.query('id') ?? '';
   const pairing = hex(id) ? await row(c, id) : null;
-  if (!pairing || pairing.approved || pairing.user_id) throw new HttpError('Connection expired. Start again from the Android app.', 400);
+  if (!pairing || pairing.approved || pairing.user_id) throw new HttpError('Connection expired. Start again from the ProAppStore app on your phone.', 400);
   const nonce = nativeRandom();
   await c.env.DB.prepare('UPDATE native_pairings SET browser_hash = ? WHERE id = ? AND approved = 0 AND user_id IS NULL').bind(await nativeHash(nonce), id).run();
   setCookie(c, COOKIE, `${id}.${nonce}`, { secure: true, httpOnly: true, sameSite: 'Lax', path: '/', maxAge: PAIRING_MS / 1000 });
@@ -47,7 +47,7 @@ nativeAuthRoutes.get('/native/auth/authorize', async c => {
 });
 async function browserPairing(c: Ctx): Promise<{ pairing: Pairing; nonce: string }> {
   const [id, nonce] = (getCookie(c, COOKIE) ?? '').split('.');
-  if (!hex(id) || !hex(nonce)) throw new HttpError('Start this connection from the Android app.', 403);
+  if (!hex(id) || !hex(nonce)) throw new HttpError('Start this connection from the ProAppStore app on your phone.', 403);
   const pairing = await row(c, id);
   if (!pairing || pairing.approved || pairing.browser_hash !== await nativeHash(nonce)) throw new HttpError('Connection expired. Start again.', 403);
   return { pairing, nonce };
@@ -57,7 +57,7 @@ nativeAuthRoutes.get('/native/auth/callback', async c => {
   const code = c.req.query('code') ?? '';
   const session = code ? await redeemExchangeCode(c.env, code) : null;
   const claims = session ? await verifySession(session, c.env.SESSION_SIGNING_KEY) : null;
-  if (!claims) throw new HttpError('Sign-in did not finish. Start again from the Android app.', 401);
+  if (!claims) throw new HttpError('Sign-in did not finish. Start again from the ProAppStore app on your phone.', 401);
   const result = await c.env.DB.prepare('UPDATE native_pairings SET user_id = ? WHERE id = ? AND user_id IS NULL AND approved = 0 AND expires_at > ?')
     .bind(claims.uid, pairing.id, Date.now()).run();
   if (!result.meta.changes) throw new HttpError('Connection already used.', 409);

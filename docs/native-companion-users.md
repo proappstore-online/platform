@@ -1,8 +1,8 @@
 ---
-description: "How the Android ProAppStore companion connects your apps to background location, and how to pause or disconnect."
+description: "How the ProAppStore companion on Android and iPhone connects your apps to background location, and how to pause or disconnect."
 ---
 
-# ProAppStore on Android
+# ProAppStore on your phone
 
 The Android companion is an early preview. Your PAS apps still run in your browser. ProAppStore can collect location for apps you explicitly enable, including while those apps are closed.
 
@@ -15,6 +15,10 @@ Sign in with the same Google or GitHub account you use in your PAS apps. Match t
 Review the app's location explanation and choose Enable. Grant precise location, then background access (Allow all the time) when Android asks. ProAppStore appears as the collector in Android's permission settings. Each app's separate permission appears inside ProAppStore.
 
 The preview supports Ski and Run. Run adds locked-screen location only to a run you are recording.
+
+## On iPhone
+
+Build and install from Xcode (developer preview; not on the App Store). Choose **Allow While Using App** and keep **Precise Location** on. Start collection in ProAppStore, then lock your phone or switch to your app: the blue location indicator shows ProAppStore is recording. Choose **Change to Always Allow** only if you want ProAppStore to resume after iOS closes it. A free Apple developer team build stops opening after 7 days until it is reinstalled from Xcode.
 
 ## Control sharing
 

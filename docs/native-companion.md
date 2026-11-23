@@ -26,13 +26,14 @@ flowchart LR
   Buffer --> Rideshare[Rideshare authorized data access]
 ```
 
-The Android implementation uses Kotlin, Compose/Material 3, Android LocationManager, a location foreground service, SQLite, Android Keystore and WorkManager. LocationManager avoids a Google Play Services dependency. WorkManager retries upload; it is not used as a continuous GPS timer. All backend execution and storage remain on Cloudflare.
+The Android implementation uses Kotlin, Compose/Material 3, Android LocationManager, a location foreground service, SQLite, Android Keystore and WorkManager. LocationManager avoids a Google Play Services dependency. WorkManager retries upload; it is not used as a continuous GPS timer. All backend execution and storage remain on Cloudflare. The iOS implementation (ADR-016) uses Swift/SwiftUI, Core Location background updates with the system location indicator, the Keychain (`AfterFirstUnlockThisDeviceOnly`) and a system-SQLite queue; it is installed directly from Xcode and has no store distribution.
 
 ## What is implemented
 
 | Area | Initial implementation |
 |---|---|
 | Android UI | Account connection, app disclosures, enable/disable, pause/resume, queue count, sync status, disconnect. No developer tooling. |
+| iOS UI | Same consumer screens in SwiftUI; While Using is enough for a session started in the app, Always is an optional restart upgrade. |
 | Identity | Existing PAS Google/GitHub identity through the system browser; explicit device connection approval; proof-bound single-use exchange. |
 | Credentials | Random device credential, hashed server-side, AES-GCM protected by Android Keystore on device; 90-day expiry; no general PAS session given to Android. |
 | Location | Explicitly enabled automatic collection, foreground service notification and Pause all action; precise and background permission checks. |
