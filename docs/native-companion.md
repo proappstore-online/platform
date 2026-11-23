@@ -32,7 +32,7 @@ The Android implementation uses Kotlin, Compose/Material 3, Android LocationMana
 
 | Area | Initial implementation |
 |---|---|
-| Android UI | Account connection, app disclosures, enable/disable, pause/resume, queue count, sync status, disconnect. No developer tooling. |
+| Android UI | Store tab (public catalogue, browse only, ADR-017), Sharing control room (per-app state, shared time, upload queue, sync health, device status, track view, activity log), Settings (account, clear history, disconnect). Open hands `https://<id>.proappstore.online/?install=1` to the browser. No developer tooling, no WebView. |
 | iOS UI | Same consumer screens in SwiftUI; While Using is enough for a session started in the app, Always is an optional restart upgrade. |
 | Identity | Existing PAS Google/GitHub identity through the system browser; explicit device connection approval; proof-bound single-use exchange. |
 | Credentials | Random device credential, hashed server-side, AES-GCM protected by Android Keystore on device; 90-day expiry; no general PAS session given to Android. |
@@ -76,7 +76,7 @@ The read cursor is `(at, cursorId)`, not timestamp alone: multiple devices can p
 - Native disable immediately blocks that recipient and removes it from queued observations. If offline, server revocation is pending until synchronization; the UI says so. Online delivery already in flight cannot be recalled.
 - Pause all stops new samples. Pausing one app stops tagging new samples for that recipient only; its grant, consent and platform copy are unchanged, and it resumes without a new disclosure. Previously authorized queued samples can still upload in both cases. Pause is local to the phone and is not reported to the app.
 - A queue reaching 60,000 pending observations stops collection visibly rather than silently dropping recent samples. Local observations expire after seven days during synchronization; platform reads exclude older points immediately and the maintenance tick deletes them.
-- iOS keeps a 30-day on-device history (`share_events`, `share_points`) in the protected queue database for the user's own map and timeline. It is never uploaded and is cleared on disconnect.
+- iOS and Android keep a 30-day on-device history (`share_events`, `share_points`) in the protected queue database for the user's own map, timeline and activity log. It is never uploaded and is cleared on disconnect. Android draws the track on a plain Compose canvas with no map tiles.
 - The platform's raw buffer is not the app's permanent ride database. Saved/derived rides require app-owned retention and deletion, disclosed separately.
 - App/account/device deletion uses cascading foreign keys. Publisher changes invalidate reads/writes immediately and maintenance removes obsolete grants.
 - Android backup and device transfer exclude credentials and location data. The app makes no coordinates or tokens available to other Android apps, URLs, logs or analytics.

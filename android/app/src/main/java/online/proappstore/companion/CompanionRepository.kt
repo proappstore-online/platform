@@ -7,13 +7,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
 
 class CompanionRepository(val local: LocalStore, private val secure: SecureStore, private val api: PasApi) {
     private val operations = Mutex()
     fun token(): String? = try { secure.read().optString("token").takeIf { it.isNotBlank() } } catch (_: Exception) {
-        local.paused = true; local.message = "The device connection could not be unlocked. Reconnect your account."; null
+        local.stop("unlock_failed"); local.message = "The device connection could not be unlocked. Reconnect your account."; null
     }
     fun pairingCode(): String = try { secure.read().optString("pairId").take(8).uppercase() } catch (_: Exception) { "" }
     suspend fun startSignIn(): String = withContext(Dispatchers.IO) { operations.withLock {
@@ -48,7 +49,8 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         if (app.id in local.blocked()) api.request("DELETE", "/native/apps/${app.id}/location", credential)
         api.request("PUT", "/native/apps/${app.id}/location", credential, JSONObject().put("version", app.version).put("enabled", true))
         updateMe(api.request("GET", "/native/me", credential))
-        local.unblock(app.id); local.resume(app.id); local.paused = false; local.message = ""
+        local.unblock(app.id); local.record(ShareEvent.Kind.ENABLED, app.id)
+        local.resume(app.id); local.paused = false; local.message = ""
     } }
     suspend fun disable(app: ConnectedApp) = withContext(Dispatchers.IO) {
         local.block(app.id) // Immediate, durable local stop even without network; recipient removed from the queue.
@@ -63,6 +65,7 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     } }
     suspend fun sync() = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: return@withLock
+        var uploading = false; var partial = false
         try {
             val blocked = local.blocked()
             for (id in blocked) api.request("DELETE", "/native/apps/$id/location", credential)
@@ -72,16 +75,26 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
             repeat(10) {
                 val batch = local.pending()
                 if (batch.isEmpty()) return@repeat
+                uploading = true
                 val result = api.request("POST", "/native/locations", credential, JSONObject().put("points", JSONArray(batch.map { it.json() })))
                 val ack = result.getJSONArray("acknowledged")
                 val ids = (0 until ack.length()).map { ack.getString(it) }
-                check(ids.toSet() == batch.map { it.id }.toSet()) { "Upload was not fully acknowledged. Device copy retained." }
+                if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
                 local.acknowledge(ids)
             }
-            local.lastSync = System.currentTimeMillis(); local.message = ""
+            local.lastSync = System.currentTimeMillis(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
+            runCatching { local.syncSucceeded() }
         } catch (e: Exception) {
-            if (e is ApiFailure && e.status == 401) local.paused = true
+            if (e is ApiFailure && e.status == 401) local.stop("signed_out")
             local.message = if (e is ApiFailure) e.message ?: "Reconnect your account." else "Waiting to sync. Location stays on this phone."
+            local.lastSyncAttempt = System.currentTimeMillis(); local.lastSyncError = e.message ?: local.message
+            // Activity log: status (0 = network) plus the server's `error` text only.
+            val status = (e as? ApiFailure)?.status ?: if (e is IOException) 0 else null
+            if (runCatching { local.syncFailed(status?.let { "$it ${e.message ?: ""}".trim() } ?: (e.message ?: "")) }.getOrDefault(false)) runCatching {
+                if (status == 429) local.record(ShareEvent.Kind.QUOTA, detail = "429")
+                if (uploading && (status == 400 || status == 413)) local.record(ShareEvent.Kind.UPLOAD_REJECTED, detail = "$status")
+                if (partial) local.record(ShareEvent.Kind.UPLOAD_REJECTED, detail = "partial_ack")
+            }
             throw e
         }
     } }

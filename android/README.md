@@ -30,6 +30,8 @@ The [release runbook](../docs/native-android-release.md) follows HeartFull's sig
 - Private SQLite offline queue, exact upload acknowledgement, Keystore-protected installation credential.
 - Immediate local revoke, queued server revoke, reconnect/upload and device disconnect.
 - Consumer UI in Compose, system light/dark theme, explicit status/error states.
+- Store tab: the public `catalogue.json`, cached and revalidated, images through a small credential-free cache (no image library). **Open** adds `?install=1`, which the host turns into an Install button.
+- Sharing control room: per-app state, shared time today, upload queue, sync health, device status, a Canvas track view (no map tiles) and the on-device activity log, from a 30-day history that never leaves the phone.
 
 Location permission alone does not authorize an app. Each sample captures its recipient grants; the server rechecks them. Revoked grants and old account queues cannot be adopted by a new consent.
 

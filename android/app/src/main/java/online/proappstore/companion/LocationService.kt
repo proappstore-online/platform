@@ -29,6 +29,7 @@ class LocationService : Service(), LocationListenerCompat {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PAUSE) { graph.local.paused = true; stopSelf(); return START_NOT_STICKY }
+        notePermission(this, graph.local)
         if (!allowed(this) || graph.repository.token() == null || graph.local.paused || recipients().isEmpty()) {
             stopSelf(); return START_NOT_STICKY
         }
@@ -43,6 +44,7 @@ class LocationService : Service(), LocationListenerCompat {
             } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return START_NOT_STICKY }
             scope.launch {
                 while (isActive) {
+                    notePermission(this@LocationService, graph.local)
                     if (!allowed(this@LocationService) || graph.local.paused || recipients().isEmpty() || graph.repository.token() == null) { stopSelf(); break }
                     try { graph.repository.sync() } catch (_: Exception) { /* durable queue is retried by WorkManager too */ }
                     getSystemService(NotificationManager::class.java).notify(1, notification())
@@ -59,6 +61,7 @@ class LocationService : Service(), LocationListenerCompat {
             LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), location.time))
         if (!LocationPolicy.valid(point, System.currentTimeMillis())) return
         lastFixAt = point.at
+        lastFix = LiveFix(point.at, point.lat, point.lng)
         scope.launch {
             try {
                 // Re-evaluate consent after crossing onto the storage dispatcher.
@@ -68,7 +71,7 @@ class LocationService : Service(), LocationListenerCompat {
                     if (retained.grants.isNotEmpty()) graph.local.enqueue(retained)
                 }
             } catch (_: Exception) {
-                graph.local.paused = true; graph.local.message = "Could not save location on this phone. Collection paused."; stopSelf()
+                graph.local.stop("storage_failed"); graph.local.message = "Could not save location on this phone. Collection paused."; stopSelf()
             }
         }
     }
@@ -90,8 +93,31 @@ class LocationService : Service(), LocationListenerCompat {
         private const val PAUSE = "online.proappstore.PAUSE"
         @Volatile var running = false
             private set
+        /** Time and place of the last accepted fix, in memory only: the map's live dot. Never a second location source. */
+        @Volatile var lastFix: LiveFix? = null
+            private set
         fun allowed(context: Context): Boolean = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
             .all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+        /** The location access ProAppStore holds: `denied`, `approximate`, `whenInUse` (precise) or `always` (precise, all the time). */
+        fun permissionState(context: Context): String {
+            fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+            return when {
+                !granted(Manifest.permission.ACCESS_FINE_LOCATION) -> if (granted(Manifest.permission.ACCESS_COARSE_LOCATION)) "approximate" else "denied"
+                granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) -> "always"
+                else -> "whenInUse"
+            }
+        }
+        /** Activity log: a permission change since the last look, never the first report. */
+        fun notePermission(context: Context, local: LocalStore) {
+            val now = permissionState(context)
+            val old = local.permissionState
+            if (old == now) return
+            if (old.isNotEmpty()) runCatching { local.record(ShareEvent.Kind.PERMISSION, detail = "$old→$now") }
+            local.permissionState = now
+        }
         fun start(context: Context) { ContextCompat.startForegroundService(context, Intent(context, LocationService::class.java)) }
     }
 }
+
+/** The collector's last accepted fix. */
+data class LiveFix(val at: Long, val lat: Double, val lng: Double)

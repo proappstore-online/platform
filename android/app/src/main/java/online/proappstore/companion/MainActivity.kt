@@ -3,11 +3,16 @@ package online.proappstore.companion
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -29,7 +35,18 @@ data class CompanionState(
     val blocked: Set<String> = emptySet(), val paused: Boolean = true, val running: Boolean = false,
     val permissions: Boolean = false, val queued: Int = 0, val message: String = "", val busy: Boolean = false,
     val pairingCode: String = "", val lastSync: Long = 0, val pausedApps: Set<String> = emptySet(),
+    // Sharing control room (#622), history (#621) and activity log (#624).
+    val now: Long = System.currentTimeMillis(), val events: List<ShareEvent> = emptyList(),
+    val pendingByApp: Map<String, Int> = emptyMap(), val lastUploadByApp: Map<String, Long> = emptyMap(),
+    val lastSyncAttempt: Long = 0, val lastSyncError: String = "", val online: Boolean = true,
+    /** `denied`, `approximate`, `whenInUse` or `always` (LocationService.permissionState). */
+    val permission: String = "", val locationOn: Boolean = true, val powerSave: Boolean = false, val batteryOptimized: Boolean = false,
+    val lastFix: LiveFix? = null, val version: String = "",
 )
+
+enum class Tab(val label: String, val icon: Int) {
+    STORE("Store", R.drawable.ic_store), SHARING("Sharing", R.drawable.ic_location), SETTINGS("Settings", R.drawable.ic_settings)
+}
 
 class MainActivity : ComponentActivity() {
     private val graph get() = application as PasApplication
@@ -41,8 +58,14 @@ class MainActivity : ComponentActivity() {
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh(); maybeStart() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
+        // Upgrade path: sessions for grants held before the history existed start at their consent time.
+        if (graph.repository.token() != null) runCatching { graph.local.seedIfEmpty() }
+        refresh()
+        // Sharing when any app has a grant, otherwise the Store.
+        val initialTab = if (state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE
         setContent {
             val colors = if (isSystemInDarkTheme()) darkColorScheme(primary = Color(0xFFC4B5FD)) else lightColorScheme(primary = Color(0xFF6D28D9))
+            val catalogue by graph.catalogue.state.collectAsState()
             MaterialTheme(colorScheme = colors) {
                 PasScreen(state.copy(busy = working, message = error.ifBlank { state.message }),
                     connect = { act { open(graph.repository.startSignIn()) } },
@@ -57,7 +80,13 @@ class MainActivity : ComponentActivity() {
                     sync = { act { graph.repository.sync() } },
                     disconnect = { act { graph.local.paused = true; stopService(Intent(this@MainActivity, LocationService::class.java)); graph.repository.disconnect() } },
                     privacy = { open("https://docs.proappstore.online/native-companion-users/") },
-                    account = { open("https://dashboard.proappstore.online") })
+                    account = { open("https://dashboard.proappstore.online") },
+                    // #628: the host shows an Install button on ?install=1. Built from the id; a renamed app redirects with the query.
+                    openApp = { app -> open("https://${app.id}.proappstore.online/?install=1") },
+                    initialTab = initialTab,
+                    store = StoreHooks(catalogue, graph.images, refresh = { refreshCatalogue() }, open = { open(it.openUrl) }, openUrl = { open(it) }),
+                    clearHistory = { runCatching { graph.local.clearHistory() }.onFailure { error = it.message ?: "Could not clear history." }; refresh() },
+                    loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } })
                 if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false },
                     title = { Text("Allow background location") },
                     text = { Text("ProAppStore collects precise location to automatically record routes for apps you enable, even when ProAppStore and those apps are closed. Updates go to PAS and only your enabled apps. Choose Precise location, then Allow all the time on the next settings screen. You can pause or revoke access here.") },
@@ -69,6 +98,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refresh(); maybeStart()
+        refreshCatalogue() // foreground only: never from location callbacks
         refreshJob?.cancel()
         refreshJob = lifecycleScope.launch {
             try { graph.repository.finishSignIn(); if (graph.repository.token() != null) graph.repository.sync() }
@@ -79,10 +109,26 @@ class MainActivity : ComponentActivity() {
     }
     override fun onPause() { refreshJob?.cancel(); super.onPause() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) /* Links only bring settings forward. No automatic permission changes. */ }
+    private fun refreshCatalogue() { lifecycleScope.launch { graph.catalogue.refresh() } }
     private fun refresh() {
-        state = CompanionState(graph.repository.token() != null, graph.local.userName, graph.local.apps(), graph.local.blocked(),
-            graph.local.paused, LocationService.running, LocationService.allowed(this), graph.local.count(), graph.local.message,
-            pairingCode = graph.repository.pairingCode(), lastSync = graph.local.lastSync, pausedApps = graph.local.pausedApps())
+        val local = graph.local
+        LocationService.notePermission(this, local)
+        val apps = local.apps()
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        val power = getSystemService(PowerManager::class.java)
+        state = CompanionState(graph.repository.token() != null, local.userName, apps, local.blocked(),
+            local.paused, LocationService.running, LocationService.allowed(this), local.count(), local.message,
+            pairingCode = graph.repository.pairingCode(), lastSync = local.lastSync, pausedApps = local.pausedApps(),
+            now = System.currentTimeMillis(), events = runCatching { local.events() }.getOrDefault(emptyList()),
+            pendingByApp = apps.associate { it.id to local.pendingCount(it.id) },
+            lastUploadByApp = apps.mapNotNull { app -> local.lastUpload(app.id)?.let { app.id to it } }.toMap(),
+            lastSyncAttempt = local.lastSyncAttempt, lastSyncError = local.lastSyncError,
+            online = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+            permission = LocationService.permissionState(this),
+            locationOn = getSystemService(LocationManager::class.java).isLocationEnabled,
+            powerSave = power.isPowerSaveMode, batteryOptimized = !power.isIgnoringBatteryOptimizations(packageName),
+            lastFix = LocationService.lastFix,
+            version = packageManager.getPackageInfo(packageName, 0).let { "${it.versionName} (${it.longVersionCode})" })
     }
     private fun act(action: suspend () -> Unit) {
         if (working) return
@@ -116,67 +162,73 @@ class MainActivity : ComponentActivity() {
     private fun open(url: String) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
 }
 
+/** Where the user is inside the Sharing tab. */
+private sealed class SharingPage {
+    data object Dashboard : SharingPage()
+    data object Map : SharingPage()
+    data class App(val id: String) : SharingPage()
+    data class Activity(val appId: String?, val from: SharingPage) : SharingPage()
+}
+
+/**
+ * The tab shell: Store, Sharing and Settings. The consent and disconnect dialogs live here so they work from every tab.
+ * The parameters up to `account` are the original screen's; the rest default so existing callers keep compiling.
+ */
 @Composable
 internal fun PasScreen(
     state: CompanionState, connect: () -> Unit, enable: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit,
     pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit,
     pause: () -> Unit, resume: () -> Unit, permissions: () -> Unit, sync: () -> Unit, disconnect: () -> Unit,
     privacy: () -> Unit, account: () -> Unit,
+    openApp: (ConnectedApp) -> Unit = {},
+    initialTab: Tab = Tab.SHARING,
+    store: StoreHooks = StoreHooks(),
+    clearHistory: () -> Unit = {},
+    loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>> = { _, _ -> emptyMap() },
 ) {
+    var tab by remember { mutableStateOf(initialTab) }
+    var sharingPage by remember { mutableStateOf<SharingPage>(SharingPage.Dashboard) }
+    var storeApp by remember { mutableStateOf<CatalogueApp?>(null) }
     var consent by remember { mutableStateOf<ConnectedApp?>(null) }
-    var disconnectPrompt by remember { mutableStateOf(false) }
-    Scaffold { padding ->
-        Column(Modifier.padding(padding).padding(horizontal = 24.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Spacer(Modifier.height(8.dp))
-            Text("ProAppStore", style = MaterialTheme.typography.headlineLarge)
-            Text("Your apps, connected to your phone", style = MaterialTheme.typography.bodyLarge)
-            if (!state.signedIn) {
-                Text("Enable background features for the PAS apps you use. You stay in control of what each app can access.")
-                Button(onClick = connect, enabled = !state.busy) { Text("Sign in to ProAppStore") }
-                if (state.pairingCode.isNotBlank()) Text("Match this code in your browser: ${state.pairingCode}")
-            } else {
-                Text(state.name, style = MaterialTheme.typography.titleMedium)
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val enabledApps = state.apps.filter { it.grantId != null && it.id !in state.blocked }
-                        Text(when { state.paused -> "Location paused"; enabledApps.isNotEmpty() && enabledApps.all { it.id in state.pausedApps } -> "All apps paused"; !state.permissions -> "Location permission needed"; state.running -> "Location sharing is on"; else -> "Location is not running" }, style = MaterialTheme.typography.titleLarge)
-                        if (!state.permissions) Button(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
-                        else if (state.paused) Button(onClick = resume, enabled = !state.busy && state.apps.any { it.grantId != null && it.id !in state.blocked }) { Text("Resume location") }
-                        else OutlinedButton(onClick = pause) { Text("Pause all") }
-                        Text("${state.queued} updates waiting to sync", style = MaterialTheme.typography.bodyMedium)
-                        if (state.lastSync > 0) Text("Last sync: ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(state.lastSync))}", style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = sync, enabled = !state.busy) { Text("Sync now") }
-                    }
-                }
-                Text("App permissions", style = MaterialTheme.typography.titleLarge)
-                if (state.apps.isEmpty()) Text("No supported native features are available for your apps yet.")
-                state.apps.forEach { app ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(app.name, style = MaterialTheme.typography.titleMedium)
-                            Text("Background location", style = MaterialTheme.typography.bodyMedium)
-                            val enabled = app.grantId != null && app.id !in state.blocked
-                            val appPaused = app.id in state.pausedApps
-                            Text(if (!enabled) "Off" else if (appPaused) "Paused" else "Sharing", color = MaterialTheme.colorScheme.primary)
-                            if (app.id in state.blocked) Text("Disabled on this phone. Server revocation will finish when connected.", style = MaterialTheme.typography.bodySmall)
-                            Row {
-                                if (enabled) {
-                                    if (appPaused) TextButton(onClick = { resumeApp(app) }, enabled = !state.paused) { Text("Resume") }
-                                    else TextButton(onClick = { pauseApp(app) }) { Text("Pause") }
-                                }
-                                TextButton(onClick = { if (enabled) disable(app) else consent = app }, enabled = !state.busy) { Text(if (enabled) "Disable" else "Enable") }
-                            }
-                            if (state.paused && enabled && appPaused) Text("All sharing is paused. Resume location to continue.", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-                TextButton(onClick = account) { Text("Manage account") }
-                TextButton(onClick = { disconnectPrompt = true }, enabled = !state.busy) { Text("Disconnect this phone") }
+    BackHandler(enabled = (tab == Tab.SHARING && sharingPage != SharingPage.Dashboard) || (tab == Tab.STORE && storeApp != null)) {
+        if (tab == Tab.STORE) storeApp = null
+        else sharingPage = (sharingPage as? SharingPage.Activity)?.from ?: SharingPage.Dashboard
+    }
+    Scaffold(bottomBar = {
+        NavigationBar {
+            Tab.entries.forEach { t ->
+                NavigationBarItem(selected = tab == t, onClick = { if (tab == t) { storeApp = null; sharingPage = SharingPage.Dashboard }; tab = t },
+                    icon = { Icon(painterResource(t.icon), contentDescription = null) }, label = { Text(t.label) })
             }
-            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (state.message.isNotBlank()) Text(state.message, color = MaterialTheme.colorScheme.error)
-            TextButton(onClick = privacy) { Text("How your data is used") }
-            Spacer(Modifier.height(24.dp))
+        }
+    }) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when (tab) {
+                Tab.STORE -> storeApp?.let { app -> StoreAppScreen(app, state, store, connect, { consent = it }, disable) { storeApp = null } }
+                    ?: StoreScreen(state, store) { storeApp = it }
+                Tab.SHARING -> when (val page = sharingPage) {
+                    SharingPage.Dashboard -> {
+                        val granted = state.apps.filter { it.grantId != null }
+                        val tracks = rememberTracks(granted, state, SharingTimeline.today(state.now), loadTracks)
+                        SharingDashboard(state, tracks, connect, { consent = it }, disable, pauseApp, resumeApp, pause, resume, permissions, sync, openApp,
+                            showApp = { sharingPage = SharingPage.App(it.id) }, showActivity = { sharingPage = SharingPage.Activity(null, page) },
+                            showMap = { sharingPage = SharingPage.Map })
+                    }
+                    SharingPage.Map -> Column(Modifier.padding(horizontal = 16.dp).fillMaxSize()) {
+                        BackRow("Sharing") { sharingPage = SharingPage.Dashboard }
+                        Text("Today", style = MaterialTheme.typography.headlineMedium)
+                        val granted = state.apps.filter { it.grantId != null }
+                        TrackMap(rememberTracks(granted, state, SharingTimeline.today(state.now), loadTracks), state.liveFix(), interactive = true,
+                            modifier = Modifier.fillMaxSize().padding(bottom = 8.dp))
+                    }
+                    is SharingPage.App -> state.apps.find { it.id == page.id }?.let { app ->
+                        AppSharingScreen(state, app, loadTracks, pauseApp, resumeApp, disable, openApp,
+                            showActivity = { sharingPage = SharingPage.Activity(app.id, page) }, back = { sharingPage = SharingPage.Dashboard })
+                    } ?: LaunchedEffect(page) { sharingPage = SharingPage.Dashboard } // the app left /native/me
+                    is SharingPage.Activity -> ActivityScreen(state, page.appId) { sharingPage = page.from }
+                }
+                Tab.SETTINGS -> SettingsScreen(state, connect, permissions, disconnect, privacy, account, clearHistory, store.openUrl)
+            }
         }
     }
     consent?.let { app -> AlertDialog(onDismissRequest = { consent = null },
@@ -184,9 +236,59 @@ internal fun PasScreen(
         text = { Text(app.disclosure) },
         confirmButton = { TextButton(onClick = { consent = null; enable(app) }) { Text("Enable for ${app.name}") } },
         dismissButton = { TextButton(onClick = { consent = null }) { Text("Cancel") } }) }
+}
+
+/** Busy indicator and the last error, at the top of each tab. */
+@Composable
+internal fun StatusMessages(state: CompanionState) {
+    if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (state.message.isNotBlank()) Text(state.message, color = MaterialTheme.colorScheme.error)
+}
+
+/** Account, permissions, history and About. */
+@Composable
+private fun SettingsScreen(
+    state: CompanionState, connect: () -> Unit, permissions: () -> Unit, disconnect: () -> Unit, privacy: () -> Unit, account: () -> Unit,
+    clearHistory: () -> Unit, openUrl: (String) -> Unit,
+) {
+    var disconnectPrompt by remember { mutableStateOf(false) }
+    var clearPrompt by remember { mutableStateOf(false) }
+    Column(Modifier.padding(horizontal = 24.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Spacer(Modifier.height(8.dp))
+        Text("Settings", style = MaterialTheme.typography.headlineLarge)
+        StatusMessages(state)
+        if (state.signedIn) {
+            Text(state.name, style = MaterialTheme.typography.titleMedium)
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Labeled("Location permission", Format.permission[state.permission] ?: state.permission)
+                    if (state.permission != "always") TextButton(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
+                    else Text("Precise location is allowed all the time.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            TextButton(onClick = account) { Text("Manage account") }
+            TextButton(onClick = { clearPrompt = true }) { Text("Clear sharing history") }
+            TextButton(onClick = { disconnectPrompt = true }, enabled = !state.busy) { Text("Disconnect this phone") }
+        } else Button(onClick = connect, enabled = !state.busy) { Text("Sign in to ProAppStore") }
+        Text("About", style = MaterialTheme.typography.titleLarge)
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Labeled("Version", state.version)
+                Labeled("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            }
+        }
+        TextButton(onClick = privacy) { Text("How your data is used") }
+        TextButton(onClick = { openUrl("https://proappstore.online/privacy") }) { Text("Privacy policy") }
+        Spacer(Modifier.height(24.dp))
+    }
     if (disconnectPrompt) AlertDialog(onDismissRequest = { disconnectPrompt = false },
         title = { Text("Disconnect this phone?") },
-        text = { Text("Stops location sharing and deletes this phone’s pending updates and platform location copies. Saved rides in your apps are separate. An internet connection is needed to finish.") },
+        text = { Text("Stops location sharing and deletes this phone’s pending updates, its sharing history and platform location copies. Saved rides in your apps are separate. An internet connection is needed to finish.") },
         confirmButton = { TextButton(onClick = { disconnectPrompt = false; disconnect() }) { Text("Disconnect") } },
         dismissButton = { TextButton(onClick = { disconnectPrompt = false }) { Text("Cancel") } })
+    if (clearPrompt) AlertDialog(onDismissRequest = { clearPrompt = false },
+        title = { Text("Clear sharing history?") },
+        text = { Text("Deletes the sharing map, timeline and activity kept on this phone. Updates waiting to sync still upload.") },
+        confirmButton = { TextButton(onClick = { clearPrompt = false; clearHistory() }) { Text("Clear history") } },
+        dismissButton = { TextButton(onClick = { clearPrompt = false }) { Text("Cancel") } })
 }
