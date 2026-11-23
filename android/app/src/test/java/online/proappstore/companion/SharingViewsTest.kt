@@ -64,6 +64,9 @@ class SharingViewsTest {
             Triple(PERMISSION, "always→approximate", "Precise location turned off: recording stopped"),
             Triple(QUEUE_FULL, "", "Storage queue full: recording stopped until uploads catch up"),
             Triple(EXPIRED, "", "Connection to ProAppStore expired: sharing stopped"),
+            Triple(HEART_RATE, "enabled", "Run heart rate turned on"),
+            Triple(HEART_RATE_PROBLEM, "queue_full", "Heart-rate queue full: heart rate stopped until uploads catch up"),
+            Triple(BLUETOOTH, "on", "Bluetooth turned on"),
         )
         assertEquals(ShareEvent.Kind.entries.toSet(), table.map { it.first }.toSet())
         table.forEach { (kind, detail, expected) -> assertEquals(expected, sentence(kind, detail)) }

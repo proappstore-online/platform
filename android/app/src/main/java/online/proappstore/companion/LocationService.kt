@@ -16,6 +16,10 @@ import androidx.core.location.LocationListenerCompat
 import kotlinx.coroutines.*
 import java.util.UUID
 
+/**
+ * The one collector service: location, Run's strap heart rate (#634), or both. It runs in the foreground with only the
+ * types whose permission is held and that have an active grant ([CollectorTypes]), and re-checks them every 30 s.
+ */
 class LocationService : Service(), LocationListenerCompat {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val graph get() = application as PasApplication
@@ -25,6 +29,10 @@ class LocationService : Service(), LocationListenerCompat {
     /** The last fix that became a queued point (#639), and when the collector last synced. */
     private var lastEmitted: TrackPoint? = null
     private var lastSyncAt = 0L
+    private var types = CollectorTypes(location = false, connectedDevice = false)
+    private var listening = false
+    private var gatt: HeartRateGatt? = null
+    private val heartRatePolicy = HeartRatePolicy()
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
@@ -32,41 +40,96 @@ class LocationService : Service(), LocationListenerCompat {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PAUSE) { graph.local.paused = true; stopSelf(); return START_NOT_STICKY }
-        notePermission(this, graph.local)
-        if (!allowed(this) || !graph.repository.collecting()) { stopSelf(); return START_NOT_STICKY }
+        notePermission(this, graph.local); Bluetooth.note(this, graph.local)
+        val wanted = desired()
+        if (!wanted.any) { stopSelf(); return START_NOT_STICKY }
         try {
-            startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            startForeground(1, notification(wanted), mask(wanted))
         } catch (_: IllegalStateException) {
             // Android 12+ refuses a foreground start from the background (ForegroundServiceStartNotAllowedException),
             // which is what a START_STICKY restart after the process was killed is. Opening ProAppStore starts it again.
-            graph.local.message = "Android stopped location sharing in the background. Open ProAppStore to resume."
+            graph.local.message = "Android stopped sharing in the background. Open ProAppStore to resume."
             stopSelf(); return START_NOT_STICKY
         }
+        if (!apply(wanted)) return START_NOT_STICKY
         if (!started) {
-            started = true; running = true
-            try {
-                // Native Android API; no WebView timers, Google account or Play Services dependency.
-                for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                    // No distance filter: LocationPolicy.shouldEmit decides, and needs fixes while still for the heartbeat.
-                    if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 0f, this, Looper.getMainLooper())
-                }
-            } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return START_NOT_STICKY }
+            started = true
             scope.launch {
                 while (isActive) {
-                    notePermission(this@LocationService, graph.local)
-                    if (!allowed(this@LocationService) || !graph.repository.collecting()) { stopSelf(); break }
+                    delay(30_000)
+                    notePermission(this@LocationService, graph.local); Bluetooth.note(this@LocationService, graph.local)
+                    val next = desired()
+                    if (!next.any) { stopSelf(); break }
+                    if (next != types) withContext(Dispatchers.Main) {
+                        // A permission revoked or a grant ended: keep running with the types that remain.
+                        try { startForeground(1, notification(next), mask(next)) } catch (_: RuntimeException) { stopSelf() }
+                        apply(next)
+                    }
                     // Battery: no request while there is nothing to upload or revoke, apart from a grant refresh.
                     val now = System.currentTimeMillis()
-                    if (LocationPolicy.syncDue(graph.local.count(), graph.local.blocked().isNotEmpty(), lastSyncAt, now)) {
+                    if (LocationPolicy.syncDue(graph.local.count() + graph.local.heartRateCount(), graph.local.blocked().isNotEmpty(), lastSyncAt, now)) {
                         lastSyncAt = now
                         try { graph.repository.sync() } catch (_: Exception) { /* durable queue is retried by WorkManager too */ }
                     }
-                    getSystemService(NotificationManager::class.java).notify(1, notification())
-                    delay(30_000)
+                    getSystemService(NotificationManager::class.java).notify(1, notification(types))
                 }
             }
         }
         return START_STICKY
+    }
+
+    /** The types to run now. Heart rate wanted without Bluetooth permission says so: location carries on. */
+    private fun desired(): CollectorTypes {
+        val heartRate = graph.repository.collectingHeartRate()
+        val bluetooth = Bluetooth.permitted(this)
+        if (heartRate && !bluetooth) graph.local.message = "Bluetooth permission is off, so heart rate stopped. Location sharing continues."
+        return CollectorTypes.select(allowed(this), graph.repository.collecting(), bluetooth, heartRate)
+    }
+
+    private fun mask(t: CollectorTypes): Int = (if (t.location) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0) or
+        (if (t.connectedDevice) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0)
+
+    /** Starts or stops each collector to match `t`. False when it had to stop the service. */
+    private fun apply(t: CollectorTypes): Boolean {
+        types = t; running = t.location
+        if (t.location && !listening) try {
+            // Native Android API; no WebView timers, Google account or Play Services dependency.
+            for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                // No distance filter: LocationPolicy.shouldEmit decides, and needs fixes while still for the heartbeat.
+                if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 0f, this, Looper.getMainLooper())
+            }
+            listening = true
+        } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return false }
+        if (!t.location && listening) { manager.removeUpdates(this); listening = false }
+        val address = graph.local.heartRateSensor
+        if (gatt != null && (!t.connectedDevice || gatt?.address != address)) { gatt?.close(); gatt = null; heartRateConnected = false }
+        if (t.connectedDevice && gatt == null && address != null) {
+            gatt = HeartRateGatt(this, address, ::onHeartRate, ::onSensor).also { it.connect() }
+        }
+        return true
+    }
+
+    private fun onSensor(connected: Boolean) {
+        val was = heartRateConnected
+        heartRateConnected = connected
+        if (connected && !was) runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "connected") }
+        // Lost while still wanted (out of range, strap off); autoConnect brings it back.
+        if (!connected && was && types.connectedDevice) runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "lost") }
+    }
+
+    private fun onHeartRate(data: ByteArray) {
+        val now = System.currentTimeMillis()
+        val reading = HeartRateMeasurement.parse(data) ?: return
+        synchronized(heartRatePolicy) { if (!heartRatePolicy.accept(reading.contact, now)) return }
+        lastBpm = reading.bpm; lastReadingAt = now
+        scope.launch {
+            try {
+                graph.local.enqueueHeartRate(HeartRateSample(UUID.randomUUID().toString(), now, reading.bpm, graph.repository.heartRateRecipients()))
+            } catch (e: Exception) {
+                // Stops visibly: collectingHeartRate() is false at the cap, so the next check drops the type.
+                graph.local.message = if (e is HeartRateQueueFull) e.message!! else "Could not save heart rate on this phone."
+            }
+        }
     }
     override fun onLocationChanged(location: Location) {
         if (graph.local.paused || !allowed(this) || location.time <= lastFixAt) return
@@ -93,21 +156,34 @@ class LocationService : Service(), LocationListenerCompat {
     }
     override fun onProviderDisabled(provider: String) { graph.local.message = "Location is switched off. Waiting for a GPS signal." }
     override fun onDestroy() {
-        manager.removeUpdates(this); scope.cancel(); running = false
+        manager.removeUpdates(this); gatt?.close(); gatt = null; scope.cancel(); running = false; heartRateConnected = false
         stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy()
     }
-    private fun notification(): Notification {
+    private fun notification(t: CollectorTypes): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val pause = PendingIntent.getService(this, 1, Intent(this, LocationService::class.java).setAction(PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val apps = graph.local.apps().filter { it.grantId != null && it.id !in graph.local.excluded() }.joinToString { it.name }
-        return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_location).setContentTitle("ProAppStore location sharing")
-            .setContentText(if (lastFixAt == 0L || System.currentTimeMillis() - lastFixAt > 30_000) "Waiting for GPS · $apps" else "Sharing with $apps")
+        val excluded = graph.local.excluded()
+        val locationApps = if (t.location) graph.local.apps().filter { it.grantId != null && it.id !in excluded }.map { it.name } else emptyList()
+        val heartRateApps = if (t.connectedDevice) graph.local.entries().filter { it.capability == HeartRate.CAPABILITY && it.grantId != null &&
+            it.key !in graph.local.blocked() && it.appId !in graph.local.pausedApps() }.map { it.appName } else emptyList()
+        val text = CollectorTypes.notificationText(locationApps, heartRateApps)
+        val waiting = t.location && (lastFixAt == 0L || System.currentTimeMillis() - lastFixAt > 30_000)
+        return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_location).setContentTitle("ProAppStore sharing")
+            .setContentText(if (waiting) "Waiting for GPS · $text" else text)
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(0, "Pause all", pause).build()
     }
     companion object {
         private const val CHANNEL = "pas-location"
         private const val PAUSE = "online.proappstore.PAUSE"
+        /** Location is being recorded. */
         @Volatile var running = false
+            private set
+        /** Run's strap (#634): connected, and its last accepted reading. In memory only. */
+        @Volatile var heartRateConnected = false
+            private set
+        @Volatile var lastBpm: Int? = null
+            private set
+        @Volatile var lastReadingAt = 0L
             private set
         /** Time and place of the last accepted fix, in memory only: the map's live dot. Never a second location source. */
         @Volatile var lastFix: LiveFix? = null
@@ -132,6 +208,9 @@ class LocationService : Service(), LocationListenerCompat {
             local.permissionState = now
         }
         fun start(context: Context) { ContextCompat.startForegroundService(context, Intent(context, LocationService::class.java)) }
+        /** Whether the service has anything to run: location with its permission, or heart rate with Bluetooth's. */
+        fun wanted(context: Context, repository: CompanionRepository): Boolean =
+            (allowed(context) && repository.collecting()) || (Bluetooth.permitted(context) && repository.collectingHeartRate())
     }
 }
 

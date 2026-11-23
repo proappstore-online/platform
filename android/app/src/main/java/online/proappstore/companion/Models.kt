@@ -4,6 +4,15 @@ data class ConnectedApp(
     val id: String, val name: String, val purpose: String, val disclosure: String,
     val version: String, val grantId: String?, val consentAt: Long = 0,
 )
+/** One reviewed (app, capability) entry from `GET /native/me` `capabilities` (ADR-018 §7); `apps` stays location's. Ported from iOS Models.swift. */
+data class NativeEntry(
+    val appId: String, val appName: String, val capability: String, val name: String, val purpose: String, val disclosure: String,
+    val version: String, val grantId: String?, val consentAt: Long = 0,
+) {
+    /** The on-phone `blocked` key: the bare app id for location, as before #634, else `app/capability`. */
+    val key: String get() = if (capability == LOCATION) appId else "$appId/$capability"
+    companion object { const val LOCATION = "location.background" }
+}
 data class TrackPoint(val id: String, val at: Long, val lat: Double, val lng: Double, val accuracy: Float, val grants: List<String>)
 
 /** One shared point from the on-device history. `sentAt` null = still waiting to upload. */
@@ -19,7 +28,13 @@ data class ShareEvent(val id: Long, val at: Long, val appId: String?, val kind: 
         SYNC_FAILED("sync_failed"), SYNC_RECOVERED("sync_recovered"), UPLOAD_REJECTED("upload_rejected"), QUOTA("quota"),
         PERMISSION("permission"), QUEUE_FULL("queue_full"), GRANT_RESTORED("grant_restored"),
         /** The device connection expired or was revoked (#652); `detail` "renew" when the user reconnected early. */
-        EXPIRED("expired");
+        EXPIRED("expired"),
+        /**
+         * Heart rate (#634). `HEART_RATE` detail: enabled, disabled, sensor_chosen, connected, lost, forgotten.
+         * `HEART_RATE_PROBLEM` detail: queue_full, partial_ack, or a rejected upload's status. `BLUETOOTH` detail: off, on,
+         * unauthorized. Sessions ignore all three: location sessions stay location's.
+         */
+        HEART_RATE("heart_rate"), HEART_RATE_PROBLEM("heart_rate_problem"), BLUETOOTH("bluetooth");
         companion object { fun of(raw: String): Kind? = entries.firstOrNull { it.raw == raw } }
     }
 }

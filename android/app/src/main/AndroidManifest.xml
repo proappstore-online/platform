@@ -7,6 +7,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Run's strap heart rate (#634). The scan never derives location; it lists heart-rate sensors only. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <application android:name=".PasApplication" android:label="ProAppStore"
         android:icon="@drawable/ic_pas" android:theme="@style/Theme.ProAppStore"
         android:allowBackup="false" android:fullBackupContent="false"
@@ -25,6 +32,6 @@
                 <data android:scheme="proappstore" android:host="native" />
             </intent-filter>
         </activity>
-        <service android:name=".LocationService" android:exported="false" android:foregroundServiceType="location" />
+        <service android:name=".LocationService" android:exported="false" android:foregroundServiceType="location|connectedDevice" />
     </application>
 </manifest>

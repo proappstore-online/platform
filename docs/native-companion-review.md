@@ -40,6 +40,12 @@ Source: [App Review Guidelines](https://developer.apple.com/app-store/review/gui
 
 **App Review 5.1.3 (health and fitness data).** The specific data is disclosed before the grant (bpm and time only; the sensor's name and identifier stay on the phone). It is never used for advertising or marketing, never written to iCloud (the queue and history file is excluded from backup), and it is made available only to Run, for that user's own fitness record, with the user's permission. HealthKit is not used.
 
+**Google Play.** The collector's foreground service declares `location|connectedDevice` and starts with only the types whose permission is held and whose grant is active.
+
+- *Foreground-service declaration, `connectedDevice`:* "ProAppStore keeps a connection to a Bluetooth heart-rate strap the user chose, while they exercise, so the readings reach the fitness app they enabled (Run) with the screen off. The ongoing notification names what is shared and offers Pause; turning heart rate off or forgetting the sensor ends the connection."
+- *Data Safety:* **Health and fitness → Fitness info**: collected, shared with the enabled PAS app for the user's account, not used for advertising, encrypted in transit, deletable (turn off, disconnect, or delete the app account); not processed ephemerally; required only for the heart-rate feature, which is optional.
+- Bluetooth permissions: `BLUETOOTH_SCAN` with `neverForLocation` and `BLUETOOTH_CONNECT` on API 31+, the legacy `BLUETOOTH`/`BLUETOOTH_ADMIN` up to API 30. On Android 10 and 11 the platform requires fine location for any BLE scan, so Choose sensor asks for it there; the scan still lists heart-rate sensors only.
+
 ## Relevant precedents
 
 - **OwnTracks** is listed on [App Store](https://apps.apple.com/us/app/owntracks/id692424691) and [Google Play](https://play.google.com/store/apps/details?id=org.owntracks.android). Its [documented architecture](https://owntracks.org/booklet/guide/whathow/) publishes background location to a server for downstream use.

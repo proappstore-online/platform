@@ -20,6 +20,11 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     fun recipients(): List<String> = LocationPolicy.recipients(local.apps(), local.excluded(), System.currentTimeMillis())
     /** Whether collection should run, permissions aside: connected, not paused, and some app would receive a fix. */
     fun collecting(): Boolean = token() != null && !local.paused && recipients().isNotEmpty()
+    /** Heart-rate grants that may receive a reading taken now (#634). */
+    fun heartRateRecipients(): List<String> = HeartRatePolicy.recipients(local.entries(), local.blocked(), local.pausedApps(), System.currentTimeMillis())
+    /** Whether the strap should be connected, permissions aside: connected account, not paused, a sensor, a grant, queue room. */
+    fun collectingHeartRate(): Boolean = token() != null && !local.paused && local.heartRateSensor != null &&
+        heartRateRecipients().isNotEmpty() && local.heartRateCount() < HeartRatePolicy.MAX_QUEUE
     fun pairingCode(): String = try { secure.read().optString("pairId").take(8).uppercase() } catch (_: Exception) { "" }
     suspend fun startSignIn(): String = withContext(Dispatchers.IO) { operations.withLock {
         check(token() == null) { "Disconnect this account before connecting another." }
@@ -56,6 +61,7 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         local.userName = me.getJSONObject("user").getString("name")
         local.deviceExpiresAt = me.optJSONObject("device")?.optLong("expiresAt") ?: 0
         local.saveApps(me.getJSONArray("apps"))
+        local.saveEntries(me.optJSONArray("capabilities") ?: JSONArray())
     }
     suspend fun enable(app: ConnectedApp) = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: error("Sign in first.")
@@ -70,6 +76,19 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         local.block(app.id) // Immediate, durable local stop even without network; recipient removed from the queue.
         sync()
     }
+    /** A non-location capability (#634), through `/native/apps/:id/capabilities/:capability`. Location keeps its own path. */
+    suspend fun enable(entry: NativeEntry) = withContext(Dispatchers.IO) { operations.withLock {
+        val credential = token() ?: error("Sign in first.")
+        val path = grantPath(entry.key)
+        if (entry.key in local.blocked()) device("DELETE", path, credential)
+        device("PUT", path, credential, JSONObject().put("version", entry.version).put("enabled", true))
+        updateMe(device("GET", "/native/me", credential))
+        local.unblock(entry.key); local.record(ShareEvent.Kind.HEART_RATE, entry.appId, "enabled"); local.message = ""
+    } }
+    suspend fun disable(entry: NativeEntry) = withContext(Dispatchers.IO) {
+        local.block(entry.key)
+        sync()
+    }
     suspend fun disconnect() = withContext(Dispatchers.IO) { operations.withLock {
         local.paused = true
         token()?.let { credential ->
@@ -79,10 +98,10 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     } }
     suspend fun sync() = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: return@withLock
-        var uploading = false; var partial = false
+        var uploading = false; var partial = false; var heartRateStage = false
         try {
             val blocked = local.blocked()
-            for (id in blocked) device("DELETE", "/native/apps/$id/location", credential)
+            for (key in blocked) device("DELETE", grantPath(key), credential)
             updateMe(device("GET", "/native/me", credential))
             for (id in blocked) local.unblock(id)
             local.expire(System.currentTimeMillis())
@@ -96,18 +115,33 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
                 if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
                 local.acknowledge(ids)
             }
+            // Heart rate after points (#634), under its own quota and the same exact-acknowledgement rule.
+            heartRateStage = true
+            repeat(10) {
+                val batch = local.pendingHeartRate()
+                if (batch.isEmpty()) return@repeat
+                uploading = true
+                val result = device("POST", "/native/heart-rate", credential, JSONObject().put("samples", JSONArray(batch.map { it.json() })))
+                val ack = result.getJSONArray("acknowledged")
+                val ids = (0 until ack.length()).map { ack.getString(it) }
+                if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
+                local.acknowledgeHeartRate(ids)
+            }
+            local.heartRateSyncError = ""
             local.lastSync = System.currentTimeMillis(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
             runCatching { local.syncSucceeded() }
         } catch (e: Exception) {
             if (DeviceConnection.expired(e)) throw e // the expired card says it, not a sync failure
             local.message = if (e is ApiFailure) e.message ?: "Reconnect your account." else "Waiting to sync. Location stays on this phone."
             local.lastSyncAttempt = System.currentTimeMillis(); local.lastSyncError = e.message ?: local.message
+            if (heartRateStage) local.heartRateSyncError = e.message ?: local.message
+            val rejected = if (heartRateStage) ShareEvent.Kind.HEART_RATE_PROBLEM else ShareEvent.Kind.UPLOAD_REJECTED
             // Activity log: status (0 = network) plus the server's `error` text only.
             val status = (e as? ApiFailure)?.status ?: if (e is IOException) 0 else null
             if (runCatching { local.syncFailed(status?.let { "$it ${e.message ?: ""}".trim() } ?: (e.message ?: "")) }.getOrDefault(false)) runCatching {
                 if (status == 429) local.record(ShareEvent.Kind.QUOTA, detail = "429")
-                if (uploading && (status == 400 || status == 413)) local.record(ShareEvent.Kind.UPLOAD_REJECTED, detail = "$status")
-                if (partial) local.record(ShareEvent.Kind.UPLOAD_REJECTED, detail = "partial_ack")
+                if (uploading && (status == 400 || status == 413)) local.record(rejected, detail = "$status")
+                if (partial) local.record(rejected, detail = "partial_ack")
             }
             throw e
         }
@@ -128,6 +162,10 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     } catch (e: ApiFailure) {
         if (DeviceConnection.expired(e)) expire()
         throw e
+    }
+    companion object {
+        /** The grant path for a [NativeEntry.key]: a bare app id is location's original path. */
+        fun grantPath(key: String): String = key.split('/', limit = 2).let { if (it.size == 2) "/native/apps/${it[0]}/capabilities/${it[1]}" else "/native/apps/$key/location" }
     }
     /** Drops the credential, so collection stops, and keeps everything on the phone for Reconnect. */
     private fun expire(detail: String = "") { local.markExpired(secure.read().optString("userId"), detail); secure.clear() }

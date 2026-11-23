@@ -1,6 +1,7 @@
 package online.proappstore.companion
 
 import android.text.format.DateFormat
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -14,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +112,7 @@ internal fun SharingDashboard(
     pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit, pause: () -> Unit, resume: () -> Unit,
     permissions: () -> Unit, sync: () -> Unit, openApp: (ConnectedApp) -> Unit,
     showApp: (ConnectedApp) -> Unit, showActivity: () -> Unit, showMap: () -> Unit, reconnect: () -> Unit = {},
+    heartRate: HeartRateHooks = HeartRateHooks(),
 ) {
     Column(Modifier.padding(horizontal = 24.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Spacer(Modifier.height(8.dp))
@@ -129,7 +133,7 @@ internal fun SharingDashboard(
             if (granted.isNotEmpty()) Overview(state, granted, tracks, showMap)
             if (!state.expired) Header(state, pause, resume, permissions, sync)
             if (state.apps.isEmpty() && !state.expired) Text("No supported native features are available for your apps yet.")
-            granted.forEach { AppRow(state, it, disable, pauseApp, resumeApp, openApp, showApp) }
+            granted.forEach { AppRow(state, it, disable, pauseApp, resumeApp, openApp, showApp, heartRate) }
             if (available.isNotEmpty()) {
                 Text("Available", style = MaterialTheme.typography.titleLarge)
                 available.forEach { app ->
@@ -141,6 +145,7 @@ internal fun SharingDashboard(
                                 TextButton(onClick = { askConsent(app) }, enabled = !state.busy) { Text("Enable") }
                                 TextButton(onClick = { openApp(app) }) { Text("Open ${app.name}") }
                             }
+                            HeartRateLines(state, app, heartRate)
                         }
                     }
                 }
@@ -213,7 +218,7 @@ private fun Header(state: CompanionState, pause: () -> Unit, resume: () -> Unit,
 @Composable
 private fun AppRow(
     state: CompanionState, app: ConnectedApp, disable: (ConnectedApp) -> Unit, pauseApp: (ConnectedApp) -> Unit,
-    resumeApp: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit, showApp: (ConnectedApp) -> Unit,
+    resumeApp: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit, showApp: (ConnectedApp) -> Unit, heartRate: HeartRateHooks,
 ) {
     val chip = state.stateOf(app)
     Card(Modifier.fillMaxWidth()) {
@@ -240,6 +245,82 @@ private fun AppRow(
                 if (state.enabled(app)) TurnOffMenu(app, state.busy, disable)
             }
             if (state.paused && state.enabled(app) && app.id in state.pausedApps) Text("All sharing is paused. Resume all to continue.", style = MaterialTheme.typography.bodySmall)
+            HeartRateLines(state, app, heartRate)
+        }
+    }
+}
+
+/** A non-location entry is on: granted, not disabled, connection not expired. */
+internal fun CompanionState.enabled(entry: NativeEntry) = !expired && entry.grantId != null && entry.key !in blocked
+
+/** The heart-rate line's state text (#634). Pure, so it is table-tested; the same wording as iOS. */
+internal fun CompanionState.heartRateState(entry: NativeEntry): String = when {
+    entry.key in blocked -> if (entry.grantId != null) "Turning off…" else "Off"
+    !enabled(entry) -> "Off"
+    paused || entry.appId in pausedApps -> "Paused"
+    !heartRateSensor -> "No sensor chosen"
+    bluetooth == "unauthorized" -> "Bluetooth permission needed"
+    bluetooth == "off" -> "Bluetooth is off"
+    !heartRateConnected -> "Not connected"
+    else -> listOfNotNull("Connected", heartRateBpm?.let { "$it bpm" },
+        heartRateLastUpload.takeIf { it > 0 }?.let { "uploaded ${Format.relative(it, now)}" }).joinToString(" · ")
+}
+
+/** Run's heart rate under its row: Enable, Choose sensor, state, the control room's figures, Forget sensor, Turn off. */
+@Composable
+private fun HeartRateLines(state: CompanionState, app: ConnectedApp, hooks: HeartRateHooks) {
+    state.entries.filter { it.appId == app.id && it.capability == HeartRate.CAPABILITY }.forEach { entry ->
+        HorizontalDivider()
+        Labeled("Heart rate", state.heartRateState(entry))
+        if (!state.enabled(entry)) {
+            if (entry.key !in state.blocked || entry.grantId == null) TextButton(onClick = { hooks.askConsent(entry) }, enabled = !state.busy && !state.expired) { Text("Enable heart rate") }
+            return@forEach
+        }
+        Labeled("Heart rate waiting to upload", "${state.heartRateQueued}")
+        Labeled("Heart rate last upload", state.heartRateLastUpload.takeIf { it > 0 }?.let { Format.relative(it, state.now) } ?: "None yet")
+        Labeled("Last reading", state.lastHeartRateByApp[entry.appId]?.let { "${it.bpm} bpm, ${Format.relative(it.at, state.now)}" } ?: "None yet")
+        if (state.heartRateSyncError.isNotBlank()) Text("Heart-rate upload failed: ${state.heartRateSyncError}", style = MaterialTheme.typography.bodySmall, color = Orange)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = hooks.chooseSensor) { Text(if (state.heartRateSensor) "Change sensor" else "Choose sensor") }
+            Spacer(Modifier.weight(1f))
+            var open by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { open = true }, enabled = !state.busy, modifier = Modifier.semantics { contentDescription = "More heart-rate options for ${entry.appName}" }) { Text("⋮") }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    if (state.heartRateSensor) DropdownMenuItem(text = { Text("Forget sensor") }, onClick = { open = false; hooks.forgetSensor() })
+                    DropdownMenuItem(text = { Text("Turn off heart rate for ${entry.appName}", color = MaterialTheme.colorScheme.error) }, onClick = { open = false; hooks.disable(entry) })
+                }
+            }
+        }
+    }
+}
+
+/** Heart rate over the selected range, on the track's time axis: the mean line over its min-max band. Gaps stay gaps. */
+@Composable
+internal fun HeartRateChartCard(buckets: List<HeartRateBucket>, range: LongRange) {
+    if (buckets.isEmpty()) return
+    val low = buckets.minOf { it.min }; val high = buckets.maxOf { it.max }
+    val line = Color(0xFFDC2626)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Labeled("Heart rate", "$low–$high bpm")
+            Canvas(Modifier.fillMaxWidth().height(120.dp).semantics { contentDescription = "Heart rate from $low to $high bpm" }) {
+                val span = (range.last - range.first).coerceAtLeast(1).toFloat()
+                val top = (high + 5).toFloat(); val bottom = (low - 5).coerceAtLeast(0).toFloat()
+                fun x(t: Long) = (t - range.first) / span * size.width
+                fun y(bpm: Int) = size.height * (top - bpm) / (top - bottom)
+                buckets.groupBy { it.segment }.values.forEach { segment ->
+                    val band = Path(); val mean = Path()
+                    segment.forEachIndexed { i, b -> val px = x(b.start + (b.end - b.start) / 2); if (i == 0) band.moveTo(px, y(b.max)) else band.lineTo(px, y(b.max)) }
+                    segment.asReversed().forEach { b -> band.lineTo(x(b.start + (b.end - b.start) / 2), y(b.min)) }
+                    band.close()
+                    drawPath(band, line.copy(alpha = 0.15f))
+                    segment.forEachIndexed { i, b -> val px = x(b.start + (b.end - b.start) / 2); if (i == 0) mean.moveTo(px, y(b.mean)) else mean.lineTo(px, y(b.mean)) }
+                    if (segment.size == 1) drawCircle(line, 3.dp.toPx(), androidx.compose.ui.geometry.Offset(x(segment[0].start + (segment[0].end - segment[0].start) / 2), y(segment[0].mean)))
+                    else drawPath(mean, line, style = Stroke(2.dp.toPx()))
+                }
+            }
+            Row { Text(Format.time(range.first), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)); Text(Format.time(range.last), style = MaterialTheme.typography.bodySmall) }
         }
     }
 }
@@ -289,6 +370,7 @@ internal fun AppSharingScreen(
     state: CompanionState, app: ConnectedApp, loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>>,
     pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit,
     showActivity: () -> Unit, back: () -> Unit,
+    loadHeartRate: suspend (String, LongRange) -> List<HeartRatePoint> = { _, _ -> emptyList() },
 ) {
     val sessions = remember(state.events, app.id) { SharingTimeline.sessions(state.events, app.id) }
     val current = sessions.lastOrNull()
@@ -314,6 +396,14 @@ internal fun AppSharingScreen(
         }
         TrackMap(track, if (state.sharing(app)) state.liveFix() else null, interactive = true,
             emptyText = "No location was shared with ${app.name} in this period.", modifier = Modifier.fillMaxWidth().height(320.dp))
+        // #634: the bpm chart on the track's time axis, from the on-device heart-rate history.
+        var heartRate by remember { mutableStateOf(emptyList<HeartRateBucket>()) }
+        val openEnded = range.last == state.now
+        LaunchedEffect(app.id, range.first, if (openEnded) null else range.last, state.heartRateQueued, state.heartRateLastUpload) {
+            val end = if (openEnded) System.currentTimeMillis() else range.last
+            heartRate = HeartRateChart.buckets(loadHeartRate(app.id, range.first..end), range.first..end)
+        }
+        HeartRateChartCard(heartRate, range)
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val chip = state.stateOf(app)

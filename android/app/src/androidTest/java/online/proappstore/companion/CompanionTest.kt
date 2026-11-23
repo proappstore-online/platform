@@ -161,6 +161,7 @@ class CompanionTest {
                             .put("grant", if (token == "ndev_new") JSONObject.NULL else JSONObject().put("id", "ski-g").put("consent_at", 1))))
                     "/native/auth/complete" -> JSONObject().put("token", "ndev_new")
                     "/native/locations" -> JSONObject().put("acknowledged", JSONArray(body!!.getJSONArray("points").let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("id") } }))
+                    "/native/heart-rate" -> JSONObject().put("acknowledged", JSONArray(body!!.getJSONArray("samples").let { a -> (0 until a.length()).map { a.getJSONObject(it).getString("id") } }))
                     else -> JSONObject()
                 }
                 else -> throw ApiFailure(code, "Device connection expired or was disconnected.")
@@ -438,5 +439,97 @@ class CompanionTest {
         compose.onNodeWithContentDescription("Use Ski with companion").performClick()
         compose.onNodeWithText("Enable for Ski").performClick()
         assertEquals(1, granted)
+    }
+
+    // Run's strap heart rate (#634)
+
+    /** [store] plus Run's location (`run-g`) and heart-rate (`run-hr`) entries. */
+    private fun heartRateStore(): LocalStore = store().also { local ->
+        fun entry(app: String, capability: String, grant: String) = JSONObject().put("appId", app).put("appName", app).put("capability", capability)
+            .put("name", "n").put("purpose", "p").put("disclosure", "d").put("version", "1").put("grant", JSONObject().put("id", grant).put("consent_at", 1))
+        local.saveEntries(JSONArray().put(entry("ski", "location.background", "ski-g")).put(entry("run", "location.background", "run-g")).put(entry("run", "heart_rate.ble", "run-hr")))
+    }
+    private fun sample(id: String, at: Long = System.currentTimeMillis(), bpm: Int = 140) = HeartRateSample(id, at, bpm, listOf("run-hr"))
+
+    @Test fun blockingRunHeartRateLeavesRunLocationIntact() {
+        val local = heartRateStore()
+        local.enqueueHeartRate(sample("h1"))
+        local.block("run/heart_rate.ble")
+        assertEquals(0, local.heartRateCount())
+        assertEquals(listOf("ski-g", "run-g"), LocationPolicy.recipients(local.apps(), local.excluded(), 20))
+        local.enqueue(TrackPoint("p", 20, 1.0, 2.0, 5f, listOf("run-g")))
+        assertEquals(1, local.count())
+        assertEquals(listOf("heart_rate:disabled"), local.events().filter { it.appId == "run" }.map { "${it.kind.raw}:${it.detail}" })
+        local.clear(); local.close()
+    }
+
+    @Test fun blockingRunLocationLeavesRunHeartRateIntact() {
+        val local = heartRateStore()
+        local.enqueueHeartRate(sample("h1", 10))
+        local.block("run")
+        assertEquals(listOf("run-hr"), HeartRatePolicy.recipients(local.entries(), local.blocked(), local.pausedApps(), 20))
+        local.enqueueHeartRate(sample("h2", 20))
+        assertEquals(listOf("h1", "h2"), local.pendingHeartRate().map { it.id })
+        local.clear(); local.close()
+    }
+
+    @Test fun heartRateFollowsPauseAllAndRunsPause() {
+        val local = heartRateStore()
+        local.pause("run"); local.enqueueHeartRate(sample("paused"))
+        local.resume("run"); local.paused = true; local.enqueueHeartRate(sample("all"))
+        assertEquals(0, local.heartRateCount())
+        local.clear(); local.close()
+    }
+
+    @Test fun heartRateHistoryIsKeptAcknowledgedExpiredAndCleared() {
+        val local = heartRateStore()
+        val now = 40L * 24 * 60 * 60 * 1000
+        local.enqueueHeartRate(sample("old", now - LocationPolicy.HISTORY_MS - 1))
+        local.enqueueHeartRate(sample("unsent-8d", now - LocationPolicy.RETENTION_MS - 1))
+        local.enqueueHeartRate(sample("sent-8d", now - LocationPolicy.RETENTION_MS - 2, 99))
+        local.enqueueHeartRate(sample("new", now - 1, 150))
+        local.acknowledgeHeartRate(listOf("old", "sent-8d", "new"), now)
+        assertEquals(now, local.heartRateLastUpload)
+        local.expire(now)
+        assertEquals(0, local.heartRateCount())
+        assertEquals(listOf(HeartRatePoint(now - LocationPolicy.RETENTION_MS - 2, 99), HeartRatePoint(now - 1, 150)), local.heartRate("run", 0, Long.MAX_VALUE))
+        assertEquals(HeartRatePoint(now - 1, 150), local.lastHeartRate("run"))
+        local.enqueueHeartRate(sample("queued", now))
+        local.clearHistory(now)
+        assertEquals("Clear history clears heart rate too", emptyList<HeartRatePoint>(), local.heartRate("run", 0, Long.MAX_VALUE))
+        assertEquals("and keeps the queue, like points", 1, local.heartRateCount())
+        local.heartRateSensor = "00:11:22:33:44:55"
+        local.clear()
+        assertEquals(0, local.heartRateCount()); assertNull(local.heartRateSensor)
+        local.close()
+    }
+
+    @Test fun heartRateQueueStopsAtItsCap() {
+        val local = heartRateStore()
+        local.writableDatabase.execSQL("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${HeartRatePolicy.MAX_QUEUE}) INSERT INTO hr(id, at, payload) SELECT 'h' || i, i, '{}' FROM n")
+        assertTrue(runCatching { local.enqueueHeartRate(sample("over")) }.exceptionOrNull() is HeartRateQueueFull)
+        assertEquals(HeartRatePolicy.MAX_QUEUE, local.heartRateCount())
+        assertEquals(listOf(ShareEvent.Kind.HEART_RATE_PROBLEM), local.kinds())
+        local.clear(); local.close()
+    }
+
+    @Test fun heartRateUploadsAfterPointsAndARejectionIsLoggedAsHeartRate() = kotlinx.coroutines.runBlocking {
+        for (status in listOf(200, 400)) {
+            val server = Server { if (it == "/native/heart-rate") status else 200 }
+            val repository = connected(server)
+            val local = repository.local
+            // The fake /native/me has no `capabilities`; sync stores none, so the queued sample carries its grant regardless.
+            val queued = sample("h")
+            local.writableDatabase.execSQL("INSERT INTO hr(id, at, payload) VALUES (?, ?, ?)", arrayOf<Any>(queued.id, queued.at, queued.json().toString()))
+            val result = runCatching { repository.sync() }
+            assertEquals(listOf("GET /native/me", "POST /native/locations", "POST /native/heart-rate"), server.seen)
+            if (status == 200) { assertTrue(result.isSuccess); assertEquals(0, local.heartRateCount()); assertEquals("", local.heartRateSyncError) }
+            else {
+                assertEquals(1, local.heartRateCount()); assertEquals(0, local.count())
+                assertNotEquals("", local.heartRateSyncError)
+                assertEquals(listOf("heart_rate_problem:400"), local.events().filter { it.kind == ShareEvent.Kind.HEART_RATE_PROBLEM || it.kind == ShareEvent.Kind.UPLOAD_REJECTED }.map { "${it.kind.raw}:${it.detail}" })
+            }
+            local.clear(); local.close()
+        }
     }
 }

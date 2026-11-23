@@ -1,6 +1,12 @@
 package online.proappstore.companion
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
@@ -9,6 +15,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelUuid
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -44,7 +51,16 @@ data class CompanionState(
     val lastFix: LiveFix? = null, val version: String = "",
     /** The device connection expired or was revoked (#652); [expiresInDays] is set only in its last 7 days. */
     val expired: Boolean = false, val expiresInDays: Int? = null,
+    // Run's strap heart rate (#634).
+    val entries: List<NativeEntry> = emptyList(), val heartRateQueued: Int = 0, val heartRateLastUpload: Long = 0,
+    val heartRateSyncError: String = "", val lastHeartRateByApp: Map<String, HeartRatePoint> = emptyMap(),
+    val heartRateSensor: Boolean = false, val heartRateConnected: Boolean = false, val heartRateBpm: Int? = null,
+    /** `on`, `off` or `unauthorized` (Bluetooth.state). */
+    val bluetooth: String = "on",
 )
+
+/** A sensor seen by the "Choose sensor" scan. Its address stays on this phone. */
+data class Sensor(val address: String, val name: String)
 
 enum class Tab(val label: String, val icon: Int) {
     STORE("Store", R.drawable.ic_store), SHARING("Sharing", R.drawable.ic_location), SETTINGS("Settings", R.drawable.ic_settings)
@@ -57,6 +73,17 @@ class MainActivity : ComponentActivity() {
     private var working by mutableStateOf(false)
     private var permissionExplanation by mutableStateOf(false)
     private var refreshJob: Job? = null
+    /** The "Choose sensor" scan: open only while its dialog is (#634). */
+    private var choosing by mutableStateOf(false)
+    private var sensors by mutableStateOf(emptyList<Sensor>())
+    private val bluetoothRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (Bluetooth.canScan(this)) startScan(); refresh() }
+    private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission") // a scan result implies the scan permission
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val name = result.scanRecord?.deviceName ?: (if (Bluetooth.permitted(this@MainActivity)) result.device.name else null) ?: "Heart-rate sensor"
+            if (sensors.none { it.address == result.device.address }) sensors = sensors + Sensor(result.device.address, name)
+        }
+    }
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh(); maybeStart() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
@@ -74,8 +101,8 @@ class MainActivity : ComponentActivity() {
                     enable = { app -> act { graph.repository.enable(app); refresh(); if (LocationService.allowed(this@MainActivity)) maybeStart() else permissionExplanation = true } },
                     disable = { app -> act { graph.repository.disable(app) } },
                     // Local writes, not `act`: pausing works offline and instantly.
-                    pauseApp = { app -> graph.local.pause(app.id); if (graph.repository.recipients().isEmpty()) stopService(Intent(this, LocationService::class.java)); refresh() },
-                    resumeApp = { app -> graph.local.resume(app.id); refresh(); maybeStart() },
+                    pauseApp = { app -> graph.local.pause(app.id); reconcile(); refresh() },
+                    resumeApp = { app -> graph.local.resume(app.id); refresh(); reconcile() },
                     pause = { graph.local.paused = true; stopService(Intent(this, LocationService::class.java)); refresh() },
                     resume = { graph.local.paused = false; refresh(); if (LocationService.allowed(this)) maybeStart() else permissionExplanation = true },
                     permissions = { permissionExplanation = true },
@@ -90,7 +117,24 @@ class MainActivity : ComponentActivity() {
                     clearHistory = { runCatching { graph.local.clearHistory() }.onFailure { error = it.message ?: "Could not clear history." }; refresh() },
                     loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } },
                     // Pairs again keeping the history (#652): after an expiry, or early from the expiry note.
-                    reconnect = { act { graph.repository.renew(); stopService(Intent(this@MainActivity, LocationService::class.java)); open(graph.repository.startSignIn()) } })
+                    reconnect = { act { graph.repository.renew(); stopService(Intent(this@MainActivity, LocationService::class.java)); open(graph.repository.startSignIn()) } },
+                    heartRate = HeartRateHooks(
+                        enable = { entry -> act { graph.repository.enable(entry); refresh(); reconcile() } },
+                        // Local block first (offline-safe, idempotent), so the service drops heart rate now; then the server revoke.
+                        disable = { entry -> graph.local.block(entry.key); reconcile(); act { graph.repository.disable(entry) } },
+                        chooseSensor = { choosing = true; sensors = emptyList(); if (Bluetooth.canScan(this)) startScan() else bluetoothRequest.launch(Bluetooth.scanPermissions()) },
+                        forgetSensor = { graph.local.heartRateSensor = null; runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "forgotten") }; reconcile(); refresh() },
+                        load = { appId, range -> withContext(Dispatchers.IO) { graph.local.heartRate(appId, range.first, range.last) } }))
+                if (choosing) AlertDialog(onDismissRequest = { stopScan() },
+                    title = { Text("Choose sensor") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (sensors.isEmpty()) Text(if (Bluetooth.canScan(this@MainActivity)) "Looking for heart-rate sensors. Put your strap on so it wakes up." else "Allow Bluetooth to find your sensor.")
+                            sensors.forEach { sensor -> TextButton(onClick = { choose(sensor) }) { Text(sensor.name) } }
+                            Text("Only standard Bluetooth heart-rate sensors are listed. The sensor's name and address stay on this phone.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { stopScan() }) { Text("Cancel") } })
                 if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false },
                     title = { Text("Allow background location") },
                     text = { Text("ProAppStore collects precise location to automatically record routes for apps you enable, even when ProAppStore and those apps are closed. Updates go to PAS and only your enabled apps. Choose Precise location, then Allow all the time on the next settings screen. You can pause or revoke access here.") },
@@ -111,12 +155,34 @@ class MainActivity : ComponentActivity() {
             while (isActive) { delay(2_000); refresh() }
         }
     }
-    override fun onPause() { refreshJob?.cancel(); super.onPause() }
+    override fun onPause() { refreshJob?.cancel(); stopScan(); super.onPause() }
+    @SuppressLint("MissingPermission") // canScan checked
+    private fun startScan() {
+        if (!Bluetooth.canScan(this)) return
+        val scanner = getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner ?: run { error = "Turn on Bluetooth to find your sensor."; return }
+        scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid.fromString(HeartRate.SERVICE)).build()),
+            ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
+    }
+    @SuppressLint("MissingPermission")
+    private fun stopScan() {
+        if (choosing && Bluetooth.canScan(this)) runCatching { getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
+        choosing = false
+    }
+    private fun choose(sensor: Sensor) {
+        stopScan()
+        graph.local.heartRateSensor = sensor.address
+        runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "sensor_chosen") }
+        refresh(); reconcile()
+    }
+    /** Starts the one collector service when it has something to run, else stops it; a running one re-applies its types. */
+    private fun reconcile() {
+        if (LocationService.wanted(this, graph.repository)) maybeStart() else stopService(Intent(this, LocationService::class.java))
+    }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) /* Links only bring settings forward. No automatic permission changes. */ }
     private fun refreshCatalogue() { lifecycleScope.launch { graph.catalogue.refresh() } }
     private fun refresh() {
         val local = graph.local
-        LocationService.notePermission(this, local)
+        LocationService.notePermission(this, local); Bluetooth.note(this, local)
         val apps = local.apps()
         val connectivity = getSystemService(ConnectivityManager::class.java)
         val power = getSystemService(PowerManager::class.java)
@@ -135,7 +201,12 @@ class MainActivity : ComponentActivity() {
             lastFix = LocationService.lastFix,
             version = packageManager.getPackageInfo(packageName, 0).let { "${it.versionName} (${it.longVersionCode})" },
             expired = local.expired,
-            expiresInDays = if (signedIn) DeviceConnection.expiresInDays(local.deviceExpiresAt, System.currentTimeMillis()) else null)
+            expiresInDays = if (signedIn) DeviceConnection.expiresInDays(local.deviceExpiresAt, System.currentTimeMillis()) else null,
+            entries = local.entries(), heartRateQueued = local.heartRateCount(), heartRateLastUpload = local.heartRateLastUpload,
+            heartRateSyncError = local.heartRateSyncError,
+            lastHeartRateByApp = local.entries().filter { it.capability == HeartRate.CAPABILITY }.mapNotNull { e -> local.lastHeartRate(e.appId)?.let { e.appId to it } }.toMap(),
+            heartRateSensor = local.heartRateSensor != null, heartRateConnected = LocationService.heartRateConnected, heartRateBpm = LocationService.lastBpm,
+            bluetooth = Bluetooth.state(this))
         if (state.expired && LocationService.running) stopService(Intent(this, LocationService::class.java))
     }
     private fun act(action: suspend () -> Unit) {
@@ -150,7 +221,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun maybeStart() {
-        if (!LocationService.allowed(this) || !graph.repository.collecting()) return
+        if (!LocationService.wanted(this, graph.repository)) return
         val prompt = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompt.getBoolean("notifications", false)) {
             prompt.edit().putBoolean("notifications", true).apply()
@@ -198,11 +269,14 @@ internal fun PasScreen(
     clearHistory: () -> Unit = {},
     loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>> = { _, _ -> emptyMap() },
     reconnect: () -> Unit = {},
+    heartRate: HeartRateHooks = HeartRateHooks(),
 ) {
     var tab by remember { mutableStateOf(initialTab) }
     var sharingPage by remember { mutableStateOf<SharingPage>(SharingPage.Dashboard) }
     var storeApp by remember { mutableStateOf<CatalogueApp?>(null) }
     var consent by remember { mutableStateOf<ConnectedApp?>(null) }
+    var entryConsent by remember { mutableStateOf<NativeEntry?>(null) }
+    val hooks = heartRate.copy(askConsent = { entryConsent = it })
     BackHandler(enabled = (tab == Tab.SHARING && sharingPage != SharingPage.Dashboard) || (tab == Tab.STORE && storeApp != null)) {
         if (tab == Tab.STORE) storeApp = null
         else sharingPage = (sharingPage as? SharingPage.Activity)?.from ?: SharingPage.Dashboard
@@ -225,7 +299,7 @@ internal fun PasScreen(
                         val tracks = rememberTracks(granted, state, SharingTimeline.today(state.now), loadTracks)
                         SharingDashboard(state, tracks, connect, { consent = it }, disable, pauseApp, resumeApp, pause, resume, permissions, sync, openApp,
                             showApp = { sharingPage = SharingPage.App(it.id) }, showActivity = { sharingPage = SharingPage.Activity(null, page) },
-                            showMap = { sharingPage = SharingPage.Map }, reconnect = reconnect)
+                            showMap = { sharingPage = SharingPage.Map }, reconnect = reconnect, heartRate = hooks)
                     }
                     SharingPage.Map -> Column(Modifier.padding(horizontal = 16.dp).fillMaxSize()) {
                         BackRow("Sharing") { sharingPage = SharingPage.Dashboard }
@@ -236,7 +310,8 @@ internal fun PasScreen(
                     }
                     is SharingPage.App -> state.apps.find { it.id == page.id }?.let { app ->
                         AppSharingScreen(state, app, loadTracks, pauseApp, resumeApp, disable, openApp,
-                            showActivity = { sharingPage = SharingPage.Activity(app.id, page) }, back = { sharingPage = SharingPage.Dashboard })
+                            showActivity = { sharingPage = SharingPage.Activity(app.id, page) }, back = { sharingPage = SharingPage.Dashboard },
+                            loadHeartRate = heartRate.load)
                     } ?: LaunchedEffect(page) { sharingPage = SharingPage.Dashboard } // the app left /native/me
                     is SharingPage.Activity -> ActivityScreen(state, page.appId) { sharingPage = page.from }
                 }
@@ -249,7 +324,19 @@ internal fun PasScreen(
         text = { Text(app.disclosure) },
         confirmButton = { TextButton(onClick = { consent = null; enable(app) }) { Text("Enable for ${app.name}") } },
         dismissButton = { TextButton(onClick = { consent = null }) { Text("Cancel") } }) }
+    entryConsent?.let { entry -> AlertDialog(onDismissRequest = { entryConsent = null },
+        title = { Text("Enable ${entry.name.lowercase()} for ${entry.appName}?") },
+        text = { Text(entry.disclosure) },
+        confirmButton = { TextButton(onClick = { entryConsent = null; heartRate.enable(entry) }) { Text("Enable for ${entry.appName}") } },
+        dismissButton = { TextButton(onClick = { entryConsent = null }) { Text("Cancel") } }) }
 }
+
+/** Run's heart-rate actions (#634); defaults keep existing callers and previews compiling. */
+data class HeartRateHooks(
+    val enable: (NativeEntry) -> Unit = {}, val disable: (NativeEntry) -> Unit = {}, val askConsent: (NativeEntry) -> Unit = {},
+    val chooseSensor: () -> Unit = {}, val forgetSensor: () -> Unit = {},
+    val load: suspend (String, LongRange) -> List<HeartRatePoint> = { _, _ -> emptyList() },
+)
 
 /** Busy indicator and the last error, at the top of each tab. */
 @Composable

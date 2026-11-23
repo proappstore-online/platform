@@ -6,9 +6,10 @@ object ActivityText {
 
     fun category(kind: ShareEvent.Kind): Category = when (kind) {
         ShareEvent.Kind.ENABLED, ShareEvent.Kind.DISABLED, ShareEvent.Kind.PAUSED, ShareEvent.Kind.RESUMED, ShareEvent.Kind.PAUSED_ALL,
-        ShareEvent.Kind.RESUMED_ALL, ShareEvent.Kind.GRANT_LOST, ShareEvent.Kind.GRANT_RESTORED, ShareEvent.Kind.HISTORY_CLEARED -> Category.SHARING
+        ShareEvent.Kind.RESUMED_ALL, ShareEvent.Kind.GRANT_LOST, ShareEvent.Kind.GRANT_RESTORED, ShareEvent.Kind.HISTORY_CLEARED, ShareEvent.Kind.HEART_RATE -> Category.SHARING
         ShareEvent.Kind.STOPPED, ShareEvent.Kind.SYNC_FAILED, ShareEvent.Kind.SYNC_RECOVERED, ShareEvent.Kind.UPLOAD_REJECTED,
-        ShareEvent.Kind.QUOTA, ShareEvent.Kind.PERMISSION, ShareEvent.Kind.QUEUE_FULL, ShareEvent.Kind.EXPIRED -> Category.PROBLEM
+        ShareEvent.Kind.QUOTA, ShareEvent.Kind.PERMISSION, ShareEvent.Kind.QUEUE_FULL, ShareEvent.Kind.EXPIRED,
+        ShareEvent.Kind.HEART_RATE_PROBLEM, ShareEvent.Kind.BLUETOOTH -> Category.PROBLEM
     }
 
     private val permissionNames = mapOf("denied" to "Not allowed", "approximate" to "Approximate only", "whenInUse" to "While using the app", "always" to "All the time")
@@ -55,6 +56,26 @@ object ActivityText {
             ShareEvent.Kind.QUEUE_FULL -> "Storage queue full: recording stopped until uploads catch up"
             ShareEvent.Kind.EXPIRED -> if (event.detail == "renew") "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"
                 else "Connection to ProAppStore expired: sharing stopped"
+            ShareEvent.Kind.HEART_RATE -> when (event.detail) {
+                "enabled" -> "$app heart rate turned on"
+                "disabled" -> "$app heart rate turned off"
+                "sensor_chosen" -> "Heart-rate sensor chosen"
+                "connected" -> "Heart-rate sensor connected"
+                "lost" -> "Heart-rate sensor disconnected or out of range"
+                "forgotten" -> "Heart-rate sensor forgotten"
+                else -> "Heart rate: ${event.detail}"
+            }
+            ShareEvent.Kind.HEART_RATE_PROBLEM -> when (event.detail) {
+                "queue_full" -> "Heart-rate queue full: heart rate stopped until uploads catch up"
+                "partial_ack" -> "Heart-rate upload not fully acknowledged: the copy on this phone was kept"
+                else -> "Heart-rate upload rejected by ProAppStore (${event.detail})"
+            }
+            ShareEvent.Kind.BLUETOOTH -> when (event.detail) {
+                "off" -> "Bluetooth turned off: heart rate stopped"
+                "on" -> "Bluetooth turned on"
+                "unauthorized" -> "Bluetooth permission denied: heart rate stopped"
+                else -> "Bluetooth: ${event.detail}"
+            }
         }
     }
 }

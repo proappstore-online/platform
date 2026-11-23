@@ -11,16 +11,25 @@ import org.json.JSONObject
  * Private queue and settings. Version 2 adds the on-device sharing history (#621, ported from iOS LocalStore.swift):
  * `share_events` (when sharing was enabled, paused or turned off, and the activity log's problems) and `share_points`
  * (a 30-day copy of what was shared with each app). Both are in the same backup-excluded database as the queue and
- * never leave the phone.
+ * never leave the phone. Version 3 adds Run's strap heart rate (#634): its queue `hr` and its 30-day history `share_hr`.
  */
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", null, 2) {
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", null, 3) {
     private val prefs = context.getSharedPreferences("native-settings", Context.MODE_PRIVATE)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE points(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX points_at ON points(at)")
         createHistory(db)
+        createHeartRate(db)
     }
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) { if (old < 2) createHistory(db) }
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) { if (old < 2) createHistory(db); if (old < 3) createHeartRate(db) }
+    private fun createHeartRate(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS hr(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS hr_at ON hr(at)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS share_hr(app_id TEXT NOT NULL, sample_id TEXT NOT NULL, at INTEGER NOT NULL, bpm INTEGER NOT NULL, sent_at INTEGER, PRIMARY KEY(app_id, sample_id))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS share_hr_app_at ON share_hr(app_id, at)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS share_hr_sample ON share_hr(sample_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS share_hr_at ON share_hr(at)")
+    }
     private fun createHistory(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS share_events(id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, app_id TEXT, kind TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE INDEX IF NOT EXISTS share_events_app_at ON share_events(app_id, at)")
@@ -75,8 +84,12 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         if (!expired) record(ShareEvent.Kind.EXPIRED, detail = detail)
         check(prefs.edit().putString("expiredUser", userId).commit())
     }
+    /** Disabled on this phone, keyed by [NativeEntry.key]: a bare app id is location, `app/capability` another one. */
     @Synchronized fun blocked(): Set<String> = prefs.getStringSet("blocked", emptySet())!!.toSet()
-    @Synchronized fun block(appId: String) {
+    /** `key` is a [NativeEntry.key]. Disabling one capability never touches another's grant, queue or pause. */
+    @Synchronized fun block(key: String) {
+        if ('/' in key) return blockEntry(key)
+        val appId = key
         val wasBlocked = appId in blocked()
         val next = blocked() + appId
         // A disabled app is not "paused": re-enabling it starts sharing.
@@ -95,7 +108,25 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
             }
         }
     }
-    @Synchronized fun unblock(appId: String) { check(prefs.edit().putStringSet("blocked", blocked() - appId).commit()) }
+    /** A non-location capability: drops its grant from the heart-rate queue. Location's sessions record nothing here. */
+    private fun blockEntry(key: String) {
+        val entry = entries().find { it.key == key }
+        val wasBlocked = key in blocked()
+        check(prefs.edit().putStringSet("blocked", blocked() + key).commit())
+        transaction { db ->
+            if (entry == null) return@transaction
+            if (!wasBlocked) record(ShareEvent.Kind.HEART_RATE, entry.appId, "disabled")
+            db.delete("share_hr", "app_id = ? AND sent_at IS NULL", arrayOf(entry.appId))
+            val revoked = entry.grantId ?: return@transaction
+            for (s in pendingHeartRate(HeartRatePolicy.MAX_QUEUE)) {
+                if (revoked !in s.grants) continue
+                val keep = s.copy(grants = s.grants.filter { it != revoked })
+                if (keep.grants.isEmpty()) db.delete("hr", "id = ?", arrayOf(s.id))
+                else db.update("hr", ContentValues().apply { put("payload", keep.json().toString()) }, "id = ?", arrayOf(s.id))
+            }
+        }
+    }
+    @Synchronized fun unblock(key: String) { check(prefs.edit().putStringSet("blocked", blocked() - key).commit()) }
     /** Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform copy are untouched, and resuming needs no new disclosure. */
     @Synchronized fun pausedApps(): Set<String> = prefs.getStringSet("pausedApps", emptySet())!!.toSet()
     /** Never rewrites the queue: points recorded before the pause were authorized when taken and still upload. */
@@ -137,6 +168,71 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
             check(prefs.edit().putString("apps", apps.toString()).commit())
         }
     }
+    /** The `capabilities` array of `GET /native/me`, stored as received. */
+    @Synchronized fun entries(): List<NativeEntry> = parseEntries(JSONArray(prefs.getString("entries", "[]")))
+    @Synchronized fun saveEntries(entries: JSONArray) { check(prefs.edit().putString("entries", entries.toString()).commit()) }
+    /** The chosen heart-rate sensor's Bluetooth address. On this phone only; never uploaded. */
+    var heartRateSensor: String?
+        get() = prefs.getString("hrSensor", null)?.takeIf { it.isNotBlank() }
+        set(value) { check(prefs.edit().putString("hrSensor", value ?: "").commit()) }
+    /** When the server last acknowledged heart-rate samples, 0 until then. */
+    var heartRateLastUpload: Long
+        get() = prefs.getLong("hrLastUpload", 0)
+        set(value) { prefs.edit().putLong("hrLastUpload", value).apply() }
+    /** The last heart-rate upload's failure text, "" after it succeeded: the heart-rate stream's sync health. */
+    var heartRateSyncError: String
+        get() = prefs.getString("hrSyncError", "") ?: ""
+        set(value) { prefs.edit().putString("hrSyncError", value).apply() }
+    /** The last seen Bluetooth state (`on`, `off`, `unauthorized`), so only a change is logged. Empty until first seen. */
+    var bluetoothState: String
+        get() = prefs.getString("bluetooth", "") ?: ""
+        set(value) { prefs.edit().putString("bluetooth", value).apply() }
+
+    // Heart-rate queue (#634)
+
+    /** Re-filters recipients against current consent, Pause all and per-app pause before insert. */
+    @Synchronized fun enqueueHeartRate(sample: HeartRateSample) {
+        val entries = entries()
+        val allowed = HeartRatePolicy.recipients(entries, blocked(), pausedApps(), sample.at).toSet()
+        val retained = sample.copy(grants = sample.grants.filter { it in allowed })
+        if (paused || expired || retained.grants.isEmpty()) return
+        if (heartRateCount() >= HeartRatePolicy.MAX_QUEUE) {
+            runCatching { record(ShareEvent.Kind.HEART_RATE_PROBLEM, detail = "queue_full") }
+            throw HeartRateQueueFull()
+        }
+        transaction { db ->
+            db.insertOrThrow("hr", null, ContentValues().apply { put("id", retained.id); put("at", retained.at); put("payload", retained.json().toString()) })
+            for (e in entries) {
+                if (e.capability != HeartRate.CAPABILITY || e.grantId == null || e.grantId !in retained.grants) continue
+                db.insertWithOnConflict("share_hr", null, ContentValues().apply {
+                    put("app_id", e.appId); put("sample_id", retained.id); put("at", retained.at); put("bpm", retained.bpm)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+        }
+    }
+    @Synchronized fun pendingHeartRate(limit: Int = 300): List<HeartRateSample> = readableDatabase.rawQuery("SELECT payload FROM hr ORDER BY at, id LIMIT ?", arrayOf(limit.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(sampleFrom(JSONObject(c.getString(0)))) }
+    }
+    /** Includes samples the server discarded for a revoked recipient. */
+    @Synchronized fun acknowledgeHeartRate(ids: List<String>, now: Long = System.currentTimeMillis()) {
+        transaction { db ->
+            ids.forEach {
+                db.delete("hr", "id = ?", arrayOf(it))
+                db.execSQL("UPDATE share_hr SET sent_at = ? WHERE sample_id = ? AND sent_at IS NULL", arrayOf<Any>(now, it))
+            }
+        }
+        heartRateLastUpload = now
+    }
+    @Synchronized fun heartRateCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM hr", null).use { it.moveToFirst(); it.getInt(0) }
+    /** This app's heart-rate samples in `[from, to]`, oldest first, from the on-device history. */
+    @Synchronized fun heartRate(appId: String, from: Long, to: Long): List<HeartRatePoint> = readableDatabase.rawQuery(
+        "SELECT at, bpm FROM share_hr WHERE app_id = ? AND at BETWEEN ? AND ? ORDER BY at", arrayOf(appId, from.toString(), to.toString())).use { c ->
+        buildList { while (c.moveToNext()) add(HeartRatePoint(c.getLong(0), c.getInt(1))) }
+    }
+    /** The newest heart-rate sample recorded for this app, or null. */
+    @Synchronized fun lastHeartRate(appId: String): HeartRatePoint? = readableDatabase.rawQuery(
+        "SELECT at, bpm FROM share_hr WHERE app_id = ? ORDER BY at DESC LIMIT 1", arrayOf(appId)).use { if (it.moveToFirst()) HeartRatePoint(it.getLong(0), it.getInt(1)) else null }
+
     @Synchronized fun enqueue(point: TrackPoint) {
         val apps = apps()
         val allowed = LocationPolicy.recipients(apps, excluded(), point.at).toSet()
@@ -176,13 +272,17 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         db.delete("share_points", "sent_at IS NULL AND at < ?", arrayOf((now - LocationPolicy.RETENTION_MS).toString())) // its queue copy just expired
         db.delete("share_points", "at < ?", arrayOf(cutoff.toString()))
         db.execSQL("DELETE FROM share_points WHERE rowid IN (SELECT rowid FROM share_points ORDER BY at DESC LIMIT -1 OFFSET ?)", arrayOf<Any>(LocationPolicy.HISTORY_MAX_POINTS))
+        db.delete("hr", "at < ?", arrayOf((now - LocationPolicy.RETENTION_MS).toString()))
+        db.delete("share_hr", "sent_at IS NULL AND at < ?", arrayOf((now - LocationPolicy.RETENTION_MS).toString()))
+        db.delete("share_hr", "at < ?", arrayOf(cutoff.toString()))
+        db.execSQL("DELETE FROM share_hr WHERE rowid IN (SELECT rowid FROM share_hr ORDER BY at DESC LIMIT -1 OFFSET ?)", arrayOf<Any>(HeartRatePolicy.HISTORY_MAX_SAMPLES))
         // Keep the newest event of each (app, kind) before the cutoff, so state at the window start is known.
         db.execSQL("DELETE FROM share_events WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM share_events WHERE at < ? GROUP BY app_id, kind)", arrayOf<Any>(cutoff, cutoff))
     }
     @Synchronized fun count(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM points", null).use { it.moveToFirst(); it.getInt(0) }
     /** Disconnect, or pairing a different account: everything. */
     @Synchronized fun clear() {
-        transaction { db -> listOf("points", "share_events", "share_points").forEach { db.delete(it, null, null) } }
+        transaction { db -> listOf("points", "hr", "share_events", "share_points", "share_hr").forEach { db.delete(it, null, null) } }
         check(prefs.edit().clear().commit())
     }
     /**
@@ -191,8 +291,9 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
      */
     @Synchronized fun clearForReconnect() {
         transaction { db ->
-            db.delete("points", null, null)
+            db.delete("points", null, null); db.delete("hr", null, null)
             db.delete("share_points", "sent_at IS NULL", null) // never shared, and now never will be
+            db.delete("share_hr", "sent_at IS NULL", null)
         }
         check(prefs.edit().clear().commit())
     }
@@ -245,7 +346,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
      * `history_cleared` comes first: it ends open sessions, and the seeded `enabled` rows then start new ones.
      */
     @Synchronized fun clearHistory(now: Long = System.currentTimeMillis()) = transaction { db ->
-        db.delete("share_events", null, null); db.delete("share_points", null, null)
+        db.delete("share_events", null, null); db.delete("share_points", null, null); db.delete("share_hr", null, null)
         record(ShareEvent.Kind.HISTORY_CLEARED, at = now)
         seed(now, consentTime = false, detail = "")
     }
@@ -278,3 +379,15 @@ private fun pointFrom(p: JSONObject): TrackPoint {
     val grants = p.getJSONArray("grants")
     return TrackPoint(p.getString("id"), p.getLong("at"), p.getDouble("lat"), p.getDouble("lng"), p.getDouble("accuracy").toFloat(), (0 until grants.length()).map { grants.getString(it) })
 }
+private fun parseEntries(array: JSONArray): List<NativeEntry> = (0 until array.length()).map { i ->
+    val e = array.getJSONObject(i); val g = e.optJSONObject("grant")
+    NativeEntry(e.getString("appId"), e.getString("appName"), e.getString("capability"), e.getString("name"), e.getString("purpose"),
+        e.getString("disclosure"), e.getString("version"), g?.getString("id"), g?.getLong("consent_at") ?: 0)
+}
+internal fun HeartRateSample.json() = JSONObject().put("id", id).put("at", at).put("bpm", bpm).put("grants", JSONArray(grants))
+private fun sampleFrom(p: JSONObject): HeartRateSample {
+    val grants = p.getJSONArray("grants")
+    return HeartRateSample(p.getString("id"), p.getLong("at"), p.getInt("bpm"), (0 until grants.length()).map { grants.getString(it) })
+}
+/** [LocalStore.enqueueHeartRate] at [HeartRatePolicy.MAX_QUEUE]. */
+class HeartRateQueueFull : IllegalStateException("Heart rate stopped: its upload queue is full. Connect to the internet so ProAppStore can send waiting readings.")

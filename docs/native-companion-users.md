@@ -42,6 +42,8 @@ Only beats per minute and the time of each reading leave the phone. The sensor's
 
 Run's row shows the strap's state and current bpm, readings waiting to upload, the last upload and the last reading. Heart-rate events (sensor connected or out of range, Bluetooth off, uploads rejected) appear in **Activity**. A session's page charts your heart rate under its map, from the phone's own 30-day copy, which **Clear sharing history** deletes with the rest.
 
+On Android, ProAppStore's notification says when it is sharing heart rate. Bluetooth permission is asked for when you choose a sensor.
+
 ## Control sharing
 
 - **Pause all** stops new location collection. Already collected updates may still sync.
