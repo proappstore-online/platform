@@ -8,6 +8,7 @@ import UIKit
 final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     let repository: CompanionRepository
     let collector: LocationCollector
+    let heartRate: HeartRateCollector
     private var local: LocalStore { repository.local }
 
     @Published private(set) var signedIn = false
@@ -18,6 +19,13 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     @Published private(set) var name = ""
     @Published private(set) var deviceLabel = ""
     @Published private(set) var apps: [ConnectedApp] = []
+    /// Every reviewed (app, capability) entry (#631); `apps` stays location's.
+    @Published private(set) var entries: [NativeEntry] = []
+    @Published private(set) var queuedHeartRate = 0
+    @Published private(set) var heartRateLastUpload: Int64 = 0
+    @Published private(set) var heartRateSyncError = ""
+    /// The newest heart-rate sample per app, from the on-device history.
+    @Published private(set) var lastHeartRateByApp: [String: HeartRatePoint] = [:]
     @Published private(set) var blocked: Set<String> = []
     @Published private(set) var pausedApps: Set<String> = []
     @Published private(set) var paused = true
@@ -32,6 +40,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     @Published private(set) var lastUploadByApp: [String: Int64] = [:]
     @Published private(set) var busy = false
     @Published var consent: ConnectedApp?
+    @Published var entryConsent: NativeEntry?
     private var error = ""
     private var authSession: ASWebAuthenticationSession?
     private var refreshTask: Task<Void, Never>?
@@ -46,6 +55,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     init(repository: CompanionRepository) {
         self.repository = repository
         collector = LocationCollector(repository: repository)
+        heartRate = HeartRateCollector(repository: repository)
         super.init()
         if repository.token() != nil { try? local.seedIfEmpty() }
         refresh()
@@ -55,6 +65,13 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func enabled(_ app: ConnectedApp) -> Bool { !expired && app.grantId != nil && !blocked.contains(app.id) }
     /// Enabled, not paused for this app, and Pause all is off.
     func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && !pausedApps.contains(app.id) && !paused }
+    /// A non-location entry is on: granted, not disabled, connection not expired.
+    func enabled(_ entry: NativeEntry) -> Bool { !expired && entry.grantId != nil && !blocked.contains(entry.key) }
+    /// This app's non-location entries, shown under its row.
+    func otherEntries(_ appId: String) -> [NativeEntry] { entries.filter { $0.appId == appId && $0.capability != NativeEntry.LOCATION } }
+    /// Both collectors follow the same rules: called wherever the screen changes what may be collected.
+    func evaluate() { collector.evaluate(); heartRate.evaluate() }
+
     /// The app's state chip; `running` is the collector's.
     func state(_ app: ConnectedApp, running: Bool) -> SharingState {
         if expired { return .expired }
@@ -65,6 +82,10 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         signedIn = repository.token() != nil
         expired = local.expired
         expiresInDays = signedIn ? CompanionRepository.expiresInDays(local.deviceExpiresAt) : nil
+        entries = local.entries(); queuedHeartRate = (try? local.heartRateCount()) ?? 0; heartRateLastUpload = local.heartRateLastUpload
+        heartRateSyncError = local.heartRateSyncError
+        lastHeartRateByApp = Set(entries.filter { $0.capability == HeartRate.CAPABILITY }.map(\.appId))
+            .reduce(into: [:]) { $0[$1] = (try? local.lastHeartRate($1)) ?? nil }
         name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); pausedApps = local.pausedApps(); paused = local.paused
         queued = (try? local.count()) ?? 0; lastSync = local.lastSync; pairingCode = repository.pairingCode()
         lastSyncAttempt = local.lastSyncAttempt; lastSyncError = local.lastSyncError
@@ -75,7 +96,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     }
 
     func becameActive() {
-        refresh(); collector.evaluate()
+        refresh(); evaluate()
         refreshTask?.cancel()
         refreshTask = Task {
             await catchUp()
@@ -96,7 +117,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
             error = ""
         } catch { self.error = error.localizedDescription }
         if repository.token() != nil { try? await repository.sync() }
-        refresh(); collector.evaluate()
+        refresh(); evaluate()
     }
 
     private func act(_ action: @escaping () async throws -> Void) {
@@ -106,7 +127,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
             do { try await action() }
             catch let failure as ApiFailure where failure.status == 401 {} // the expired card says it
             catch { self.error = error.localizedDescription }
-            busy = false; refresh(); collector.evaluate()
+            busy = false; refresh(); evaluate()
         }
     }
 
@@ -116,7 +137,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func reconnect() {
         act { [self] in
             try await repository.renew()
-            refresh(); collector.evaluate()
+            refresh(); evaluate()
             try await pair()
         }
     }
@@ -138,11 +159,14 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func completeSignIn() { act { [self] in _ = try await repository.finishSignIn() } }
 
     /// Links never grant anything: they finish a pending connection or bring a disclosure forward.
+    /// `native/apps/<id>` keeps meaning location; `native/apps/<id>/<capability>` is that entry (ADR-018 §9).
     func handle(_ url: URL) {
         guard url.scheme == "proappstore", url.host == "native" else { return }
         let parts = url.pathComponents.filter { $0 != "/" }
         if parts == ["connected"] { completeSignIn() }
         else if parts.count == 2, parts[0] == "apps", let app = apps.first(where: { $0.id == parts[1] }), !enabled(app) { consent = app }
+        else if parts.count == 3, parts[0] == "apps", parts[2] != NativeEntry.LOCATION,
+                let entry = entries.first(where: { $0.appId == parts[1] && $0.capability == parts[2] }), !enabled(entry) { entryConsent = entry }
     }
 
     func enable(_ app: ConnectedApp) {
@@ -152,17 +176,19 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         }
     }
     func disable(_ app: ConnectedApp) { act { [self] in try await repository.disable(app) } }
+    func enable(_ entry: NativeEntry) { act { [self] in try await repository.enable(entry) } }
+    func disable(_ entry: NativeEntry) { act { [self] in try await repository.disable(entry) } }
     func sync() { act { [self] in try await repository.sync() } }
     func disconnect() {
         act { [self] in
-            try local.setPaused(true); collector.evaluate()
+            try local.setPaused(true); evaluate()
             try await repository.disconnect()
         }
     }
     func setPaused(_ value: Bool) {
         do { try local.setPaused(value) } catch { self.error = error.localizedDescription }
         if !value && collector.authorization == .notDetermined { collector.requestWhenInUse() }
-        refresh(); collector.evaluate()
+        refresh(); evaluate()
     }
 
     /// Local only: the queue, and so pending uploads, are kept.
@@ -174,11 +200,11 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     /// Local writes, not `act`: pausing works offline and instantly.
     func pause(_ app: ConnectedApp) {
         do { try local.pause(app.id) } catch { self.error = error.localizedDescription }
-        refresh(); collector.evaluate()
+        refresh(); evaluate()
     }
     func resume(_ app: ConnectedApp) {
         do { try local.resume(app.id) } catch { self.error = error.localizedDescription }
-        refresh(); collector.evaluate()
+        refresh(); evaluate()
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -224,6 +250,7 @@ struct ContentView: View {
         }
         .onOpenURL { model.handle($0) }
         .sheet(item: $model.consent) { app in disclosure(app) }
+        .sheet(item: $model.entryConsent) { entry in HeartRateDisclosure(entry: entry, model: model) }
     }
 
     private func disclosure(_ app: ConnectedApp) -> some View {

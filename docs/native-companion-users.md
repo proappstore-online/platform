@@ -30,6 +30,18 @@ The **Storefront** tab lists every public PAS app. Search, browse by category, o
 
 The first time you open an app, ProAppStore shows how to add it to your Home Screen (Share → Add to Home Screen). Choose **Don't show this again** to skip the guide for every app.
 
+## Heart rate (Run)
+
+Run can add heart rate from a standard Bluetooth chest strap (Polar, Garmin, Wahoo and others) to the runs and walks you record, including while your phone is locked.
+
+1. Under Run in **Sharing**, choose **Enable** next to Heart rate and read what is shared.
+2. Choose **Choose sensor**, put the strap on so it wakes up, and pick it from the list. ProAppStore looks for sensors only while this list is open. Allow Bluetooth when your phone asks.
+3. Keep the strap on. ProAppStore reconnects to it on its own when it comes back into range, without opening the app.
+
+Only beats per minute and the time of each reading leave the phone. The sensor's name and identifier stay on it. Readings are taken at most once a second, and only while the strap reports skin contact. **Pause** on Run and **Pause all** stop heart rate as well as location. **Forget sensor** disconnects the strap and removes it from the phone; **Turn off heart rate for Run** stops sharing it and leaves Run's location as it was.
+
+Run's row shows the strap's state and current bpm, readings waiting to upload, the last upload and the last reading. Heart-rate events (sensor connected or out of range, Bluetooth off, uploads rejected) appear in **Activity**. A session's page charts your heart rate under its map, from the phone's own 30-day copy, which **Clear sharing history** deletes with the rest.
+
 ## Control sharing
 
 - **Pause all** stops new location collection. Already collected updates may still sync.

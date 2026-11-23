@@ -4,7 +4,7 @@ import { mintSession, credentialContext } from '@proappstore/build-core';
 import { nativeAuthRoutes } from './native-auth.js';
 import { nativeRoutes } from './native.js';
 import { listingsRoutes } from './listings.js';
-import { nativeCatalog, nativeHash, nativePoints, NATIVE_RELAYS, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
+import { nativeCatalog, nativeHash, nativeHeartRateSamples, nativePoints, NATIVE_RELAYS, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
 import { handleAppEventBatch } from '../lib/app-event-consumer.js';
 import type { AppEventMessage } from '../lib/app-event-queue.js';
 import type { ToolManifest } from '../lib/action-sql.js';
@@ -174,8 +174,9 @@ describe('consumer native companion', () => {
   describe('Run recipient and status read (#613)', () => {
     type Status = { available: boolean; enabled: boolean; lastPointAt: number | null; capabilities: Record<string, unknown> };
     // ADR-018 §6: the top-level fields stay location's; `capabilities` repeats them per capability id.
-    const runStatus = (enabled: boolean, lastPointAt: number | null) =>
-      ({ available: true, enabled, lastPointAt, capabilities: { 'location.background': { available: true, enabled, lastAt: lastPointAt } } });
+    const runStatus = (enabled: boolean, lastPointAt: number | null) => ({ available: true, enabled, lastPointAt, capabilities: {
+      'location.background': { available: true, enabled, lastAt: lastPointAt }, 'heart_rate.ble': { available: true, enabled: false, lastAt: null },
+    } });
     const status = async (token: string, appId = 'run') => request(`/apps/${appId}/native/status`, 'GET', undefined, token);
     const statusOf = async (uid = 'google:1') => await (await status(await readToken(uid, 'run'))).json() as Status;
     const pointIds = async (appId: string) =>
@@ -226,12 +227,13 @@ describe('consumer native companion', () => {
       expect(await statusOf()).toEqual(runStatus(false, null));
     });
     it('pins each contract version: a wording edit revokes every existing grant and must fail here', async () => {
-      const versions = Object.fromEntries((await nativeCatalog()).map(a => [a.id, a.version]));
-      expect(versions).toEqual({ 
-        ski: '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
-        run: 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
-        loopride: '4b323484af0bd058ac60d5a64ab508a5044ca92ce6f27a2d105aaf9ffe6778b8',
-       });
+      const versions = Object.fromEntries((await nativeCatalog()).map(a => [`${a.id}/${a.capability}`, a.version]));
+      expect(versions).toEqual({
+        'ski/location.background': '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
+        'run/location.background': 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
+        'loopride/location.background': '4b323484af0bd058ac60d5a64ab508a5044ca92ce6f27a2d105aaf9ffe6778b8',
+        'run/heart_rate.ble': 'e38067cdcf71ad1368ed68b76625be9ce41629fbd8a18ab595c805f05e88720c',
+      });
     });
   });
 
@@ -277,8 +279,9 @@ describe('consumer native companion', () => {
       await otherGrant(d.deviceId);
       db.sql.prepare("UPDATE native_grants SET contract_version = ? WHERE capability = 'test.other'").run(runVersion);
       const read = await request('/apps/run/native/status', 'GET', undefined, await readToken('google:1', 'run'));
-      expect(await read.json()).toEqual({ available: true, enabled: false, lastPointAt: null,
-        capabilities: { 'location.background': { available: true, enabled: false, lastAt: null } } });
+      expect(await read.json()).toEqual({ available: true, enabled: false, lastPointAt: null, capabilities: {
+        'location.background': { available: true, enabled: false, lastAt: null }, 'heart_rate.ble': { available: true, enabled: false, lastAt: null },
+      } });
       // nativeGrants never offers it as the app's grant either: /native/me shows Run's location as not granted.
       const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string; grant: unknown }[] };
       expect(me.apps.find(a => a.id === 'run')!.grant).toBeNull();
@@ -287,15 +290,16 @@ describe('consumer native companion', () => {
       const d = await device(), g = await grant(d.token, 'run');
       await otherGrant(d.deviceId);
       const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: Record<string, unknown>[]; capabilities: Record<string, unknown>[] };
-      const catalog = await nativeCatalog();
+      const all = await nativeCatalog(), catalog = all.filter(a => a.capability === 'location.background');
       // The pre-registry shape: one location entry per app, catalog fields then its location grant, in today's key order.
       expect(me.apps.map(a => Object.keys(a))).toEqual(catalog.map(() => ['id', 'name', 'capability', 'version', 'purpose', 'disclosure', 'grant']));
       expect(me.apps).toEqual(catalog.map(a => ({ ...a, grant: null })).map(a => a.id === 'run' ? { ...a, grant: me.apps[1].grant } : a));
       expect(Object.keys(me.apps[1].grant as object)).toEqual(['id', 'app_id', 'consent_at', 'contract_version', 'publisher_id']);
       expect((me.apps[1].grant as { id: string }).id).toBe(g.id);
-      expect(me.capabilities).toEqual(catalog.map(a => ({
-        appId: a.id, appName: a.name, capability: 'location.background', name: 'Location', purpose: a.purpose, disclosure: a.disclosure,
-        version: a.version, grant: a.id === 'run' ? me.apps[1].grant : null,
+      expect(me.capabilities).toEqual(all.map(a => ({
+        appId: a.id, appName: a.name, capability: a.capability, name: a.capability === 'location.background' ? 'Location' : 'Heart rate',
+        purpose: a.purpose, disclosure: a.disclosure, version: a.version,
+        grant: a.id === 'run' && a.capability === 'location.background' ? me.apps[1].grant : null,
       })));
     });
     it('PUT …/capabilities/:capability behaves exactly like PUT …/location', async () => {
@@ -313,15 +317,126 @@ describe('consumer native companion', () => {
     });
     it('the storefront listing names each app\'s reviewed native capabilities, never via `permissions`', async () => {
       const detail = async (id: string) => await (await request(`/storefront/apps/${id}`)).json() as { nativeCapabilities: unknown; permissions: unknown[] };
-      expect((await detail('run')).nativeCapabilities).toEqual([{ id: 'location.background', name: 'Location' }]);
+      expect((await detail('run')).nativeCapabilities).toEqual([{ id: 'location.background', name: 'Location' }, { id: 'heart_rate.ble', name: 'Heart rate' }]);
       expect((await detail('ski')).nativeCapabilities).toEqual([{ id: 'location.background', name: 'Location' }]);
       expect((await detail('other')).nativeCapabilities).toEqual([]);
       expect((await detail('run')).permissions).toEqual([]);
       const cards = await (await request('/storefront/apps')).json() as { apps: { appId: string; nativeCapabilities: unknown }[] };
       expect(Object.fromEntries(cards.apps.map(a => [a.appId, a.nativeCapabilities]))).toEqual({
-        ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }],
+        ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }, { id: 'heart_rate.ble', name: 'Heart rate' }],
         loopride: [{ id: 'location.background', name: 'Location' }], other: [],
       });
+    });
+  });
+
+  describe('Run heart rate from a Bluetooth strap (#631)', () => {
+    const HR = '/native/apps/run/capabilities/heart_rate.ble';
+    const hrVersion = async () => (await nativeCatalog()).find(a => a.id === 'run' && a.capability === 'heart_rate.ble')!.version;
+    const hrGrant = async (token: string) => {
+      const response = await request(HR, 'PUT', { version: await hrVersion(), enabled: true }, token);
+      expect(response.status).toBe(200);
+      return (await response.json() as { grant: { id: string; consent_at: number } }).grant;
+    };
+    const sample = (id: string, at: number, grants: string[], bpm = 142) => ({ id, at, bpm, grants });
+    const stored = () => db.sql.prepare('SELECT sample_id FROM native_heart_rate ORDER BY sample_id').all().map(r => r.sample_id);
+    const read = async (token: string | Promise<string>, appId = 'run') => request(`/apps/${appId}/native/heart-rate`, 'GET', undefined, await token);
+    const readIds = async (uid = 'google:1') =>
+      ((await (await read(readToken(uid, 'run'))).json()) as { samples: { id: string }[] }).samples.map(s => s.id);
+
+    it('is grantable only through its own capability path with its own version', async () => {
+      const d = await device(), version = await hrVersion();
+      expect((await request('/native/apps/run/location', 'PUT', { version, enabled: true }, d.token)).status).toBe(400);
+      expect((await request('/native/apps/ski/capabilities/heart_rate.ble', 'PUT', { version, enabled: true }, d.token)).status).toBe(404);
+      const g = await hrGrant(d.token);
+      expect(db.sql.prepare('SELECT capability FROM native_grants WHERE id = ?').get(g.id)).toEqual({ capability: 'heart_rate.ble' });
+      const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string; grant: unknown }[]; capabilities: { appId: string; capability: string; grant: { id: string } | null }[] };
+      expect(me.apps.find(a => a.id === 'run')!.grant).toBeNull();
+      expect(me.capabilities.find(e => e.appId === 'run' && e.capability === 'heart_rate.ble')!.grant!.id).toBe(g.id);
+    });
+    it('stores only post-consent samples naming the heart-rate grant; a location grant is acknowledged and stored nowhere', async () => {
+      const d = await device(), hr = await hrGrant(d.token), loc = await grant(d.token, 'run');
+      const samples = [sample('valid', hr.consent_at, [hr.id]), sample('old', hr.consent_at - 1, [hr.id]),
+        sample('location', Date.now(), [loc.id]), sample('unknown', Date.now(), ['f'.repeat(64)])];
+      for (let i = 0; i < 2; i++) {
+        const response = await request('/native/heart-rate', 'POST', { samples }, d.token);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ acknowledged: ['valid', 'old', 'location', 'unknown'] });
+      }
+      expect(stored()).toEqual(['valid']);
+      expect(db.sql.prepare('SELECT * FROM native_locations').all()).toHaveLength(0);
+      // Nor does a heart-rate grant id make a location point.
+      await request('/native/locations', 'POST', { points: [point('p', Date.now(), [hr.id])] }, d.token);
+      expect(db.sql.prepare('SELECT * FROM native_locations').all()).toHaveLength(0);
+    });
+    it('rejects bpm 0, 300 and 25.5, an 8-day-old sample, and malformed batches', async () => {
+      const d = await device(), g = await hrGrant(d.token), now = Date.now();
+      for (const samples of [[sample('a', now, [g.id], 0)], [sample('a', now, [g.id], 300)], [sample('a', now, [g.id], 25.5)],
+        [sample('a', now - 8 * 24 * 60 * 60_000, [g.id])], [], [sample('a', now, [])], Array.from({ length: 301 }, (_, i) => sample(`s${i}`, now, [g.id]))]) {
+        expect((await request('/native/heart-rate', 'POST', { samples }, d.token)).status).toBe(400);
+      }
+      expect(() => nativeHeartRateSamples([sample('x', now, [g.id]), sample('x', now, [g.id])], now)).toThrow();
+      expect(nativeHeartRateSamples([sample('lo', now, [g.id], 25), sample('hi', now, [g.id], 250)], now)).toHaveLength(2);
+      expect((await request('/native/heart-rate', 'POST', { samples: [sample('x', now, [g.id])] }, await readToken('google:1', 'run'))).status).toBe(401);
+      expect(stored()).toEqual([]);
+    });
+    it('is read only by Run, for its own user, never with a device token, and up to 1,000 samples a page', async () => {
+      const d = await device(), g = await hrGrant(d.token), bob = await device('google:2'), bobGrant = await hrGrant(bob.token);
+      await request('/native/heart-rate', 'POST', { samples: [sample('mine', Date.now(), [g.id])] }, d.token);
+      await request('/native/heart-rate', 'POST', { samples: [sample('bobs', Date.now(), [bobGrant.id])] }, bob.token);
+      expect((await read(readToken('google:1', 'ski'))).status).toBe(403);
+      expect((await read(d.token)).status).toBe(401);
+      expect((await read(readToken('google:1', 'ski'), 'ski')).status).toBe(404);
+      expect(await readIds()).toEqual(['mine']);
+      expect(await readIds('google:2')).toEqual(['bobs']);
+      const body = await (await read(readToken('google:1', 'run'))).json() as { samples: Record<string, unknown>[] };
+      expect(Object.keys(body.samples[0]!)).toEqual(['id', 'at', 'bpm', 'cursorId']);
+      // The composite cursor pages past every sample at one timestamp, 1,000 at a time.
+      db.sql.prepare('UPDATE native_grants SET consent_at = 0 WHERE id = ?').run(g.id);
+      const at = Date.now() - 60_000;
+      for (let i = 0; i < 4; i++) {
+        const samples = Array.from({ length: 300 }, (_, j) => sample(`b${String(i * 300 + j).padStart(4, '0')}`, at, [g.id]));
+        expect((await request('/native/heart-rate', 'POST', { samples }, d.token)).status).toBe(200);
+      }
+      const first = await (await read(readToken('google:1', 'run'))).json() as { samples: { at: number; cursorId: string }[] };
+      expect(first.samples).toHaveLength(1000);
+      const last = first.samples.at(-1)!;
+      const rest = await (await request(`/apps/run/native/heart-rate?after=${last.at}&afterId=${encodeURIComponent(last.cursorId)}`, 'GET', undefined, await readToken('google:1', 'run'))).json() as { samples: unknown[] };
+      expect(rest.samples).toHaveLength(201);
+    });
+    it('revoking heart rate erases it while Run location still reads, and the reverse', async () => {
+      const d = await device(), hr = await hrGrant(d.token), loc = await grant(d.token, 'run');
+      await request('/native/heart-rate', 'POST', { samples: [sample('h', Date.now(), [hr.id])] }, d.token);
+      await request('/native/locations', 'POST', { points: [point('p', Date.now(), [loc.id])] }, d.token);
+      expect((await request(HR, 'DELETE', undefined, d.token)).status).toBe(200);
+      expect(await readIds()).toEqual([]);
+      const locations = await (await request('/apps/run/native/locations', 'GET', undefined, await readToken('google:1', 'run'))).json() as { points: { id: string }[] };
+      expect(locations.points.map(p => p.id)).toEqual(['p']);
+      const again = await hrGrant(d.token);
+      await request('/native/heart-rate', 'POST', { samples: [sample('h2', Date.now(), [again.id])] }, d.token);
+      expect((await request('/native/apps/run/location', 'DELETE', undefined, d.token)).status).toBe(200);
+      expect(await readIds()).toEqual(['h2']);
+    });
+    it('status reports heart rate from its own grant and table; disconnect, transfer and prune erase it', async () => {
+      const d = await device(), g = await hrGrant(d.token), at = Date.now();
+      const status = async () => (await (await request('/apps/run/native/status', 'GET', undefined, await readToken('google:1', 'run'))).json()) as
+        { enabled: boolean; capabilities: Record<string, { enabled: boolean; lastAt: number | null }> };
+      expect((await status()).capabilities['heart_rate.ble']).toEqual({ available: true, enabled: true, lastAt: null });
+      await request('/native/heart-rate', 'POST', { samples: [sample('h', at, [g.id])] }, d.token);
+      const s = await status();
+      expect(s.capabilities['heart_rate.ble']).toEqual({ available: true, enabled: true, lastAt: at });
+      // Run's location fields are location's alone.
+      expect(s.enabled).toBe(false); expect(s.capabilities['location.background']).toEqual({ available: true, enabled: false, lastAt: null });
+      await pruneNativeData(db, at + NATIVE_RETENTION_MS + 1);
+      expect(stored()).toEqual([]);
+      await request('/native/heart-rate', 'POST', { samples: [sample('h2', Date.now(), [g.id])] }, d.token);
+      db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='run'");
+      expect(stored()).toEqual([]);
+      db.sql.exec("UPDATE apps SET creator_id='google:1' WHERE id='run'");
+      const again = await hrGrant(d.token);
+      await request('/native/heart-rate', 'POST', { samples: [sample('h3', Date.now(), [again.id])] }, d.token);
+      expect((await request('/native/device', 'DELETE', undefined, d.token)).status).toBe(200);
+      expect(stored()).toEqual([]);
+      expect(await readIds()).toEqual([]);
     });
   });
 

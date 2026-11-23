@@ -33,9 +33,12 @@
 		<key>RouteRecording</key>
 		<string>Precise location is needed to record an accurate route for the apps you enable.</string>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>ProAppStore reads the heart-rate sensor you choose for the apps you enable, such as Run, including while your phone is locked.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>bluetooth-central</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>

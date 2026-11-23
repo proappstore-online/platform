@@ -97,6 +97,29 @@ actor CompanionRepository {
         try await sync()
     }
 
+    /// A non-location capability (#631), through `/native/apps/:id/capabilities/:capability`. Location keeps its own path.
+    func enable(_ entry: NativeEntry) async throws {
+        try await exclusive { [self] in
+            guard let credential = token() else { throw CompanionError("Sign in first.") }
+            let path = Self.grantPath(entry.key)
+            if local.blocked().contains(entry.key) { _ = try await device("DELETE", path, credential) }
+            _ = try await device("PUT", path, credential, body: json(["version": entry.version, "enabled": true]))
+            try updateMe(try await device("GET", "/native/me", credential))
+            try local.unblock(entry.key); try local.record(.heartRate, appId: entry.appId, detail: "enabled"); local.message = ""
+        }
+    }
+
+    func disable(_ entry: NativeEntry) async throws {
+        try local.block(entry.key)
+        try await sync()
+    }
+
+    /// The grant path for a `NativeEntry.key`: a bare app id is location's original path.
+    static func grantPath(_ key: String) -> String {
+        let parts = key.split(separator: "/", maxSplits: 1)
+        return parts.count == 2 ? "/native/apps/\(parts[0])/capabilities/\(parts[1])" : "/native/apps/\(key)/location"
+    }
+
     func disconnect() async throws {
         try await exclusive { [self] in
             try local.setPaused(true)
@@ -110,10 +133,10 @@ actor CompanionRepository {
     func sync() async throws {
         try await exclusive { [self] in
             guard let credential = token() else { return }
-            var uploading = false, partial = false
+            var uploading = false, partial = false, heartRateStage = false
             do {
                 let blocked = local.blocked()
-                for id in blocked { _ = try await device("DELETE", "/native/apps/\(id)/location", credential) }
+                for key in blocked { _ = try await device("DELETE", Self.grantPath(key), credential) }
                 try updateMe(try await device("GET", "/native/me", credential))
                 for id in blocked { try local.unblock(id) }
                 try local.expire(now: Self.now())
@@ -129,18 +152,35 @@ actor CompanionRepository {
                     }
                     try local.acknowledge(ids)
                 }
+                // Heart rate after points (#631), under its own quota and the same exact-acknowledgement rule.
+                heartRateStage = true
+                for _ in 0..<10 {
+                    let batch = try local.pendingHeartRate()
+                    if batch.isEmpty { break }
+                    uploading = true
+                    let result = try await device("POST", "/native/heart-rate", credential, body: try JSONEncoder().encode(["samples": batch]))
+                    let ids = result["acknowledged"] as? [String] ?? []
+                    guard Set(ids) == Set(batch.map(\.id)) else {
+                        partial = true
+                        throw CompanionError("Upload was not fully acknowledged. Device copy retained.")
+                    }
+                    try local.acknowledgeHeartRate(ids)
+                }
+                local.heartRateSyncError = ""
                 local.lastSync = Self.now(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
                 try? local.syncSucceeded()
             } catch {
                 if (error as? ApiFailure)?.status == 401 { throw error } // expired: the expired card says so, not a sync failure
                 local.message = (error as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
                 local.lastSyncAttempt = Self.now(); local.lastSyncError = error.localizedDescription
+                if heartRateStage { local.heartRateSyncError = error.localizedDescription }
+                let rejected: ShareEvent.Kind = heartRateStage ? .heartRateProblem : .uploadRejected
                 // Activity log: status (0 = network) plus the server's `error` text only.
                 let status = (error as? ApiFailure)?.status ?? (error is URLError ? 0 : nil)
                 if (try? local.syncFailed(status.map { "\($0) \(error.localizedDescription)" } ?? error.localizedDescription)) == true {
                     if status == 429 { try? local.record(.quota, detail: "429") }
-                    if uploading, let status, status == 400 || status == 413 { try? local.record(.uploadRejected, detail: "\(status)") }
-                    if partial { try? local.record(.uploadRejected, detail: "partial_ack") }
+                    if uploading, let status, status == 400 || status == 413 { try? local.record(rejected, detail: "\(status)") }
+                    if partial { try? local.record(rejected, detail: "partial_ack") }
                 }
                 throw error
             }
@@ -186,6 +226,7 @@ actor CompanionRepository {
         local.deviceLabel = device?["label"] as? String ?? ""
         local.deviceExpiresAt = (device?["expiresAt"] as? NSNumber)?.int64Value ?? 0
         try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"] as? [Any] ?? []))
+        try local.saveEntries(try JSONSerialization.data(withJSONObject: me["capabilities"] as? [Any] ?? []))
     }
 
     static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }

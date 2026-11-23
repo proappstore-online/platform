@@ -29,6 +29,9 @@ final class ActivityTextTests: XCTestCase {
             (.queueFull, "", nil, "Storage queue full: recording stopped until uploads catch up"),
             (.expired, "", nil, "Connection to ProAppStore expired: sharing stopped"),
             (.expired, "renew", nil, "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"),
+            (.heartRate, "enabled", "run", "Run heart rate turned on"),
+            (.heartRateProblem, "queue_full", nil, "Heart-rate queue full: heart rate stopped until uploads catch up"),
+            (.bluetooth, "on", nil, "Bluetooth turned on"),
         ]
         XCTAssertEqual(Set(table.map(\.0)), Set(ShareEvent.Kind.allCases), "every kind has a sentence")
         for (kind, detail, app, expected) in table { XCTAssertEqual(sentence(kind, detail, app: app), expected) }

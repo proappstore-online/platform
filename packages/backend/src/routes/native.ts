@@ -3,8 +3,8 @@ import type { Env } from '../types.js';
 import { HttpError, requireUser } from '../lib/auth.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import {
-  nativeBody, nativeCatalog, nativeEntry, NATIVE_CAPABILITIES, NATIVE_LOCATION, NATIVE_LOCATION_SCOPE, NATIVE_RETENTION_MS, nativeDevice, nativeGrants, nativePoints,
-  nativeRandom, nativeRelayOf,
+  nativeBody, nativeCatalog, nativeEntry, NATIVE_CAPABILITIES, NATIVE_HEART_RATE, NATIVE_HEART_RATE_SCOPE, NATIVE_LOCATION, NATIVE_LOCATION_SCOPE,
+  NATIVE_RETENTION_MS, nativeDevice, nativeGrants, nativeHeartRateSamples, nativePoints, nativeRandom, nativeRelayOf,
 } from '../lib/native-companion.js';
 import { armNativeRelay } from '../lib/native-relay.js';
 
@@ -78,13 +78,18 @@ nativeRoutes.delete('/native/device', async c => {
   return c.json({ disconnected: true });
 });
 
-nativeRoutes.post('/native/locations', async c => {
-  const device = await nativeDevice(c), now = Date.now();
-  const quota = await c.env.DB.prepare(`INSERT INTO credential_login_attempts (login, window_start, count) VALUES (?1, ?2, 1)
+/** 200 uploads per 15 minutes per device, counted separately under each upload's key. */
+async function uploadQuota(db: D1Database, key: string, now: number) {
+  const quota = await db.prepare(`INSERT INTO credential_login_attempts (login, window_start, count) VALUES (?1, ?2, 1)
     ON CONFLICT(login) DO UPDATE SET window_start = CASE WHEN ?2 - window_start >= 900000 THEN ?2 ELSE window_start END,
     count = CASE WHEN ?2 - window_start >= 900000 THEN 1 ELSE count + 1 END RETURNING count`)
-    .bind(`native-upload:${device.id}`, now).first<{ count: number }>();
+    .bind(key, now).first<{ count: number }>();
   if (!quota || quota.count > 200) throw new HttpError('Upload limit reached. Retry later.', 429);
+}
+
+nativeRoutes.post('/native/locations', async c => {
+  const device = await nativeDevice(c), now = Date.now();
+  await uploadQuota(c.env.DB, `native-upload:${device.id}`, now);
   const body = await nativeBody(c, 80_000);
   const points = nativePoints(body.points, now);
   const grants = await nativeGrants(c.env.DB, device.id);
@@ -109,11 +114,32 @@ nativeRoutes.post('/native/locations', async c => {
   return c.json({ acknowledged: points.map(p => p.id) });
 });
 
+// #631: Run's strap heart rate. The location upload's rules, against the heart-rate grant and table.
+nativeRoutes.post('/native/heart-rate', async c => {
+  const device = await nativeDevice(c), now = Date.now();
+  await uploadQuota(c.env.DB, `native-hr:${device.id}`, now);
+  const samples = nativeHeartRateSamples((await nativeBody(c, 40_000)).samples, now);
+  const grants = await nativeGrants(c.env.DB, device.id);
+  const statements: D1PreparedStatement[] = [];
+  for (const sample of samples) for (const grant of grants) {
+    if (!sample.grants.includes(grant.id) || sample.at < grant.consent_at) continue;
+    // Recheck consent, capability and publisher AT THE WRITE: a sample naming the app's location grant is stored nowhere.
+    statements.push(c.env.DB.prepare(`INSERT OR IGNORE INTO native_heart_rate (grant_id, sample_id, recorded_at, bpm)
+      SELECT g.id, ?, ?, ? FROM native_grants g JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
+      JOIN native_devices d ON d.id = g.device_id
+      WHERE g.id = ? AND g.device_id = ? AND g.capability = 'heart_rate.ble' AND g.contract_version = ? AND d.expires_at > ?`)
+      .bind(sample.id, sample.at, sample.bpm, grant.id, device.id, grant.contract_version, now));
+  }
+  if (statements.length) await c.env.DB.batch(statements);
+  // Revoked recipients are intentionally discarded, never retried into a subsequent grant.
+  return c.json({ acknowledged: samples.map(s => s.id) });
+});
+
 // Web reads: only the app's own origin (host-injected X-PAS-App) or an app-bound credential may ask.
 async function appUser(c: Context<{ Bindings: Env }>) {
   const user = await requireUser(c), appId = c.req.param('appId')!;
   const boundApp = c.req.header(APP_CONTEXT_HEADER) || user.credentialContext?.appId;
-  if (boundApp !== appId) throw new HttpError('Read location through the authorized app.', 403);
+  if (boundApp !== appId) throw new HttpError('Read native data through the authorized app.', 403);
   return { user, appId };
 }
 
@@ -133,6 +159,23 @@ nativeRoutes.get('/apps/:appId/native/locations', async c => {
   return c.json({ points: rows.results ?? [] });
 });
 
+nativeRoutes.get('/apps/:appId/native/heart-rate', async c => {
+  c.header('Cache-Control', 'private, no-store');
+  const { user, appId } = await appUser(c);
+  const definition = await nativeEntry(appId, NATIVE_HEART_RATE);
+  if (!definition) throw new HttpError('Native heart rate is unavailable for this app.', 404);
+  const after = Number(c.req.query('after') ?? '0'), afterId = c.req.query('afterId') ?? '';
+  if (!Number.isSafeInteger(after) || after < 0 || afterId.length > 160) throw new HttpError('Invalid heart-rate cursor.', 400);
+  const rows = await c.env.DB.prepare(`SELECT p.sample_id AS id, p.recorded_at AS at, p.bpm, p.grant_id || ':' || p.sample_id AS cursorId
+    ${NATIVE_HEART_RATE_SCOPE}
+    AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.sample_id > ?))
+    ORDER BY p.recorded_at, cursorId LIMIT 1000`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
+  return c.json({ samples: rows.results ?? [] });
+});
+
+// Each Collect capability's own table (ADR-018 §5), for status's lastAt. Constant SQL identifiers, never request input.
+const COLLECT_TABLES: Record<keyof typeof NATIVE_CAPABILITIES, string> = { [NATIVE_LOCATION]: 'native_locations', [NATIVE_HEART_RATE]: 'native_heart_rate' };
+
 // Lets the app's web UI show companion state before any point exists. Exposes no device identity.
 // Predicates mirror the locations read above, so status never says enabled when that read returns nothing.
 nativeRoutes.get('/apps/:appId/native/status', async c => {
@@ -140,11 +183,10 @@ nativeRoutes.get('/apps/:appId/native/status', async c => {
   const { user, appId } = await appUser(c);
   const now = Date.now(), capabilities: Record<string, { available: boolean; enabled: boolean; lastAt: number | null }> = {};
   for (const entry of (await nativeCatalog()).filter(a => a.id === appId)) {
-    // native_locations is the location capability's table; a future Collect capability joins its own.
     const row = await c.env.DB.prepare(`SELECT COUNT(DISTINCT g.id) AS grants, MAX(p.recorded_at) AS lastAt
       FROM native_grants g JOIN native_devices d ON d.id = g.device_id
       JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
-      LEFT JOIN native_locations p ON p.grant_id = g.id AND p.recorded_at >= ?
+      LEFT JOIN ${COLLECT_TABLES[entry.capability]} p ON p.grant_id = g.id AND p.recorded_at >= ?
       WHERE g.app_id = ? AND g.capability = ? AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ?`)
       .bind(now - NATIVE_RETENTION_MS, appId, entry.capability, user.id, entry.version, now).first<{ grants: number; lastAt: number | null }>();
     capabilities[entry.capability] = { available: true, enabled: (row?.grants ?? 0) > 0, lastAt: row?.lastAt ?? null };

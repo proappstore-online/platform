@@ -33,6 +33,7 @@ struct AppSharingView: View {
     @State private var selection = Selection.today
     @State var expanded: Set<Int64> = []
     @State private var track: [MapTrack] = []
+    @State private var heartRate: [HeartRateBucket] = []
 
     enum Selection: Hashable {
         case today, session, custom(ClosedRange<Int64>)
@@ -51,6 +52,9 @@ struct AppSharingView: View {
         }
     }
 
+    /// The track's range with an open end at now: a chart axis needs a real end.
+    private var chartRange: ClosedRange<Int64> { range.lowerBound...max(range.lowerBound + 1, min(range.upperBound, now)) }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -64,6 +68,7 @@ struct AppSharingView: View {
                                liveFixAt: collector.lastFixAt, emptyText: "No location was shared with \(app.name) in this period.")
                     .frame(height: 320)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                if !heartRate.isEmpty { HeartRateChartView(buckets: heartRate, range: chartRange) }
                 summary
                 NavigationLink { ActivityLogView(model: model, appId: app.id) } label: {
                     HStack { Label("Activity", systemImage: "list.bullet.rectangle"); Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }
@@ -77,6 +82,13 @@ struct AppSharingView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: TrackKey(range: range, queued: model.queued, lastSync: model.lastSync)) {
             track = await TrackLoader.load(model.repository.local, apps: [app], all: model.apps, range: range)
+        }
+        // #631: the bpm chart on the track's time axis, from the on-device heart-rate history.
+        .task(id: TrackKey(range: chartRange, queued: model.queuedHeartRate, lastSync: model.heartRateLastUpload)) {
+            let local = model.repository.local, id = app.id, range = chartRange
+            heartRate = await Task.detached(priority: .userInitiated) {
+                HeartRateChart.buckets((try? local.heartRate(appId: id, from: range.lowerBound, to: range.upperBound)) ?? [], range: range)
+            }.value
         }
     }
 

@@ -370,6 +370,75 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(try logged([.uploadRejected]), ["upload_rejected:partial_ack"])
     }
 
+    // MARK: Heart rate (#631)
+
+    private let hrEntry: [String: Any] = ["appId": "run", "appName": "Run", "capability": "heart_rate.ble", "name": "Heart rate", "purpose": "p",
+                                          "disclosure": "d", "version": "hv", "grant": ["id": "hr1", "consent_at": 1]]
+
+    /// `connected()` plus Run's heart-rate grant and one queued sample; `/native/me` lists it under `capabilities`.
+    private func connectedWithHeartRate(heartRate: StubProtocol.Stub) async throws -> CompanionRepository {
+        let repository = try await connected()
+        try local.saveEntries(try JSONSerialization.data(withJSONObject: [hrEntry]))
+        try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
+        var withCapabilities = me
+        withCapabilities["capabilities"] = [hrEntry]
+        StubProtocol.handler = { [withCapabilities] request in
+            switch request.url!.path {
+            case "/v1/native/me": return .init(json: withCapabilities)
+            case "/v1/native/locations": return .init(json: ["acknowledged": ["a", "b"]])
+            case "/v1/native/heart-rate": return heartRate
+            default: return .init(json: ["grant": ["id": "hr1"], "revoked": true])
+            }
+        }
+        return repository
+    }
+
+    func testCapabilityPathsStayUnderNative() {
+        for key in ["run", "run/heart_rate.ble"] { XCTAssertNotNil(PasApi.endpoint(CompanionRepository.grantPath(key)), key) }
+        XCTAssertNil(PasApi.endpoint("/apps/run/native/heart-rate"))
+    }
+
+    func testHeartRateUploadsAfterPointsAndStoresCapabilities() async throws {
+        let repository = try await connectedWithHeartRate(heartRate: .init(json: ["acknowledged": ["h"]]))
+        try await repository.sync()
+        XCTAssertEqual(StubProtocol.seen.map(\.url!.path), ["/v1/native/me", "/v1/native/locations", "/v1/native/heart-rate"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(StubProtocol.seen.last?.httpBodyStream.map(Self.read))) as? [String: Any])
+        XCTAssertEqual((body["samples"] as? [[String: Any]])?.first?["bpm"] as? Int, 140)
+        XCTAssertEqual(Set((body["samples"] as? [[String: Any]])?.first?.keys.map { $0 } ?? []), ["id", "at", "bpm", "grants"], "no sensor identity")
+        XCTAssertEqual(try local.heartRateCount(), 0)
+        XCTAssertEqual(local.entries().map(\.key), ["run/heart_rate.ble"])
+        XCTAssertEqual(local.heartRateSyncError, "")
+    }
+
+    func testARejectedHeartRateBatchIsLoggedAsHeartRateAndKept() async throws {
+        let repository = try await connectedWithHeartRate(heartRate: .init(status: 400, json: ["error": "Invalid heart-rate sample."]))
+        do { try await repository.sync(); XCTFail("400 must fail the sync") } catch {}
+        XCTAssertEqual(try local.count(), 0, "points went first")
+        XCTAssertEqual(try local.heartRateCount(), 1)
+        XCTAssertEqual(local.heartRateSyncError, "Invalid heart-rate sample.")
+        XCTAssertEqual(try logged([.uploadRejected, .heartRateProblem]), ["heart_rate_problem:400"])
+    }
+
+    func testEnablingHeartRateUsesItsCapabilityPathAndDisablingRevokesOnlyIt() async throws {
+        let repository = try await connectedWithHeartRate(heartRate: .init(json: ["acknowledged": ["h"]]))
+        let entry = try XCTUnwrap(local.entries().first)
+        StubProtocol.seen = []
+        try await repository.enable(entry)
+        XCTAssertEqual(StubProtocol.seen.map { "\($0.httpMethod!) \($0.url!.path)" }, ["PUT /v1/native/apps/run/capabilities/heart_rate.ble", "GET /v1/native/me"])
+        XCTAssertEqual(try logged([.heartRate]), ["heart_rate:enabled"])
+        StubProtocol.seen = []
+        try await repository.disable(entry)
+        XCTAssertEqual(StubProtocol.seen.first.map { "\($0.httpMethod!) \($0.url!.path)" }, "DELETE /v1/native/apps/run/capabilities/heart_rate.ble")
+        XCTAssertFalse(StubProtocol.seen.contains { $0.url!.path.hasSuffix("/location") }, "Run's location grant is untouched")
+    }
+
+    private static func read(_ stream: InputStream) -> Data {
+        stream.open(); defer { stream.close() }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; data.append(buffer, count: n) }
+        return data
+    }
+
     /// #621: the sharing history is local only. Clearing, expiring and seeding it make no request.
     func testHistoryMaintenanceMakesNoRequest() async throws {
         _ = try await connected()

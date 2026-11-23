@@ -372,6 +372,103 @@ final class LocalStoreTests: XCTestCase {
         }
     }
 
+    // MARK: Heart rate (#631)
+
+    private func entry(_ id: String, _ capability: String, _ grant: String) -> [String: Any] {
+        ["appId": id, "appName": id, "capability": capability, "name": "n", "purpose": "p", "disclosure": "d", "version": "1",
+         "grant": ["id": grant, "consent_at": 1]]
+    }
+
+    /// Run with location grant `run-loc` and heart-rate grant `run-hr`, Ski with location only.
+    private func runStore() throws -> LocalStore {
+        let local = try store(apps: [app("ski", "ski-loc"), app("run", "run-loc")])
+        try local.saveEntries(try JSONSerialization.data(withJSONObject: [
+            entry("ski", "location.background", "ski-loc"), entry("run", "location.background", "run-loc"), entry("run", "heart_rate.ble", "run-hr")]))
+        return local
+    }
+
+    private func sample(_ id: String, at: Int64, bpm: Int = 140) -> HeartRateSample { HeartRateSample(id: id, at: at, bpm: bpm, grants: ["run-hr"]) }
+
+    func testBlockingRunHeartRateLeavesRunLocationIntact() throws {
+        let local = try runStore()
+        try local.enqueueHeartRate(sample("h1", at: 10))
+        try local.block("run/heart_rate.ble")
+        XCTAssertEqual(try local.heartRateCount(), 0, "its queued samples went with it")
+        XCTAssertEqual(LocationPolicy.recipients(local.apps(), blocked: local.excluded(), at: 20), ["ski-loc", "run-loc"])
+        try local.enqueue(point("p", at: 20, grants: ["run-loc"]))
+        XCTAssertEqual(try local.count(), 1)
+        try local.enqueueHeartRate(sample("h2", at: 20))
+        XCTAssertEqual(try local.heartRateCount(), 0)
+        XCTAssertEqual(try local.events().filter { $0.appId == "run" }.map { "\($0.kind.rawValue):\($0.detail)" }, ["heart_rate:disabled"], "not a location `disabled`")
+    }
+
+    func testBlockingRunLocationLeavesRunHeartRateIntact() throws {
+        let local = try runStore()
+        try local.enqueueHeartRate(sample("h1", at: 10))
+        try local.block("run")
+        XCTAssertEqual(try local.heartRateCount(), 1)
+        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), pausedApps: local.pausedApps(), at: 20), ["run-hr"])
+        try local.enqueueHeartRate(sample("h2", at: 20))
+        XCTAssertEqual(try local.pendingHeartRate().map(\.id), ["h1", "h2"])
+    }
+
+    func testHeartRateFollowsPauseAllAndRunsPause() throws {
+        let local = try runStore()
+        try local.pause("run")
+        try local.enqueueHeartRate(sample("paused", at: 10))
+        try local.resume("run"); try local.setPaused(true)
+        try local.enqueueHeartRate(sample("all", at: 11))
+        XCTAssertEqual(try local.heartRateCount(), 0)
+    }
+
+    func testHeartRateHistoryIsKeptAcknowledgedExpiredAndCleared() throws {
+        let local = try runStore()
+        let now: Int64 = 40 * 24 * 60 * 60 * 1000
+        try local.enqueueHeartRate(sample("old", at: now - LocationPolicy.HISTORY_MS - 1))
+        try local.enqueueHeartRate(sample("unsent-8d", at: now - LocationPolicy.RETENTION_MS - 1))
+        try local.enqueueHeartRate(sample("sent-8d", at: now - LocationPolicy.RETENTION_MS - 2, bpm: 99))
+        try local.enqueueHeartRate(sample("new", at: now - 1, bpm: 150))
+        try local.acknowledgeHeartRate(["old", "sent-8d", "new"], now: now)
+        XCTAssertEqual(local.heartRateLastUpload, now)
+        XCTAssertEqual(try local.heartRateCount(), 1)
+        try local.expire(now: now)
+        XCTAssertEqual(try local.heartRateCount(), 0, "the 8-day-old queue copy expired")
+        XCTAssertEqual(try local.heartRate(appId: "run", from: 0, to: .max), [HeartRatePoint(at: now - LocationPolicy.RETENTION_MS - 2, bpm: 99), HeartRatePoint(at: now - 1, bpm: 150)])
+        XCTAssertEqual(try local.lastHeartRate("run"), HeartRatePoint(at: now - 1, bpm: 150))
+        XCTAssertEqual(try local.heartRate(appId: "ski", from: 0, to: .max), [])
+        try local.enqueueHeartRate(sample("queued", at: now))
+        try local.clearHistory(now: now)
+        XCTAssertEqual(try local.heartRate(appId: "run", from: 0, to: .max), [], "Clear history clears heart rate too")
+        XCTAssertEqual(try local.heartRateCount(), 1, "and keeps the queue, like points")
+        try local.clear()
+        XCTAssertEqual(try local.heartRateCount(), 0)
+        XCTAssertNil(local.heartRateSensor)
+    }
+
+    func testHeartRateQueueStopsAtItsCap() throws {
+        let local = try runStore()
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, """
+            WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < \(HeartRatePolicy.MAX_QUEUE))
+            INSERT INTO hr(id, at, payload) SELECT 'h' || i, i, '{}' FROM n
+            """, nil, nil, nil), SQLITE_OK)
+        XCTAssertThrowsError(try local.enqueueHeartRate(sample("over", at: 10))) { XCTAssertTrue($0 is HeartRateQueueFullError) }
+        XCTAssertEqual(try local.heartRateCount(), HeartRatePolicy.MAX_QUEUE)
+        XCTAssertEqual(try local.events().map(\.kind).filter { $0 != .resumedAll }, [.heartRateProblem])
+    }
+
+    func testTheSensorIdentifierStaysInSettingsUntilForgotten() throws {
+        let local = try runStore()
+        let id = UUID()
+        local.heartRateSensor = id
+        local.close()
+        let reopened = try LocalStore(directory: directory)
+        XCTAssertEqual(reopened.heartRateSensor, id)
+        reopened.heartRateSensor = nil
+        XCTAssertNil(reopened.heartRateSensor)
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil

@@ -27,6 +27,38 @@ struct ConnectedApp: Decodable, Equatable, Identifiable {
     }
 }
 
+/// One reviewed (app, capability) entry from `GET /native/me` `capabilities` (ADR-018 §7). `apps` stays the
+/// location list `ConnectedApp` decodes; this is how the phone sees every other capability.
+struct NativeEntry: Decodable, Equatable, Identifiable {
+    static let LOCATION = "location.background"
+
+    let appId: String
+    let appName: String
+    let capability: String
+    let name: String
+    let purpose: String
+    let disclosure: String
+    let version: String
+    let grantId: String?
+    let consentAt: Int64
+
+    var id: String { key }
+    /// The on-phone settings key (`blocked`): the bare app id for location, as before #631, else `app/capability`.
+    var key: String { capability == Self.LOCATION ? appId : "\(appId)/\(capability)" }
+
+    private enum Keys: String, CodingKey { case appId, appName, capability, name, purpose, disclosure, version, grant }
+    private enum GrantKeys: String, CodingKey { case id, consent_at }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        let grant = try c.decodeNil(forKey: .grant) ? nil : try c.nestedContainer(keyedBy: GrantKeys.self, forKey: .grant)
+        appId = try c.decode(String.self, forKey: .appId); appName = try c.decode(String.self, forKey: .appName)
+        capability = try c.decode(String.self, forKey: .capability); name = try c.decode(String.self, forKey: .name)
+        purpose = try c.decode(String.self, forKey: .purpose); disclosure = try c.decode(String.self, forKey: .disclosure)
+        version = try c.decode(String.self, forKey: .version)
+        grantId = try grant?.decode(String.self, forKey: .id); consentAt = try grant?.decode(Int64.self, forKey: .consent_at) ?? 0
+    }
+}
+
 /// One queued fix. Encodes to exactly the `POST /native/locations` point shape.
 struct TrackPoint: Codable, Equatable {
     let id: String
@@ -51,6 +83,11 @@ struct ShareEvent: Equatable {
         case permission, queueFull = "queue_full", grantRestored = "grant_restored"
         /// The device connection expired or was revoked (#652); `detail` "renew" when the user reconnected early.
         case expired
+        /// Heart rate (#631). `heartRate` detail: enabled, disabled, sensor_chosen, connected, lost, forgotten.
+        /// `heartRateProblem` detail: queue_full, partial_ack, or the rejected upload's status. `bluetooth` detail:
+        /// the new Bluetooth state (off, on, unauthorized, unsupported). Sessions ignore all three: location sessions
+        /// stay location's.
+        case heartRate = "heart_rate", heartRateProblem = "heart_rate_problem", bluetooth
     }
 
     let id: Int64
@@ -70,4 +107,9 @@ struct CompanionError: LocalizedError {
 /// `LocalStore.enqueue` at `LocationPolicy.MAX_QUEUE`: storage works, uploads are behind.
 struct QueueFullError: LocalizedError {
     var errorDescription: String? { "Upload queue is full. Connect to the internet so ProAppStore can send waiting points." }
+}
+
+/// `LocalStore.enqueueHeartRate` at `HeartRatePolicy.MAX_QUEUE`.
+struct HeartRateQueueFullError: LocalizedError {
+    var errorDescription: String? { "Heart rate stopped: its upload queue is full. Connect to the internet so ProAppStore can send waiting readings." }
 }

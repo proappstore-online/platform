@@ -180,6 +180,7 @@ struct SharingDashboardView: View {
                         Text(app.name).font(.headline)
                         Text("Background location: \(app.purpose)").font(.subheadline)
                         Button("Enable") { model.consent = app }.disabled(model.busy)
+                        heartRateLines(app)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -274,9 +275,18 @@ struct SharingDashboardView: View {
                         Text("All sharing is paused. Resume location to continue.").font(.footnote)
                     }
                 }
+                heartRateLines(app)
             }
             .font(.subheadline)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// #631: the app's heart rate, one line under its row; pausing the app pauses it too.
+    @ViewBuilder private func heartRateLines(_ app: ConnectedApp) -> some View {
+        ForEach(model.otherEntries(app.id).filter { $0.capability == HeartRate.CAPABILITY }) { entry in
+            Divider()
+            HeartRateLine(entry: entry, model: model, heartRate: model.heartRate)
         }
     }
 

@@ -48,6 +48,17 @@ final class LocalStore: @unchecked Sendable {
         try exec("CREATE INDEX IF NOT EXISTS share_points_point ON share_points(point_id)")
         try exec("CREATE INDEX IF NOT EXISTS share_points_app_sent ON share_points(app_id, sent_at)")
         try exec("CREATE INDEX IF NOT EXISTS share_points_at ON share_points(at)")
+        // Run's strap heart rate (#631): its own queue, same file, protection, expiry and exact acknowledgement.
+        try exec("CREATE TABLE IF NOT EXISTS hr(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
+        try exec("CREATE INDEX IF NOT EXISTS hr_at ON hr(at)")
+        // Its on-device history, under share_points' rules: 30 days, never uploaded, cleared with the rest.
+        try exec("""
+            CREATE TABLE IF NOT EXISTS share_hr(app_id TEXT NOT NULL, sample_id TEXT NOT NULL, at INTEGER NOT NULL,
+              bpm INTEGER NOT NULL, sent_at INTEGER, PRIMARY KEY(app_id, sample_id))
+            """)
+        try exec("CREATE INDEX IF NOT EXISTS share_hr_app_at ON share_hr(app_id, at)")
+        try exec("CREATE INDEX IF NOT EXISTS share_hr_sample ON share_hr(sample_id)")
+        try exec("CREATE INDEX IF NOT EXISTS share_hr_at ON share_hr(at)")
         for path in [fileURL.path, fileURL.path + "-wal", fileURL.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
             try FileManager.default.setAttributes(protection, ofItemAtPath: path)
         }
@@ -117,10 +128,14 @@ final class LocalStore: @unchecked Sendable {
         }
     }
 
+    /// Disabled on this phone, keyed by `NativeEntry.key`: a bare app id is location, `app/capability` another one.
     func blocked() -> Set<String> { ids("blocked") }
 
-    func block(_ appId: String) throws {
+    /// `key` is a `NativeEntry.key`. Disabling one capability never touches another's grant, queue or pause.
+    func block(_ key: String) throws {
         lock.lock(); defer { lock.unlock() }
+        if key.contains("/") { return try blockEntry(key) }
+        let appId = key
         try transaction {
             if !blocked().contains(appId) { try record(.disabled, appId: appId) }
             try saveIds("blocked", blocked().union([appId]))
@@ -138,9 +153,26 @@ final class LocalStore: @unchecked Sendable {
         }
     }
 
-    func unblock(_ appId: String) throws {
+    /// A non-location capability: drops its grant from the heart-rate queue. The location sharing history is keyed by
+    /// app and records nothing here.
+    private func blockEntry(_ key: String) throws {
+        try transaction {
+            let entry = entries().first(where: { $0.key == key })
+            if !blocked().contains(key), let entry { try record(.heartRate, appId: entry.appId, detail: "disabled") }
+            try saveIds("blocked", blocked().union([key]))
+            if let entry { try exec("DELETE FROM share_hr WHERE app_id = ? AND sent_at IS NULL", [entry.appId]) }
+            guard let revoked = entry?.grantId else { return }
+            for s in try pendingHeartRate(limit: HeartRatePolicy.MAX_QUEUE) where s.grants.contains(revoked) {
+                let keep = s.with(grants: s.grants.filter { $0 != revoked })
+                if keep.grants.isEmpty { try exec("DELETE FROM hr WHERE id = ?", [s.id]) }
+                else { try exec("UPDATE hr SET payload = ? WHERE id = ?", [try json(keep), s.id]) }
+            }
+        }
+    }
+
+    func unblock(_ key: String) throws {
         lock.lock(); defer { lock.unlock() }
-        try saveIds("blocked", blocked().subtracting([appId]))
+        try saveIds("blocked", blocked().subtracting([key]))
     }
 
     /// Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform
@@ -198,6 +230,30 @@ final class LocalStore: @unchecked Sendable {
         }
     }
 
+    /// The `capabilities` array of `GET /native/me`, stored as received (#631).
+    func entries() -> [NativeEntry] {
+        guard let raw = setting("entries")?.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([NativeEntry].self, from: raw)) ?? []
+    }
+
+    func saveEntries(_ json: Data) throws { try setSetting("entries", String(decoding: json, as: UTF8.self)) }
+
+    /// The chosen heart-rate sensor's `CBPeripheral.identifier`. On this phone only; never uploaded.
+    var heartRateSensor: UUID? {
+        get { setting("hrSensor").flatMap(UUID.init(uuidString:)) }
+        set { try? setSetting("hrSensor", newValue?.uuidString ?? "") }
+    }
+    /// The last heart-rate upload's failure text, "" after it succeeded: the heart-rate stream's sync health.
+    var heartRateSyncError: String {
+        get { setting("hrSyncError") ?? "" }
+        set { try? setSetting("hrSyncError", newValue) }
+    }
+    /// When the server last acknowledged heart-rate samples, 0 until then.
+    var heartRateLastUpload: Int64 {
+        get { setting("hrLastUpload").flatMap { Int64($0) } ?? 0 }
+        set { try? setSetting("hrLastUpload", String(newValue)) }
+    }
+
     // MARK: Queue
 
     func enqueue(_ point: TrackPoint) throws {
@@ -242,16 +298,77 @@ final class LocalStore: @unchecked Sendable {
         let cutoff = now - LocationPolicy.HISTORY_MS
         try transaction {
             try exec("DELETE FROM points WHERE at < ?", [now - LocationPolicy.RETENTION_MS])
+            try exec("DELETE FROM hr WHERE at < ?", [now - LocationPolicy.RETENTION_MS])
             try exec("DELETE FROM share_points WHERE sent_at IS NULL AND at < ?", [now - LocationPolicy.RETENTION_MS]) // its queue copy just expired
             try exec("DELETE FROM share_points WHERE at < ?", [cutoff])
             try exec("DELETE FROM share_points WHERE rowid IN (SELECT rowid FROM share_points ORDER BY at DESC LIMIT -1 OFFSET ?)",
                      [Int64(LocationPolicy.HISTORY_MAX_POINTS)])
+            try exec("DELETE FROM share_hr WHERE sent_at IS NULL AND at < ?", [now - LocationPolicy.RETENTION_MS])
+            try exec("DELETE FROM share_hr WHERE at < ?", [cutoff])
+            try exec("DELETE FROM share_hr WHERE rowid IN (SELECT rowid FROM share_hr ORDER BY at DESC LIMIT -1 OFFSET ?)",
+                     [Int64(HeartRatePolicy.HISTORY_MAX_SAMPLES)])
             // Keep the newest event of each (app, kind) before the cutoff, so state at the window start is known.
             try exec("""
                 DELETE FROM share_events WHERE at < ? AND id NOT IN
                   (SELECT MAX(id) FROM share_events WHERE at < ? GROUP BY app_id, kind)
                 """, [cutoff, cutoff])
         }
+    }
+
+    // MARK: Heart-rate queue (#631)
+
+    /// Re-filters recipients against current consent, Pause all and per-app pause before insert.
+    func enqueueHeartRate(_ sample: HeartRateSample) throws {
+        lock.lock(); defer { lock.unlock() }
+        let allowed = Set(HeartRatePolicy.recipients(entries(), blocked: blocked(), pausedApps: pausedApps(), at: sample.at))
+        let retained = sample.with(grants: sample.grants.filter { allowed.contains($0) })
+        if paused || retained.grants.isEmpty { return }
+        guard try heartRateCount() < HeartRatePolicy.MAX_QUEUE else {
+            try? record(.heartRateProblem, detail: "queue_full")
+            throw HeartRateQueueFullError()
+        }
+        let entries = entries()
+        try transaction {
+            try exec("INSERT INTO hr(id, at, payload) VALUES (?, ?, ?)", [retained.id, retained.at, try json(retained)])
+            for entry in entries where entry.capability == HeartRate.CAPABILITY && entry.grantId.map(retained.grants.contains) == true {
+                try exec("INSERT OR IGNORE INTO share_hr(app_id, sample_id, at, bpm) VALUES (?, ?, ?, ?)",
+                         [entry.appId, retained.id, retained.at, Int64(retained.bpm)])
+            }
+        }
+    }
+
+    func pendingHeartRate(limit: Int = 300) throws -> [HeartRateSample] {
+        try query("SELECT payload FROM hr ORDER BY at, id LIMIT ?", [Int64(limit)]) { row in
+            try JSONDecoder().decode(HeartRateSample.self, from: Data(String(cString: sqlite3_column_text(row, 0)).utf8))
+        }
+    }
+
+    /// Includes samples the server discarded for a revoked recipient.
+    func acknowledgeHeartRate(_ ids: [String], now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            for id in ids {
+                try exec("DELETE FROM hr WHERE id = ?", [id])
+                try exec("UPDATE share_hr SET sent_at = ? WHERE sample_id = ? AND sent_at IS NULL", [now, id])
+            }
+            try setSetting("hrLastUpload", String(now))
+        }
+    }
+
+    func heartRateCount() throws -> Int { try query("SELECT COUNT(*) FROM hr") { Int(sqlite3_column_int64($0, 0)) }.first ?? 0 }
+
+    /// This app's heart-rate samples in `[from, to]`, oldest first, from the on-device history.
+    func heartRate(appId: String, from: Int64, to: Int64) throws -> [HeartRatePoint] {
+        try query("SELECT at, bpm FROM share_hr WHERE app_id = ? AND at BETWEEN ? AND ? ORDER BY at", [appId, from, to]) { row in
+            HeartRatePoint(at: sqlite3_column_int64(row, 0), bpm: Int(sqlite3_column_int64(row, 1)))
+        }
+    }
+
+    /// The newest heart-rate sample recorded for this app, or nil.
+    func lastHeartRate(_ appId: String) throws -> HeartRatePoint? {
+        try query("SELECT at, bpm FROM share_hr WHERE app_id = ? ORDER BY at DESC LIMIT 1", [appId]) { row in
+            HeartRatePoint(at: sqlite3_column_int64(row, 0), bpm: Int(sqlite3_column_int64(row, 1)))
+        }.first
     }
 
     func count() throws -> Int { try query("SELECT COUNT(*) FROM points") { Int(sqlite3_column_int64($0, 0)) }.first ?? 0 }
@@ -263,6 +380,7 @@ final class LocalStore: @unchecked Sendable {
             try clearConnection()
             try exec("DELETE FROM share_events")
             try exec("DELETE FROM share_points")
+            try exec("DELETE FROM share_hr")
         }
     }
 
@@ -276,8 +394,10 @@ final class LocalStore: @unchecked Sendable {
 
     private func clearConnection() throws {
         try exec("DELETE FROM points")
+        try exec("DELETE FROM hr")
         try exec("DELETE FROM share_points WHERE sent_at IS NULL") // never shared, and now never will be
-        try exec("DELETE FROM settings")
+        try exec("DELETE FROM share_hr WHERE sent_at IS NULL")
+        try exec("DELETE FROM settings") // includes the chosen heart-rate sensor
     }
 
     // MARK: Sharing history (#621)
@@ -351,6 +471,7 @@ final class LocalStore: @unchecked Sendable {
         try transaction {
             try exec("DELETE FROM share_events")
             try exec("DELETE FROM share_points")
+            try exec("DELETE FROM share_hr")
             try record(.historyCleared, at: now)
             try seed(now: now, consentTime: false, detail: "")
         }
@@ -391,7 +512,7 @@ final class LocalStore: @unchecked Sendable {
     private func saveIds(_ key: String, _ ids: Set<String>) throws {
         try setSetting(key, String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self))
     }
-    private func json(_ point: TrackPoint) throws -> String { String(decoding: try JSONEncoder().encode(point), as: UTF8.self) }
+    private func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try JSONEncoder().encode(value), as: UTF8.self) }
 
     private func transaction(_ body: () throws -> Void) throws {
         try exec("BEGIN IMMEDIATE")

@@ -40,6 +40,7 @@ The Android implementation uses Kotlin, Compose/Material 3, Android LocationMana
 | Offline | Durable SQLite queue; recipient grant snapshot per observation; only exact acknowledgements remove queued batches. |
 | Platform | Per-device/app grants, validated idempotent upload, app/user-isolated read, disconnect and seven-day raw buffer retention. |
 | Recipient apps | Ski (first integration), Run (runs and walks while locked) and Rideshare (`loopride`, drivers' live position for dispatch and the rider). Each has its own reviewed disclosure in the platform catalog. |
+| Heart rate | Run's `heart_rate.ble` (#631): a user-chosen standard Bluetooth heart-rate strap (GATT `0x180D`/`0x2A37`), read with the phone locked through Core Bluetooth's `bluetooth-central` background mode. Only bpm and time are uploaded, to `native_heart_rate`; the sensor's name and identifier stay on the phone. Same 7-day buffer, own queue capped at 100,000 samples. The control room shows heart rate under Run's row (state, current bpm, samples waiting, last upload, last reading, its own sync health); the activity log records its events; a 30-day on-device copy of shared samples (`share_hr`, never uploaded) draws a bpm chart on the session's time axis. |
 | Live relay | Rideshare's accepted points run its `native_driver_location` action as the driver within seconds (see [Live relay](#live-relay)). Ski and Run have no relay; they read on return. |
 
 ## Native API, version 1
@@ -59,8 +60,10 @@ Base: `https://api.proappstore.online/v1`. Native credentials are accepted **onl
 | `PUT /native/apps/:appId/capabilities/:capability` | Enables one reviewed (app, capability) entry: `enabled: true` and that entry's current version. 404 for a pair with no reviewed entry. |
 | `DELETE /native/apps/:appId/capabilities/:capability` | Revokes this installation's grant for that one capability; the app's other grants are untouched. |
 | `POST /native/locations` | Batch of 1–100 observations, each with UUID, epoch-ms time, latitude, longitude, accuracy and captured grant IDs. |
+| `POST /native/heart-rate` | `{ samples }`: 1–300 heart-rate samples `{ id, at, bpm, grants }`, integer bpm 25–250, at most 7 days old; body ≤ 40 KB. Stored only for a current `heart_rate.ble` grant the sample names, at or after its consent; every sample is acknowledged, including those discarded. Its own quota (200 uploads per 15 min per device). |
 | `DELETE /native/device` | Revokes installation and cascades its grants/raw points. |
 | `GET /apps/:appId/native/locations?after=…&afterId=…` | Current signed-in web app user, bound to that app. Up to 500 points ordered by timestamp and composite cursor. |
+| `GET /apps/:appId/native/heart-rate?after=…&afterId=…` | Same gate as the locations read. Up to 1,000 `{ id, at, bpm, cursorId }` samples ordered by timestamp and composite cursor. 404 for an app without a heart-rate entry. |
 | `GET /apps/:appId/native/status` | Current signed-in web app user, bound to that app. `{ available, enabled, lastPointAt, capabilities }` — the top-level fields are location's; `capabilities` maps each capability id the app has an entry for to `{ available, enabled, lastAt }`. No device identities. |
 
 The public listing (`GET /v1/storefront/apps/:id` and each item of `GET /v1/storefront/apps`) carries `nativeCapabilities: [{ id, name }]` from the same registry, `[]` when the app has none.

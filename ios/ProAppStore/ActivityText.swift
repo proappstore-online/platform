@@ -6,8 +6,8 @@ enum ActivityText {
 
     static func category(_ kind: ShareEvent.Kind) -> Category {
         switch kind {
-        case .enabled, .disabled, .paused, .resumed, .pausedAll, .resumedAll, .grantLost, .grantRestored, .historyCleared: .sharing
-        case .stopped, .syncFailed, .syncRecovered, .uploadRejected, .quota, .permission, .queueFull, .expired: .problem
+        case .enabled, .disabled, .paused, .resumed, .pausedAll, .resumedAll, .grantLost, .grantRestored, .historyCleared, .heartRate: .sharing
+        case .stopped, .syncFailed, .syncRecovered, .uploadRejected, .quota, .permission, .queueFull, .expired, .heartRateProblem, .bluetooth: .problem
         }
     }
 
@@ -57,6 +57,30 @@ enum ActivityText {
             return event.detail == "renew"
                 ? "Reconnecting to ProAppStore: sharing stopped until you re-enable apps"
                 : "Connection to ProAppStore expired: sharing stopped"
+        case .heartRate:
+            switch event.detail {
+            case "enabled": return "\(app) heart rate turned on"
+            case "disabled": return "\(app) heart rate turned off"
+            case "sensor_chosen": return "Heart-rate sensor chosen"
+            case "connected": return "Heart-rate sensor connected"
+            case "lost": return "Heart-rate sensor disconnected or out of range"
+            case "forgotten": return "Heart-rate sensor forgotten"
+            default: return "Heart rate: \(event.detail)"
+            }
+        case .heartRateProblem:
+            switch event.detail {
+            case "queue_full": return "Heart-rate queue full: heart rate stopped until uploads catch up"
+            case "partial_ack": return "Heart-rate upload not fully acknowledged: the copy on this phone was kept"
+            default: return "Heart-rate upload rejected by ProAppStore (\(event.detail))"
+            }
+        case .bluetooth:
+            switch event.detail {
+            case "off": return "Bluetooth turned off: heart rate stopped"
+            case "on": return "Bluetooth turned on"
+            case "unauthorized": return "Bluetooth permission denied: heart rate stopped"
+            case "unsupported": return "Bluetooth is not available on this phone"
+            default: return "Bluetooth: \(event.detail)"
+            }
         }
     }
 
@@ -77,6 +101,9 @@ enum ActivityText {
         case .permission: "lock.shield"
         case .queueFull: "externaldrive.badge.exclamationmark"
         case .expired: "link.badge.plus"
+        case .heartRate: "heart"
+        case .heartRateProblem: "heart.slash"
+        case .bluetooth: "antenna.radiowaves.left.and.right.slash"
         }
     }
 }
