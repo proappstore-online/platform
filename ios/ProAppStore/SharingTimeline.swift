@@ -94,4 +94,10 @@ enum SharingTimeline {
     static func today(now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Int64> {
         Int64(calendar.startOfDay(for: now).timeIntervalSince1970 * 1000)...Int64(now.timeIntervalSince1970 * 1000)
     }
+
+    /// Today's track range: local midnight onwards, open-ended. It is stable through the day, unlike `today()`, so a
+    /// track keyed on it reloads only when points arrive or upload, not on every re-render (#648).
+    static func todayTrack(now: Date = Date(), calendar: Calendar = .current) -> ClosedRange<Int64> {
+        today(now: now, calendar: calendar).lowerBound...Int64.max
+    }
 }

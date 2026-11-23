@@ -78,4 +78,29 @@ final class SharingTimelineTests: XCTestCase {
             SharingPeriod(start: 20 * min, end: 30 * min, cause: nil),
         ])
     }
+
+    /// #648: the maps' task key must not change between two renders of the same day, or the track reloads every 2 s.
+    func testTodaysTrackKeyIsStableThroughTheDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Australia/Sydney")!
+        let morning = Date(timeIntervalSince1970: 1_763_850_000) // 2025-11-23 09:20 in Sydney
+        let later = morning.addingTimeInterval(2)
+        let key = { (now: Date) in TrackKey(range: SharingTimeline.todayTrack(now: now, calendar: calendar), queued: 3, lastSync: 1) }
+        XCTAssertEqual(key(morning), key(later))
+        XCTAssertEqual(SharingTimeline.todayTrack(now: later, calendar: calendar).lowerBound, SharingTimeline.today(now: later, calendar: calendar).lowerBound)
+        XCTAssertNotEqual(key(morning), key(morning.addingTimeInterval(86_400)), "a new day is a new range")
+    }
+
+    /// The open end still returns every stored point, including one recorded just now.
+    func testAnOpenEndedTrackIncludesTheNewestPoint() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let local = try LocalStore(directory: directory)
+        let app: [String: Any] = ["id": "run", "name": "Run", "purpose": "p", "disclosure": "d", "version": "1", "grant": ["id": "g", "consent_at": 1]]
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [app]))
+        try local.setPaused(false)
+        let now = CompanionRepository.now()
+        try local.enqueue(TrackPoint(id: "p", at: now, lat: 1, lng: 2, accuracy: 5, grants: ["g"]))
+        XCTAssertEqual(try local.track(appId: "run", from: SharingTimeline.todayTrack().lowerBound, to: SharingTimeline.todayTrack().upperBound).map(\.at), [now])
+    }
 }

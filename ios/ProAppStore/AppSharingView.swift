@@ -42,10 +42,11 @@ struct AppSharingView: View {
     private var sessions: [SharingSession] { SharingTimeline.sessions(model.events, appId: app.id) }
     private var current: SharingSession? { sessions.last }
 
+    /// The track's range. Open ends run to `Int64.max`, not `now`, so the task key is stable (#648).
     private var range: ClosedRange<Int64> {
         switch selection {
-        case .today: SharingTimeline.today()
-        case .session: current.map { $0.start...($0.end ?? now) } ?? SharingTimeline.today()
+        case .today: SharingTimeline.todayTrack()
+        case .session: current.map { $0.start...($0.end ?? .max) } ?? SharingTimeline.todayTrack()
         case .custom(let range): range
         }
     }

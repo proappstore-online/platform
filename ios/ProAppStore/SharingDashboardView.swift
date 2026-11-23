@@ -93,8 +93,8 @@ struct SharingDashboardView: View {
                 if let app = model.apps.first(where: { $0.id == id }) { AppSharingView(app: app, model: model, collector: collector) }
             }
         }
-        .task(id: TrackKey(range: SharingTimeline.today(), queued: model.queued, lastSync: model.lastSync)) {
-            tracks = await TrackLoader.load(model.repository.local, apps: granted, all: model.apps, range: SharingTimeline.today())
+        .task(id: TrackKey(range: SharingTimeline.todayTrack(), queued: model.queued, lastSync: model.lastSync)) {
+            tracks = await TrackLoader.load(model.repository.local, apps: granted, all: model.apps, range: SharingTimeline.todayTrack())
         }
         .fullScreenCover(isPresented: $fullMap) {
             NavigationStack {
