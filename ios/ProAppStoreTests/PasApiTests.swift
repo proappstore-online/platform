@@ -142,6 +142,20 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(local.message, "Upload limit reached. Retry later.")
     }
 
+    /// #622: a failure is kept for the sync health line until the next success, without touching lastSync.
+    func testSyncHealthRecordsTheFailureUntilTheNextSuccess() async throws {
+        let repository = try await connected()
+        respond(locations: .init(status: 429, json: ["error": "Upload limit reached. Retry later."]))
+        do { try await repository.sync(); XCTFail("429 must fail the sync") } catch {}
+        XCTAssertEqual(local.lastSyncError, "Upload limit reached. Retry later.")
+        XCTAssertGreaterThan(local.lastSyncAttempt, 0)
+        XCTAssertEqual(local.lastSync, 0)
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        try await repository.sync()
+        XCTAssertEqual(local.lastSyncError, "")
+        XCTAssertEqual(local.lastSyncAttempt, local.lastSync)
+    }
+
     /// #621: the sharing history is local only. Clearing, expiring and seeding it make no request.
     func testHistoryMaintenanceMakesNoRequest() async throws {
         _ = try await connected()

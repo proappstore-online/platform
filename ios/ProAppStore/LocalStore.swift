@@ -72,6 +72,15 @@ final class LocalStore: @unchecked Sendable {
         get { setting("lastSync").flatMap { Int64($0) } ?? 0 }
         set { try? setSetting("lastSync", String(newValue)) }
     }
+    /// When the last sync was tried, and its failure text (`""` after a success). `message` stays as it is.
+    var lastSyncAttempt: Int64 {
+        get { setting("lastSyncAttempt").flatMap { Int64($0) } ?? 0 }
+        set { try? setSetting("lastSyncAttempt", String(newValue)) }
+    }
+    var lastSyncError: String {
+        get { setting("lastSyncError") ?? "" }
+        set { try? setSetting("lastSyncError", newValue) }
+    }
     var message: String {
         get { setting("message") ?? "" }
         set { try? setSetting("message", newValue) }
@@ -242,6 +251,18 @@ final class LocalStore: @unchecked Sendable {
             return ShareEvent(id: sqlite3_column_int64(row, 0), at: sqlite3_column_int64(row, 1), appId: appId, kind: kind,
                               detail: String(cString: sqlite3_column_text(row, 4)))
         }.compactMap { $0 }
+    }
+
+    /// When the server last acknowledged a point for this app, or nil.
+    func lastUpload(_ appId: String) throws -> Int64? {
+        try query("SELECT MAX(sent_at) FROM share_points WHERE app_id = ?", [appId]) { row in
+            sqlite3_column_type(row, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(row, 0)
+        }.first ?? nil
+    }
+
+    /// This app's points still waiting to upload.
+    func pendingCount(_ appId: String) throws -> Int {
+        try query("SELECT COUNT(*) FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId]) { Int(sqlite3_column_int64($0, 0)) }.first ?? 0
     }
 
     /// Deletes the history, keeps the queue (pending uploads still go), and re-seeds the current state at `now`.

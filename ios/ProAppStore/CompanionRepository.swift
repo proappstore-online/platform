@@ -117,10 +117,11 @@ actor CompanionRepository {
                     guard Set(ids) == Set(batch.map(\.id)) else { throw CompanionError("Upload was not fully acknowledged. Device copy retained.") }
                     try local.acknowledge(ids)
                 }
-                local.lastSync = Self.now(); local.message = ""
+                local.lastSync = Self.now(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
             } catch {
                 if let failure = error as? ApiFailure, failure.status == 401 { try? local.setPaused(true, stopped: "signed_out") }
                 local.message = (error as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
+                local.lastSyncAttempt = Self.now(); local.lastSyncError = error.localizedDescription
                 throw error
             }
         }

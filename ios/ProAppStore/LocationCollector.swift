@@ -9,11 +9,13 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     @Published private(set) var authorization: CLAuthorizationStatus
     @Published private(set) var fullAccuracy: Bool
     @Published private(set) var running = false
+    /// Time of the last accepted fix, in memory only.
+    @Published private(set) var lastFixAt: Date?
 
     private let manager = CLLocationManager()
     private let repository: CompanionRepository
     private var local: LocalStore { repository.local }
-    private var lastFixAt: Int64 = 0
+    private var lastAcceptedAt: Int64 = 0
     private var lastSyncAttempt = Date.distantPast
 
     init(repository: CompanionRepository) {
@@ -89,8 +91,9 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
             let at = Int64(location.timestamp.timeIntervalSince1970 * 1000)
             let point = TrackPoint(id: UUID().uuidString, at: at, lat: location.coordinate.latitude, lng: location.coordinate.longitude,
                                    accuracy: location.horizontalAccuracy, grants: recipients(at: at))
-            guard LocationPolicy.valid(point, now: CompanionRepository.now(), lastFixAt: lastFixAt) else { continue }
-            lastFixAt = point.at
+            guard LocationPolicy.valid(point, now: CompanionRepository.now(), lastFixAt: lastAcceptedAt) else { continue }
+            lastAcceptedAt = point.at
+            lastFixAt = location.timestamp
             do {
                 try local.enqueue(point) // Re-filters recipients against current consent before insert.
             } catch {

@@ -21,16 +21,26 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     @Published private(set) var message = ""
     @Published private(set) var pairingCode = ""
     @Published private(set) var lastSync: Int64 = 0
+    @Published private(set) var lastSyncAttempt: Int64 = 0
+    @Published private(set) var lastSyncError = ""
+    @Published private(set) var events: [ShareEvent] = []
+    @Published private(set) var pendingByApp: [String: Int] = [:]
+    @Published private(set) var lastUploadByApp: [String: Int64] = [:]
     @Published private(set) var busy = false
     @Published var consent: ConnectedApp?
     private var error = ""
     private var authSession: ASWebAuthenticationSession?
     private var refreshTask: Task<Void, Never>?
 
-    override init() {
+    override convenience init() {
         let local: LocalStore
         do { local = try LocalStore() } catch { fatalError("ProAppStore could not open its storage.") }
-        repository = CompanionRepository(local: local)
+        self.init(repository: CompanionRepository(local: local))
+    }
+
+    /// Tests pass a repository with a temporary store and a stubbed API.
+    init(repository: CompanionRepository) {
+        self.repository = repository
         collector = LocationCollector(repository: repository)
         super.init()
         if repository.token() != nil { try? local.seedIfEmpty() }
@@ -45,6 +55,10 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         signedIn = repository.token() != nil
         name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); pausedApps = local.pausedApps(); paused = local.paused
         queued = (try? local.count()) ?? 0; lastSync = local.lastSync; pairingCode = repository.pairingCode()
+        lastSyncAttempt = local.lastSyncAttempt; lastSyncError = local.lastSyncError
+        events = (try? local.events()) ?? []
+        pendingByApp = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, (try? local.pendingCount($0.id)) ?? 0) })
+        lastUploadByApp = apps.reduce(into: [:]) { $0[$1.id] = (try? local.lastUpload($1.id)) ?? nil }
         message = error.isEmpty ? local.message : error
     }
 
@@ -142,147 +156,30 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     }
 }
 
+/// The tab shell. Sheets, deep links and the scene phase live here so they work from every tab.
 struct ContentView: View {
     @ObservedObject var model: CompanionModel
     @ObservedObject var collector: LocationCollector
     @Environment(\.scenePhase) private var phase
-    @Environment(\.openURL) private var openURL
-    @State private var disconnectPrompt = false
-    @State private var clearHistoryPrompt = false
+    @State var tab = Tab.sharing
+
+    /// The Storefront tab (its own issue) goes first, ahead of Sharing.
+    enum Tab { case sharing, settings }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("ProAppStore").font(.largeTitle.bold())
-                Text("Your apps, connected to your phone")
-                if !model.signedIn { signIn } else { account }
-                if model.busy { ProgressView().frame(maxWidth: .infinity) }
-                if !model.message.isEmpty { Text(model.message).foregroundStyle(.red) }
-                about
-            }
-            .padding(24)
+        TabView(selection: $tab) {
+            SharingDashboardView(model: model, collector: collector)
+                .tabItem { Label("Sharing", systemImage: "location.circle") }
+                .tag(Tab.sharing)
+            SettingsView(model: model, collector: collector)
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
         }
         .onChange(of: phase, initial: true) { _, phase in
             if phase == .active { model.becameActive() } else { model.resignActive() }
         }
         .onOpenURL { model.handle($0) }
         .sheet(item: $model.consent) { app in disclosure(app) }
-        .alert("Disconnect this phone?", isPresented: $disconnectPrompt) {
-            Button("Disconnect", role: .destructive) { model.disconnect() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Stops location sharing and deletes this phone’s pending updates and platform location copies. Saved rides in your apps are separate. An internet connection is needed to finish.")
-        }
-        .alert("Clear sharing history?", isPresented: $clearHistoryPrompt) {
-            Button("Clear history", role: .destructive) { model.clearHistory() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Deletes the sharing map and timeline kept on this phone. Updates waiting to sync still upload.")
-        }
-    }
-
-    @ViewBuilder private var signIn: some View {
-        Text("Enable background features for the PAS apps you use. You stay in control of what each app can access.")
-        Button("Sign in to ProAppStore") { model.connect() }.buttonStyle(.borderedProminent).disabled(model.busy)
-        if !model.pairingCode.isEmpty { Text("Match this code in your browser: \(model.pairingCode)") }
-    }
-
-    @ViewBuilder private var account: some View {
-        Text(model.name).font(.headline)
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(status).font(.title3.bold())
-                permission
-                if model.paused {
-                    Button("Resume location") { model.setPaused(false) }
-                        .buttonStyle(.borderedProminent).disabled(model.busy || !model.apps.contains(where: model.enabled))
-                } else {
-                    Button("Pause all") { model.setPaused(true) }.buttonStyle(.bordered)
-                }
-                Text("\(model.queued) updates waiting to sync").font(.subheadline)
-                if model.lastSync > 0 {
-                    Text("Last sync: \(Date(timeIntervalSince1970: Double(model.lastSync) / 1000).formatted(date: .omitted, time: .shortened))").font(.footnote)
-                }
-                Button("Sync now") { model.sync() }.disabled(model.busy)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        Text("App permissions").font(.title3.bold())
-        if model.apps.isEmpty { Text("No supported native features are available for your apps yet.") }
-        ForEach(model.apps) { app in
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(app.name).font(.headline)
-                    Text("Background location").font(.subheadline)
-                    Text(!model.enabled(app) ? "Off" : model.pausedApps.contains(app.id) ? "Paused" : "Sharing").foregroundStyle(.tint)
-                    if model.blocked.contains(app.id) {
-                        Text("Disabled on this phone. Server revocation will finish when connected.").font(.footnote)
-                    }
-                    HStack {
-                        if model.enabled(app) {
-                            if model.pausedApps.contains(app.id) {
-                                Button("Resume") { model.resume(app) }.disabled(model.paused)
-                            } else {
-                                Button("Pause") { model.pause(app) }
-                            }
-                        }
-                        Button(model.enabled(app) ? "Disable" : "Enable") {
-                            if model.enabled(app) { model.disable(app) } else { model.consent = app }
-                        }.disabled(model.busy)
-                    }
-                    if model.paused && model.enabled(app) && model.pausedApps.contains(app.id) {
-                        Text("All sharing is paused. Resume location to continue.").font(.footnote)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        Button("Manage account") { open("https://dashboard.proappstore.online") }
-        Button("Clear sharing history") { clearHistoryPrompt = true }
-        Button("Disconnect this phone") { disconnectPrompt = true }.disabled(model.busy)
-    }
-
-    @ViewBuilder private var about: some View {
-        Text("About").font(.title3.bold())
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                LabeledContent("Version", value: AppInfo.current.version)
-                LabeledContent("Build", value: AppInfo.current.build)
-                LabeledContent("Commit", value: AppInfo.current.commit)
-                if model.signedIn && !model.deviceLabel.isEmpty { LabeledContent("This phone", value: model.deviceLabel) }
-            }
-            .font(.subheadline)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        Button("How your data is used") { open("https://docs.proappstore.online/native-companion-users/") }
-        Button("Privacy policy") { open("https://proappstore.online/privacy") }
-    }
-
-    private var status: String {
-        if model.paused { return "Location paused" }
-        let enabledApps = model.apps.filter(model.enabled)
-        if !enabledApps.isEmpty && enabledApps.allSatisfy({ model.pausedApps.contains($0.id) }) { return "All apps paused" }
-        if !collector.permitted { return "Location permission needed" }
-        return collector.running ? "Location sharing is on" : "Location is not running"
-    }
-
-    @ViewBuilder private var permission: some View {
-        switch collector.authorization {
-        case .notDetermined:
-            Text("ProAppStore records your route for the apps you enable, including while your phone is locked. Choose Allow While Using App with Precise Location on.").font(.footnote)
-            Button("Set up location") { collector.requestWhenInUse() }
-        case .denied, .restricted:
-            Text("Location access is off for ProAppStore.").font(.footnote)
-            Button("Open Settings") { open(UIApplication.openSettingsURLString) }
-        default:
-            if !collector.fullAccuracy {
-                Text("Turn on Precise Location in Settings. Approximate location is never used to record routes.").font(.footnote)
-                Button("Use precise location") { collector.requestFullAccuracy() }
-                Button("Open Settings") { open(UIApplication.openSettingsURLString) }
-            } else if collector.authorization == .authorizedWhenInUse {
-                Button("Keep recording after restarts") { collector.requestAlways() }
-            }
-        }
     }
 
     private func disclosure(_ app: ConnectedApp) -> some View {
@@ -296,6 +193,14 @@ struct ContentView: View {
         .padding(24)
         .presentationDetents([.medium, .large])
     }
+}
 
-    private func open(_ link: String) { if let url = URL(string: link) { openURL(url) } }
+/// Busy spinner and the last error, shown at the top of each tab.
+struct StatusMessages: View {
+    @ObservedObject var model: CompanionModel
+
+    var body: some View {
+        if model.busy { ProgressView().frame(maxWidth: .infinity) }
+        if !model.message.isEmpty { Text(model.message).foregroundStyle(.red) }
+    }
 }

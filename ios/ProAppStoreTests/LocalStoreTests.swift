@@ -261,6 +261,21 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" }, ["grant_lost:ski:replaced", "grant_lost:run:revoked"])
     }
 
+    func testPendingCountAndLastUploadArePerApp() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        XCTAssertNil(try local.lastUpload("run"))
+        try local.enqueue(point("both", at: 10, grants: ["ski-g", "run-g"]))
+        try local.enqueue(point("run-1", at: 11, grants: ["run-g"]))
+        try local.enqueue(point("run-2", at: 12, grants: ["run-g"]))
+        XCTAssertEqual(try local.pendingCount("run"), 3)
+        XCTAssertEqual(try local.pendingCount("ski"), 1)
+        try local.acknowledge(["run-1", "run-2"], now: 70)
+        XCTAssertEqual(try local.pendingCount("run"), 1)
+        XCTAssertEqual(try local.lastUpload("run"), 70)
+        XCTAssertEqual(try local.pendingCount("ski"), 1)
+        XCTAssertNil(try local.lastUpload("ski"))
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil
