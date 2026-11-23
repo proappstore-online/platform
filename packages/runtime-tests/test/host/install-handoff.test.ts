@@ -60,6 +60,14 @@ describe('host: install handoff (#628)', () => {
     }
   });
 
+  it('a page without </head> still gets the tag, once, at the end', async () => {
+    await seedRoute('run');
+    await env.APPS.put('apps/run/index.html', '<!doctype html><title>Run</title><p>run', { httpMetadata: { contentType: 'text/html' } });
+    const hinted = await get('https://run.proappstore.online/?install=1');
+    expect(hinted.text.endsWith(TAG)).toBe(true);
+    expect(hinted.text.split('/.pas/install.js')).toHaveLength(2);
+  });
+
   it('a private app refuses the script and the hinted page to a signed-out caller, and serves both to an admitted one', async () => {
     await seedRoute('vis-install', 'private');
     const anonymous = await get('https://vis-install.proappstore.online/.pas/install.js');

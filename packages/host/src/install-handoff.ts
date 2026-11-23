@@ -56,9 +56,11 @@ export const INSTALL_SCRIPT = `(function () {
       root.querySelector('.install').textContent = text;
       root.querySelector('.install').addEventListener('click', function () {
         var event = deferred;
+        deferred = null;
         if (!event) return close();
-        event.prompt();
-        Promise.resolve(event.userChoice).then(close, close);
+        try {
+          Promise.resolve(event.prompt()).then(function () { return event.userChoice; }).then(close, close);
+        } catch (e) { close(); }
       });
       root.querySelector('.later').addEventListener('click', close);
       document.body.appendChild(host);
@@ -88,14 +90,25 @@ export function wantsInstallHandoff(url: URL): boolean {
   return url.searchParams.get("install") === "1";
 }
 
-/** Appends the script tag immediately before `</head>`, like `HeadEndInjector` in meta-rewriter.ts. */
+/**
+ * Puts the script tag immediately before `</head>`, like `HeadEndInjector` in meta-rewriter.ts, or at the end of a
+ * document without a `</head>` (HTMLRewriter streams tokens and never synthesises an implied head).
+ */
 export function injectInstallHandoff(response: Response): Response {
+  let injected = false;
   return new HTMLRewriter()
     .on("head", {
       element(el: Element) {
         el.onEndTag((end) => {
+          if (injected) return;
+          injected = true;
           end.before(INSTALL_SCRIPT_TAG, { html: true });
         });
+      },
+    })
+    .onDocument({
+      end(end) {
+        if (!injected) end.append(INSTALL_SCRIPT_TAG, { html: true });
       },
     })
     .transform(response);

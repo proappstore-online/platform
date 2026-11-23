@@ -143,6 +143,26 @@ describe("install.js behaviour (#628)", () => {
     expect(hosts[0]!.removed).toBe(true);
   });
 
+  it("a second tap while the prompt is open does not prompt again, and a throwing prompt still removes the bar", async () => {
+    const { listeners, buttons, hosts } = page();
+    const prompt = vi.fn();
+    listeners.beforeinstallprompt!({ preventDefault: () => {}, prompt, userChoice: new Promise(() => {}) });
+    await flush();
+    buttons.install!.click();
+    buttons.install!.click();
+    expect(prompt).toHaveBeenCalledOnce();
+
+    const broken = page();
+    broken.listeners.beforeinstallprompt!({
+      preventDefault: () => {},
+      prompt: () => { throw new Error("InvalidStateError"); },
+      userChoice: Promise.resolve({}),
+    });
+    await flush();
+    broken.buttons.install!.click();
+    expect(broken.hosts[0]!.removed).toBe(true);
+  });
+
   it("falls back to Install app without a manifest; Not now removes the bar without prompting", async () => {
     const { listeners, buttons, hosts, fetch } = page();
     const prompt = vi.fn();
