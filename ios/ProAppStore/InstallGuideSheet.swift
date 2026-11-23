@@ -16,6 +16,12 @@ struct InstallGuide {
     private var seen: [String] { defaults.stringArray(forKey: Self.seenKey) ?? [] }
 
     func markSeen(_ id: String) { if !seen.contains(id) { defaults.set(seen + [id], forKey: Self.seenKey) } }
+
+    /// Open from the guide. "Don't show this again" (for every app) is saved only here, never on Cancel.
+    func opened(_ id: String, dontShowAgain: Bool) {
+        markSeen(id)
+        if dontShowAgain { off = true }
+    }
 }
 
 /// iOS cannot add a web app to the Home Screen for the user, so the first Open of each app explains how.
@@ -39,13 +45,15 @@ struct InstallGuideSheet: View {
                     step(1, "safari", "Open \(app.name) in Safari.")
                     step(2, "square.and.arrow.up", "Tap Share in the toolbar. On newer iOS, it may be under •••.")
                     step(3, "plus.app", "Choose Add to Home Screen, then Add.")
-                    Button(action: open) {
+                    Button {
+                        guide.opened(app.id, dontShowAgain: dontShow)
+                        open()
+                    } label: {
                         Text("Open \(app.name)").font(.body.bold()).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     Toggle("Don't show this again", isOn: $dontShow)
-                        .onChange(of: dontShow) { _, value in guide.off = value }
                 }
                 .padding(24)
             }

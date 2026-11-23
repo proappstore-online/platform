@@ -18,6 +18,22 @@ final class SecureStoreTests: XCTestCase {
         XCTAssertNil(try store.read()["token"])
     }
 
+    /// One Keychain read, then memory: a second instance changes the item behind `store`'s back and `store` does not
+    /// see it, while its own write and clear (disconnect) update the cache.
+    func testReadsTheKeychainOnceThenServesTheCache() throws {
+        let other = SecureStore(service: store.service)
+        try other.write(["token": "t1", "userId": "u1"])
+        XCTAssertEqual(try store.read()["token"], "t1")
+        try other.write(["token": "t2", "userId": "u1"])
+        XCTAssertEqual(try store.read()["token"], "t1")
+        try store.write(["token": "t3", "userId": "u1"])
+        XCTAssertEqual(try store.read()["token"], "t3")
+        try other.write(["token": "t4", "userId": "u1"])
+        try store.clear()
+        XCTAssertEqual(try store.read(), [:])
+        XCTAssertEqual(try SecureStore(service: store.service).read(), [:])
+    }
+
     func testItemIsReadableAfterFirstUnlockAndStaysOnThisDevice() throws {
         try store.write(["token": "t"])
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: store.service,

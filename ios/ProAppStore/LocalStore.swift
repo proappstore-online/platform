@@ -189,7 +189,7 @@ final class LocalStore: @unchecked Sendable {
         if paused || retained.grants.isEmpty { return }
         guard try count() < LocationPolicy.MAX_QUEUE else {
             try? record(.queueFull)
-            throw CompanionError("Device storage queue is full. Connect to upload before resuming.")
+            throw QueueFullError()
         }
         try transaction {
             try exec("INSERT INTO points(id, at, payload) VALUES (?, ?, ?)", [retained.id, retained.at, try json(retained)])

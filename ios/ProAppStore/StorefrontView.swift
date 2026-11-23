@@ -21,7 +21,7 @@ struct StorefrontView: View {
         }
         .sheet(item: $guideFor) { app in
             InstallGuideSheet(app: app, guide: guide, open: {
-                guide.markSeen(app.id); guideFor = nil; openURL(app.appUrl)
+                guideFor = nil; openURL(app.appUrl)
             }, cancel: { guideFor = nil })
         }
     }

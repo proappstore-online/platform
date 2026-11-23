@@ -71,8 +71,12 @@ final class LocalStoreTests: XCTestCase {
             INSERT INTO points(id, at, payload) SELECT 'p' || i, i, '{}' FROM n
             """, nil, nil, nil), SQLITE_OK)
         XCTAssertEqual(try local.count(), LocationPolicy.MAX_QUEUE)
-        XCTAssertThrowsError(try local.enqueue(point("over", at: 99, grants: ["g"])))
+        XCTAssertThrowsError(try local.enqueue(point("over", at: 99, grants: ["g"]))) { error in
+            XCTAssertEqual(LocationCollector.saveFailureMessage(error),
+                           "Upload queue is full. Connect to the internet so ProAppStore can send waiting points.")
+        }
         XCTAssertEqual(try local.count(), LocationPolicy.MAX_QUEUE)
+        XCTAssertEqual(LocationCollector.saveFailureMessage(CompanionError("SQLite")), "Could not save location on this phone. Collection paused.")
     }
 
     func testPausedEnqueueIsANoOp() throws {

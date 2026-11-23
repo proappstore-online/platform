@@ -64,3 +64,8 @@ struct CompanionError: LocalizedError {
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
+
+/// `LocalStore.enqueue` at `LocationPolicy.MAX_QUEUE`: storage works, uploads are behind.
+struct QueueFullError: LocalizedError {
+    var errorDescription: String? { "Upload queue is full. Connect to the internet so ProAppStore can send waiting points." }
+}

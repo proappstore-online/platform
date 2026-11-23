@@ -151,11 +151,15 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
                 try local.enqueue(point) // Re-filters recipients against current consent before insert.
             } catch {
                 try? local.setPaused(true, stopped: "storage_failed")
-                local.message = "Could not save location on this phone. Collection paused."
+                local.message = Self.saveFailureMessage(error)
                 evaluate()
                 return
             }
         }
         if Date().timeIntervalSince(lastSyncAttempt) >= 15 { flush() }
+    }
+
+    nonisolated static func saveFailureMessage(_ error: Error) -> String {
+        error is QueueFullError ? error.localizedDescription : "Could not save location on this phone. Collection paused."
     }
 }
