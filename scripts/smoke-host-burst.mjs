@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Post-deploy gate for proappstore-host (#657, #653): bursts of concurrent GETs at
- * the roots of several live apps. Any 5xx or failed fetch fails the run, and
+ * the roots of several live apps. A 5xx, a 4xx (a catalogue app's root answers
+ * 200; a 404 there is broken routing) or a failed fetch fails the run, and
  * deploy-host.yml then rolls the Worker back.
  *
  * A single request cannot catch the #616 class (state shared across requests in
@@ -27,7 +28,7 @@ export function pickRoots(apps, sample = SAMPLE, random = Math.random) {
   return [always, ...rest].map((a) => new URL('/', a.appUrl).href);
 }
 
-/** One burst of BURST concurrent GETs per root; a line per root that answered a 5xx or failed. */
+/** One burst of BURST concurrent GETs per root; a line per root where any answered ≥ 400 or failed. */
 export async function burstProblems(roots, fetchImpl = fetch) {
   const problems = [];
   for (const url of roots) {
@@ -35,7 +36,7 @@ export async function burstProblems(roots, fetchImpl = fetch) {
       try {
         const res = await fetchImpl(url, { redirect: 'manual', signal: AbortSignal.timeout(15_000), headers: { 'cache-control': 'no-cache' } });
         await res.body?.cancel();
-        return res.status >= 500 ? String(res.status) : null;
+        return res.status >= 400 ? String(res.status) : null;
       } catch (e) {
         return `fetch failed (${e?.name ?? 'error'})`;
       }
@@ -55,10 +56,10 @@ async function main() {
   const { apps } = await res.json();
   const problems = await burstProblems(pickRoots(Array.isArray(apps) ? apps : []));
   if (problems.length) {
-    console.error(`\n::error::host answered 5xx under concurrent requests:\n  ${problems.join('\n  ')}`);
+    console.error(`\n::error::app roots failed under concurrent requests:\n  ${problems.join('\n  ')}`);
     process.exit(1);
   }
-  console.log('\n✓ every sampled app root answered every concurrent request without a 5xx.');
+  console.log('\n✓ every sampled app root answered every concurrent request with a 2xx/3xx.');
 }
 
 if (resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1] ?? '')) await main();

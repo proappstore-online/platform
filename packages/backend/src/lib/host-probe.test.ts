@@ -69,15 +69,21 @@ describe('runHostProbe', () => {
     const { fetchImpl, calls } = fakeFetch((app) => (app === 'run' ? 500 : 200));
     const r = await runHostProbe({ env, now: 1_000, fetchImpl });
     expect(r.ok).toBe(false);
-    expect(r.error).toBe(`5xx:run=${BURST}/${BURST}`);
+    expect(r.error).toBe(`run=${BURST}/${BURST}(500)`);
     expect(r.dispatched).toBe(true);
     expect(calls).toContain('https://api.github.com/repos/proappstore-online/platform/actions/workflows/host-probe-alert.yml/dispatches');
-    expect(await hostProbeStatus(env.DB)).toMatchObject({ ok: false, lastFailureAt: 1_000, lastError: `5xx:run=${BURST}/${BURST}` });
+    expect(await hostProbeStatus(env.DB)).toMatchObject({ ok: false, lastFailureAt: 1_000, lastError: `run=${BURST}/${BURST}(500)` });
 
     // Still failing five minutes later: the same episode, no second dispatch.
     expect((await runHostProbe({ env, now: 1_000 + TICK, fetchImpl })).dispatched).toBe(false);
     // A failure REALERT_MS after the last recorded one is a new episode.
     expect((await runHostProbe({ env, now: 1_000 + TICK + REALERT_MS, fetchImpl })).dispatched).toBe(true);
+  });
+
+  it('counts a 4xx as a failure: a refused subrequest (1042) is a 404 that probed nothing', async () => {
+    const env = envWith();
+    const { fetchImpl } = fakeFetch((app) => (app === 'run' ? 404 : 200));
+    expect(await runHostProbe({ env, now: 0, fetchImpl })).toMatchObject({ ok: false, error: `run=${BURST}/${BURST}(404)` });
   });
 
   it('counts a failed fetch as a failure, and recovers on the next clean run', async () => {
@@ -98,7 +104,7 @@ describe('runHostProbe', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) =>
       new URL(String(input)).hostname === 'proappstore.online' ? new Response('down', { status: 503 }) : new Response('ok')) as unknown as typeof fetch;
     const r = await runHostProbe({ env, now: 0, fetchImpl });
-    expect(r).toEqual({ ok: false, error: '5xx:catalogue', dispatched: false });
+    expect(r).toEqual({ ok: false, error: 'catalogue', dispatched: false });
     expect(vi.mocked(fetchImpl).mock.calls.filter(([u]) => String(u) === 'https://run.proappstore.online/')).toHaveLength(BURST);
   });
 

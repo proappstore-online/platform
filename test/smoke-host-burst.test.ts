@@ -18,7 +18,7 @@ describe('smoke-host-burst (#657)', () => {
     expect(pickRoots([])).toEqual(['https://run.proappstore.online/']);
   });
 
-  it('sends BURST overlapping requests per root and reports every 5xx or failed fetch', async () => {
+  it('sends BURST overlapping requests per root and reports every 5xx, 4xx or failed fetch', async () => {
     let inFlight = 0;
     let peak = 0;
     const fetchImpl = vi.fn(async (url: string) => {
@@ -28,15 +28,17 @@ describe('smoke-host-burst (#657)', () => {
       inFlight--;
       if (url.startsWith('https://run.')) return new Response('', { status: 500 });
       if (url.startsWith('https://crm.')) throw new TypeError('network');
+      if (url.startsWith('https://ski.')) return new Response('', { status: 404 });
       return new Response('ok');
     });
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const problems = await burstProblems(['https://run.proappstore.online/', 'https://crm.proappstore.online/', 'https://meet.proappstore.online/'], fetchImpl);
+    const problems = await burstProblems(['https://run.proappstore.online/', 'https://crm.proappstore.online/', 'https://ski.proappstore.online/', 'https://meet.proappstore.online/'], fetchImpl);
     expect(peak).toBe(BURST);
-    expect(fetchImpl).toHaveBeenCalledTimes(3 * BURST);
+    expect(fetchImpl).toHaveBeenCalledTimes(4 * BURST);
     expect(problems).toEqual([
       `https://run.proappstore.online/: ${BURST}/${BURST} failed (${Array(BURST).fill('500').join(', ')})`,
       `https://crm.proappstore.online/: ${BURST}/${BURST} failed (${Array(BURST).fill('fetch failed (TypeError)').join(', ')})`,
+      `https://ski.proappstore.online/: ${BURST}/${BURST} failed (${Array(BURST).fill('404').join(', ')})`,
     ]);
   });
 

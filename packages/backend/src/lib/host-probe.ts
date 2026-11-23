@@ -5,8 +5,10 @@
  * monitor sent one request at a time and stayed green. So on each five-minute
  * cron tick (a Worker cron, which Cloudflare runs on time, unlike a GitHub
  * `schedule:`) this sends BURST concurrent GETs to the root of `run` and of a
- * rotating sample of apps from the public catalogue. Any 5xx or failed fetch is
- * a failure.
+ * rotating sample of apps from the public catalogue. Anything but a 2xx/3xx is
+ * a failure: a 5xx, a failed fetch, and a 4xx too — a catalogue app's root
+ * answers 200, and a Cloudflare refusal of the subrequest (1042, #310) is a 404
+ * that would otherwise read as healthy while probing nothing.
  *
  * The result is the `host_probe` row of telemetry_health (platform-wide), read
  * publicly at GET /health/host-probe. When the probe starts failing after a
@@ -41,18 +43,18 @@ export function pickTargets(apps: CatalogueApp[], now: number): CatalogueApp[] {
   return [always, ...sample];
 }
 
-/** BURST concurrent GETs of one root; how many were a 5xx or failed outright. */
-async function burst(fetchImpl: typeof fetch, url: string): Promise<number> {
+/** BURST concurrent GETs of one root; the status of each that failed (`err` for a failed fetch). */
+async function burst(fetchImpl: typeof fetch, url: string): Promise<string[]> {
   const results = await Promise.all(Array.from({ length: BURST }, async () => {
     try {
       const res = await fetchImpl(url, { redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS), headers: { 'User-Agent': 'proappstore-api host-probe' } });
       await res.body?.cancel();
-      return res.status >= 500;
+      return res.status >= 400 ? String(res.status) : null;
     } catch {
-      return true;
+      return 'err';
     }
   }));
-  return results.filter(Boolean).length;
+  return results.filter((r): r is string => r !== null);
 }
 
 export interface HostProbeResult { ok: boolean; error: string | null; dispatched: boolean }
@@ -76,13 +78,13 @@ export async function runHostProbe(opts: { env: Env; now: number; fetchImpl?: ty
 
   // One app at a time, so each burst overlaps as much as the Worker's open-connection limit allows.
   for (const app of pickTargets(apps, now)) {
-    const n = await burst(fetchImpl, new URL('/', app.appUrl).href);
-    if (n) failed.push(`${app.id}=${n}/${BURST}`);
+    const bad = await burst(fetchImpl, new URL('/', app.appUrl).href);
+    if (bad.length) failed.push(`${app.id}=${bad.length}/${BURST}(${[...new Set(bad)].join('|')})`);
   }
 
   const ok = failed.length === 0;
-  // A short code naming public app ids only: `5xx:run=4/8,meet=1/8`.
-  const error = ok ? null : `5xx:${failed.join(',')}`.slice(0, 200);
+  // A short code naming public app ids and statuses only: `run=4/8(500),meet=1/8(err)`.
+  const error = ok ? null : failed.join(',').slice(0, 200);
   const prev = await env.DB.prepare("SELECT last_failure_at FROM telemetry_health WHERE component = 'host_probe' AND app_id = ''")
     .first<{ last_failure_at: number | null }>()
     .catch(() => null);

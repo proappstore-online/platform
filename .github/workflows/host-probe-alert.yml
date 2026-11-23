@@ -42,7 +42,7 @@ jobs:
             ok=$(jq -r '.ok' <<<"$status")
             updated=$(jq -r '.updatedAt // 0' <<<"$status")
             if [ "$ok" = "false" ]; then
-              reason="The latest probe failed: \`$(jq -r '.lastError' <<<"$status")\` (app=failed/sent; \`catalogue\` = catalogue.json unreadable)."
+              reason="The latest probe failed: \`$(jq -r '.lastError' <<<"$status")\` (app=failed/sent(statuses; err = fetch failed); \`catalogue\` = catalogue.json unreadable)."
             elif [ $(( now - updated )) -gt $(( 30 * 60 * 1000 )) ]; then
               reason="The probe has not reported for over 30 minutes (updatedAt=$updated): the backend cron may not be running."
             else
