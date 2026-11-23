@@ -66,11 +66,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         refresh(); collector.evaluate()
         refreshTask?.cancel()
         refreshTask = Task {
-            do {
-                _ = try await repository.finishSignIn()
-                if repository.token() != nil { try await repository.sync() }
-            } catch { self.error = error.localizedDescription }
-            refresh(); collector.evaluate()
+            await catchUp()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 refresh()
@@ -79,6 +75,17 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     }
 
     func resignActive() { refreshTask?.cancel() }
+
+    /// Finishes a pending connection, then syncs. A connection error is shown until the next activation; sync
+    /// failures are left to `local.message`, which every later successful sync clears, background ones included.
+    func catchUp() async {
+        do {
+            _ = try await repository.finishSignIn()
+            error = ""
+        } catch { self.error = error.localizedDescription }
+        if repository.token() != nil { try? await repository.sync() }
+        refresh(); collector.evaluate()
+    }
 
     private func act(_ action: @escaping () async throws -> Void) {
         if busy { return }
