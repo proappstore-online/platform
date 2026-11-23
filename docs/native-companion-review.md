@@ -8,7 +8,7 @@ Researched **2026-11-06**. This is a documented engineering assessment, not appr
 
 ## Exact product assessed
 
-One consumer native PAS app uses the same account as PAS web apps. Users separately enable supported services for named apps. PAS collects native data, uploads it to the platform, and the platform exposes it only to those authorized apps. Web apps are not hosted inside PAS. Users normally stay in their web apps and visit PAS only for initial connection, permission decisions and settings.
+One consumer native PAS app uses the same account as PAS web apps. Users separately enable supported services for named apps. PAS collects native data, uploads it to the platform, and the platform exposes it only to those authorized apps. Web apps are not hosted inside PAS. On iOS the companion also has a read-only native storefront (ADR-017): it lists the public catalogue and opens apps in the browser, with no web view and no purchase. Users normally stay in their web apps and visit PAS for discovery, connection, permission decisions and settings.
 
 ## Assessment
 
@@ -29,6 +29,8 @@ Sources: [background location](https://support.google.com/googleplay/android-dev
 Location is an allowed background purpose (§2.5.4), must relate directly to the app's service (§5.1.5), and needs consent and appropriate collection/sharing controls (§5.1). Minimum functionality (§4.2) creates uncertainty for a nearly empty permissions app. A useful native connection/status/privacy control panel strengthens the product's utility without hosting the recipient apps.
 
 Our interpretation is that §4.7's hosted mini-app category is not the obvious fit for a standalone companion sending data through a backend. Apple has not confirmed that interpretation. Do not claim an exemption from review or try to disguise app hosting as a companion. The native app must also meet ordinary login, account deletion, privacy and distribution requirements.
+
+The storefront (ADR-017) strengthens the §4.2 case. It has no purchase or subscription link; if one is ever added, it is a §3.1.1 question at submission: recheck the current link-out rules for each storefront region.
 
 Source: [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/).
 

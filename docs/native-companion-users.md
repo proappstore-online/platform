@@ -24,6 +24,10 @@ The **Store** tab lists every public PAS app. Search, browse by category, or ope
 
 Build and install from Xcode (developer preview; not on the App Store). Choose **Allow While Using App** and keep **Precise Location** on. Start collection in ProAppStore, then lock your phone or switch to your app: the blue location indicator shows ProAppStore is recording. Choose **Change to Always Allow** only if you want ProAppStore to resume after iOS closes it. A free Apple developer team build stops opening after 7 days until it is reinstalled from Xcode.
 
+## Browse apps (iPhone)
+
+The **Storefront** tab lists every public PAS app. Search, browse by category, or open an app's page for its description and features. **Open** takes you to the app in your browser. The store works offline from the last copy it downloaded. Apps you have enabled for background features appear under **Yours**.
+
 ## Control sharing
 
 - **Pause all** stops new location collection. Already collected updates may still sync.

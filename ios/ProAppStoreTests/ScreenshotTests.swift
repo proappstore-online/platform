@@ -76,18 +76,24 @@ final class ScreenshotTests: XCTestCase {
             try local.enqueue(TrackPoint(id: "late\(k)", at: now + Int64(k) * 100, lat: 37.336, lng: -122.008, accuracy: 5, grants: ["g-ski"]))
         }
 
+        // #627: the live public catalogue (credential-free), into a scratch directory.
+        let catalogue = CatalogueStore(directory: directory.appendingPathComponent("catalogue", isDirectory: true))
+        await catalogue.refresh()
+        XCTAssertFalse(catalogue.catalogue.apps.isEmpty, "catalogue.json did not load")
+
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         for style in [UIUserInterfaceStyle.light, .dark] {
             let name = style == .dark ? "dark" : "light"
-            for tab in [ContentView.Tab.sharing, .settings] {
+            for tab in [ContentView.Tab.storefront, .sharing, .settings] {
                 let window = UIWindow(windowScene: scene)
                 window.overrideUserInterfaceStyle = style
-                window.rootViewController = UIHostingController(rootView: ContentView(model: model, collector: model.collector, tab: tab))
+                window.rootViewController = UIHostingController(rootView: ContentView(model: model, collector: model.collector, tab: tab, catalogue: catalogue))
                 window.makeKeyAndVisible()
-                try await Task.sleep(for: .seconds(3))
-                try save(window, to: "\(output)/\(tab == .sharing ? "sharing" : "settings")-\(name).png")
+                try await Task.sleep(for: .seconds(tab == .storefront ? 6 : 3))
+                try save(window, to: "\(output)/\(tab)-\(name).png")
                 window.isHidden = true
             }
+            try await storefront(catalogue, model: model, scene: scene, style: style, output: output, name: name)
             // #623: Run's detail with its session expanded.
             let run = try XCTUnwrap(model.apps.first { $0.id == "run" })
             let session = try XCTUnwrap(SharingTimeline.sessions(model.events, appId: "run").last)
@@ -120,6 +126,30 @@ final class ScreenshotTests: XCTestCase {
         model.resignActive()
     }
 
+    /// #627: the whole storefront, two detail pages (with and without a hero), search, large type and 320 pt.
+    private func storefront(_ catalogue: CatalogueStore, model: CompanionModel, scene: UIWindowScene, style: UIUserInterfaceStyle, output: String, name: String) async throws {
+        func shot<V: View>(_ file: String, height: CGFloat? = nil, width: CGFloat? = nil, wait: Double = 5, _ view: V) async throws {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width ?? scene.screen.bounds.width, height: height ?? scene.screen.bounds.height)
+            window.overrideUserInterfaceStyle = style
+            window.rootViewController = UIHostingController(rootView: view)
+            window.makeKeyAndVisible()
+            try await Task.sleep(for: .seconds(wait))
+            try save(window, to: "\(output)/\(file)-\(name).png")
+            window.isHidden = true
+        }
+        let apps = catalogue.catalogue.apps
+        let ski = try XCTUnwrap(apps.first { $0.id == "ski" })
+        let plain = try XCTUnwrap(apps.first { $0.heroImageUrl == nil && $0.about != nil && $0.proFeatures != nil })
+        try await shot("storefront-full", height: 2_700, StorefrontView(model: model, store: catalogue))
+        try await shot("store-detail-ski", height: 1_400, NavigationStack { AppDetailView(app: ski, model: model, open: { _ in }) })
+        try await shot("store-detail-\(plain.id)", height: 1_400, NavigationStack { AppDetailView(app: plain, model: model, open: { _ in }) })
+        try await shot("store-search", wait: 3, StorefrontView(model: model, store: catalogue, query: "map"))
+        try await shot("storefront-xxl", height: 2_400, StorefrontView(model: model, store: catalogue).environment(\.dynamicTypeSize, .accessibility2))
+        try await shot("store-detail-xxl", height: 1_800, NavigationStack { AppDetailView(app: ski, model: model, open: { _ in }) }.environment(\.dynamicTypeSize, .accessibility2))
+        try await shot("storefront-320", height: 1_400, width: 320, StorefrontView(model: model, store: catalogue))
+    }
+
     /// pause() records at the real clock; the walk needs the pause in the past.
     private func backdate(_ kind: ShareEvent.Kind, to at: Int64, in local: LocalStore) throws {
         var db: OpaquePointer?
@@ -128,8 +158,25 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(sqlite3_exec(db, "UPDATE share_events SET at = \(at) WHERE kind = '\(kind.rawValue)'", nil, nil, nil), SQLITE_OK)
     }
 
+    /// drawHierarchy intermittently returns a blank frame on the simulator; retry until the image has content.
     private func save(_ window: UIWindow, to path: String) throws {
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        var image = UIImage()
+        for _ in 0..<8 {
+            image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            if !blank(image) { break }
+            RunLoop.main.run(until: Date().addingTimeInterval(1))
+        }
+        XCTAssertFalse(blank(image), "blank capture: \(path)")
         try XCTUnwrap(image.pngData()).write(to: URL(fileURLWithPath: path))
+    }
+
+    /// One colour everywhere on a coarse 24×48 sample.
+    private func blank(_ image: UIImage) -> Bool {
+        let w = 24, h = 48
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let cg = image.cgImage, let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return true }
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return Set(stride(from: 0, to: pixels.count, by: 4).map { Int(pixels[$0]) << 16 | Int(pixels[$0 + 1]) << 8 | Int(pixels[$0 + 2]) }).count < 3
     }
 }

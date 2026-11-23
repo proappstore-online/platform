@@ -160,14 +160,24 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
 struct ContentView: View {
     @ObservedObject var model: CompanionModel
     @ObservedObject var collector: LocationCollector
+    @StateObject private var catalogue: CatalogueStore
     @Environment(\.scenePhase) private var phase
-    @State var tab = Tab.sharing
+    @State private var tab: Tab
 
-    /// The Storefront tab (its own issue) goes first, ahead of Sharing.
-    enum Tab { case sharing, settings }
+    enum Tab { case storefront, sharing, settings }
+
+    /// Opens on Sharing when any app has a grant, otherwise on Storefront. Tests pass a tab and a catalogue store.
+    @MainActor init(model: CompanionModel, collector: LocationCollector, tab: Tab? = nil, catalogue: CatalogueStore? = nil) {
+        self.model = model; self.collector = collector
+        _catalogue = StateObject(wrappedValue: catalogue ?? CatalogueStore())
+        _tab = State(initialValue: tab ?? (model.apps.contains { $0.grantId != nil } ? .sharing : .storefront))
+    }
 
     var body: some View {
         TabView(selection: $tab) {
+            StorefrontView(model: model, store: catalogue)
+                .tabItem { Label("Storefront", systemImage: "square.grid.2x2") }
+                .tag(Tab.storefront)
             SharingDashboardView(model: model, collector: collector)
                 .tabItem { Label("Sharing", systemImage: "location.circle") }
                 .tag(Tab.sharing)
@@ -176,7 +186,10 @@ struct ContentView: View {
                 .tag(Tab.settings)
         }
         .onChange(of: phase, initial: true) { _, phase in
-            if phase == .active { model.becameActive() } else { model.resignActive() }
+            if phase == .active {
+                model.becameActive()
+                Task { await catalogue.refresh() } // foreground only: never from location callbacks
+            } else { model.resignActive() }
         }
         .onOpenURL { model.handle($0) }
         .sheet(item: $model.consent) { app in disclosure(app) }

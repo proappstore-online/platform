@@ -3,7 +3,11 @@ import XCTest
 
 /// Serves canned responses so PasApi and CompanionRepository run against no network.
 final class StubProtocol: URLProtocol {
-    struct Stub { var status = 200; var json: Any = [String: Any](); var redirect: URL?; var offline = false }
+    struct Stub {
+        var status = 200; var json: Any = [String: Any](); var redirect: URL?; var offline = false
+        /// Sent as is instead of `json` (the catalogue tests need raw and malformed bodies), with `headers`.
+        var body: Data?; var headers: [String: String] = [:]
+    }
     nonisolated(unsafe) static var handler: (URLRequest) -> Stub = { _ in Stub() }
     nonisolated(unsafe) static var seen: [URLRequest] = []
 
@@ -14,11 +18,11 @@ final class StubProtocol: URLProtocol {
         Self.seen.append(request)
         let stub = Self.handler(request)
         if stub.offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
-        let headers = stub.redirect.map { ["Location": $0.absoluteString] } ?? [:]
+        let headers = stub.headers.merging(stub.redirect.map { ["Location": $0.absoluteString] } ?? [:]) { $1 }
         let response = HTTPURLResponse(url: request.url!, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: headers)!
         if let target = stub.redirect { client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response) }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: stub.json))
+        client?.urlProtocol(self, didLoad: stub.body ?? (try! JSONSerialization.data(withJSONObject: stub.json)))
         client?.urlProtocolDidFinishLoading(self)
     }
 }

@@ -27,4 +27,8 @@ Device installs are signed in Xcode with your own team. `DEVELOPMENT_TEAM` is ne
 
 `Assets.xcassets` holds the app icon, `AccentColor` (the app tint, kit accent `#7c3aed` / dark `#a78bfa`) and `LaunchBackground` (design-system `--paper`, `#f8fafc` / `#0f172a`). `AppIcon-1024.png` is the brand kit's maskable icon composition (the one behind `icon-512.png`) rendered at 1024×1024 with the kit's own `generate.py` and flattened to RGB, because App Store icons must have no alpha channel. Never redraw it: regenerate from the kit and keep its entry in the workspace `brand/destinations.json` (`renders`).
 
+## Storefront
+
+The **Storefront** tab (ADR-017) is a browse-only native store over the public `https://proappstore.online/catalogue.json`. It is fetched by `PublicFetch`, a credential-free client (no `Authorization`, no cookies, no redirects), never by `PasApi`. The file is cached in `Application Support/pas-catalogue/` (outside `pas-native/`, so pairing and disconnect keep it) and revalidated with `If-None-Match` when the app becomes active. Icons and hero images are cached in `Caches/pas-images/`, with the catalogue's emoji on `iconBg` as the placeholder. Open hands the app URL to the browser.
+
 The fixed production API origin is `https://api.proappstore.online`; the app exposes no server URL or token field. The `proappstore://native/…` return URI contains no credentials and never grants permission.

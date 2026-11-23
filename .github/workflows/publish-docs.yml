@@ -198,6 +198,7 @@ jobs:
                 - Offline content: adr/012-offline-content.md
                 - Native companion: adr/015-native-companion.md
                 - iOS companion: adr/016-ios-native-companion.md
+                - Native storefront: adr/017-native-storefront.md
           YAML
           python -m zensical build
           python scripts/verify-docs-metadata.py site
@@ -207,6 +208,7 @@ jobs:
           test -f site/mcp-operations/index.html
           test -f site/offline-apps/index.html
           test -f site/adr/012-offline-content/index.html
+          test -f site/adr/017-native-storefront/index.html
           test -f site/native-companion-users/index.html
           test -f site/native-companion/index.html
           python -m json.tool site/templates/catalogue.json >/dev/null
