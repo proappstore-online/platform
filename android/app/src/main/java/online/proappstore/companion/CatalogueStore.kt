@@ -109,12 +109,10 @@ class ImageCache(private val directory: File, private val client: PublicFetch = 
     suspend fun image(url: String): Bitmap? = withContext(Dispatchers.IO) {
         memory.get(url)?.let { return@withContext it }
         val file = File(directory, MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) })
-        val bytes = runCatching { file.readBytes() }.getOrNull()
-            ?: runCatching { client.get(url, maxBytes = MAX_BYTES) }.getOrNull()?.takeIf { it.status == 200 }?.body?.also { fetched ->
-                if (decode(fetched) != null) runCatching { directory.mkdirs(); file.writeBytes(fetched) }
-            }
-            ?: return@withContext null
-        decode(bytes)?.also { memory.put(url, it) }
+        runCatching { file.readBytes() }.getOrNull()?.let { decode(it) }?.let { memory.put(url, it); return@withContext it }
+        val fetched = runCatching { client.get(url, maxBytes = MAX_BYTES) }.getOrNull()?.takeIf { it.status == 200 }?.body ?: return@withContext null
+        // Decoded once; only an image that decodes is kept on disk.
+        decode(fetched)?.also { memory.put(url, it); runCatching { directory.mkdirs(); file.writeBytes(fetched) } }
     }
 
     /** Downsampled to about 1200 px on the long side: a 2 MB hero must not become a 50 MB bitmap. */

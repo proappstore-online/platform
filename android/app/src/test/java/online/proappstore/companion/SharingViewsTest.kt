@@ -29,6 +29,13 @@ class SharingViewsTest {
         full.zip(thinned).forEach { (a, b) -> assertEquals(a.samples.first(), b.samples.first()); assertEquals(a.samples.last(), b.samples.last()) }
     }
 
+    /** #639: only fixes at 25 m or better are drawn; coarser ones are skipped. */
+    @Test fun coarseFixesAreNotDrawn() {
+        val samples = listOf(s(0), s(1_000).copy(accuracy = 25.0), s(2_000).copy(accuracy = 25.1, lat = 9.0), s(3_000).copy(accuracy = 53.0, lat = 9.0), s(4_000))
+        assertEquals(listOf(listOf(0L, 1_000L, 4_000L)), TrackShape.segments(samples).map { seg -> seg.samples.map { it.at } })
+        assertEquals(emptyList<TrackShape.Segment>(), TrackShape.segments(listOf(s(0).copy(accuracy = 40.0))))
+    }
+
     @Test fun emptyInputGivesNoSegments() { assertEquals(emptyList<TrackShape.Segment>(), TrackShape.segments(emptyList())) }
 
     @Test fun projectionKeepsShapeAndFitsTheBox() {

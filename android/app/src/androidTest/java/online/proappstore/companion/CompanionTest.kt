@@ -123,6 +123,28 @@ class CompanionTest {
         store.clear(); assertFalse(store.read().has("token"))
     }
 
+    /** A pairing the server calls expired (403) or used (409) is forgotten; a pending one or a network error keeps it. */
+    @Test fun aDeadPairingIsForgottenSoSignInStartsClean() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val secure = SecureStore(context)
+        var answer: () -> JSONObject = { JSONObject().put("pending", true) }
+        val api = object : PasApi() { override fun request(method: String, path: String, token: String?, body: JSONObject?) = answer() }
+        val repository = CompanionRepository(LocalStore(context), secure, api)
+        fun pair() = secure.write(JSONObject().put("pairId", "abcdef0123").put("verifier", "00"))
+        pair()
+        assertFalse(repository.finishSignIn()); assertEquals("ABCDEF01", repository.pairingCode())
+        answer = { throw java.io.IOException("offline") }
+        assertTrue(runCatching { repository.finishSignIn() }.isFailure); assertEquals("ABCDEF01", repository.pairingCode())
+        for (status in listOf(403, 409)) {
+            pair()
+            answer = { throw ApiFailure(status, "Invalid or expired connection.") }
+            assertEquals(status, (runCatching { repository.finishSignIn() }.exceptionOrNull() as ApiFailure).status)
+            assertEquals("", repository.pairingCode())
+            assertFalse(repository.finishSignIn())
+        }
+        secure.clear()
+    }
+
     // On-device sharing history (#621), ported from iOS LocalStoreTests.
     @Test fun enqueueWritesHistoryPerAppAndAcknowledgeKeepsIt() {
         val local = store()

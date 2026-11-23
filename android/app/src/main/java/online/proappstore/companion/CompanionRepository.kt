@@ -16,6 +16,10 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     fun token(): String? = try { secure.read().optString("token").takeIf { it.isNotBlank() } } catch (_: Exception) {
         local.stop("unlock_failed"); local.message = "The device connection could not be unlocked. Reconnect your account."; null
     }
+    /** Grants that may receive a fix taken now: held, consented, and neither revoked nor paused on this phone. */
+    fun recipients(): List<String> = LocationPolicy.recipients(local.apps(), local.excluded(), System.currentTimeMillis())
+    /** Whether collection should run, permissions aside: connected, not paused, and some app would receive a fix. */
+    fun collecting(): Boolean = token() != null && !local.paused && recipients().isNotEmpty()
     fun pairingCode(): String = try { secure.read().optString("pairId").take(8).uppercase() } catch (_: Exception) { "" }
     suspend fun startSignIn(): String = withContext(Dispatchers.IO) { operations.withLock {
         check(token() == null) { "Disconnect this account before connecting another." }
@@ -28,7 +32,14 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     suspend fun finishSignIn(): Boolean = withContext(Dispatchers.IO) { operations.withLock {
         val state = secure.read()
         if (!state.has("pairId")) return@withLock false
-        val result = api.request("POST", "/native/auth/complete", body = JSONObject().put("id", state.getString("pairId")).put("verifier", state.getString("verifier")))
+        val result = try {
+            api.request("POST", "/native/auth/complete", body = JSONObject().put("id", state.getString("pairId")).put("verifier", state.getString("verifier")))
+        } catch (e: ApiFailure) {
+            // 403 expired or unknown, 409 already used: this pairing can never finish. Forget it, so the next open is a
+            // plain Sign in instead of the same error and a dead pairing code.
+            if (e.status == 403 || e.status == 409) secure.clear()
+            throw e
+        }
         if (result.optBoolean("pending")) return@withLock false
         val credential = result.getString("token")
         val me = api.request("GET", "/native/me", credential)

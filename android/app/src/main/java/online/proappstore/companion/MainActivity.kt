@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
                     enable = { app -> act { graph.repository.enable(app); refresh(); if (LocationService.allowed(this@MainActivity)) maybeStart() else permissionExplanation = true } },
                     disable = { app -> act { graph.repository.disable(app) } },
                     // Local writes, not `act`: pausing works offline and instantly.
-                    pauseApp = { app -> graph.local.pause(app.id); if (recipients().isEmpty()) stopService(Intent(this, LocationService::class.java)); refresh() },
+                    pauseApp = { app -> graph.local.pause(app.id); if (graph.repository.recipients().isEmpty()) stopService(Intent(this, LocationService::class.java)); refresh() },
                     resumeApp = { app -> graph.local.resume(app.id); refresh(); maybeStart() },
                     pause = { graph.local.paused = true; stopService(Intent(this, LocationService::class.java)); refresh() },
                     resume = { graph.local.paused = false; refresh(); if (LocationService.allowed(this)) maybeStart() else permissionExplanation = true },
@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun maybeStart() {
-        if (graph.repository.token() == null || graph.local.paused || !LocationService.allowed(this) || recipients().isEmpty()) return
+        if (!LocationService.allowed(this) || !graph.repository.collecting()) return
         val prompt = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompt.getBoolean("notifications", false)) {
             prompt.edit().putBoolean("notifications", true).apply()
@@ -147,7 +147,6 @@ class MainActivity : ComponentActivity() {
         }
         try { LocationService.start(this) } catch (_: RuntimeException) { error = "Android could not start location sharing. Open ProAppStore and try again." }
     }
-    private fun recipients() = LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), System.currentTimeMillis())
     private fun requestLocation() {
         when {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ->
@@ -159,7 +158,9 @@ class MainActivity : ComponentActivity() {
             else -> maybeStart()
         }
     }
-    private fun open(url: String) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    private fun open(url: String) {
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: RuntimeException) { error = "No browser is available to open $url." }
+    }
 }
 
 /** Where the user is inside the Sharing tab. */

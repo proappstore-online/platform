@@ -6,10 +6,11 @@ import org.json.JSONObject
 
 class ApiFailure(val status: Int, message: String) : Exception(message)
 
-class PasApi {
+/** Open only so instrumented tests can answer for the server; the app constructs this one. */
+open class PasApi {
     companion object { const val ORIGIN = "https://api.proappstore.online" }
     /** Only the platform origin receives the narrow native credential; redirects are refused. */
-    fun request(method: String, path: String, token: String? = null, body: JSONObject? = null): JSONObject {
+    open fun request(method: String, path: String, token: String? = null, body: JSONObject? = null): JSONObject {
         require(path.startsWith("/native/"))
         val connection = URL("$ORIGIN/v1$path").openConnection() as HttpURLConnection
         try {

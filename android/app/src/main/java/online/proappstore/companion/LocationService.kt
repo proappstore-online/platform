@@ -22,6 +22,9 @@ class LocationService : Service(), LocationListenerCompat {
     private val manager by lazy { getSystemService(LocationManager::class.java) }
     private var started = false
     private var lastFixAt = 0L
+    /** The last fix that became a queued point (#639), and when the collector last synced. */
+    private var lastEmitted: TrackPoint? = null
+    private var lastSyncAt = 0L
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
@@ -30,23 +33,34 @@ class LocationService : Service(), LocationListenerCompat {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PAUSE) { graph.local.paused = true; stopSelf(); return START_NOT_STICKY }
         notePermission(this, graph.local)
-        if (!allowed(this) || graph.repository.token() == null || graph.local.paused || recipients().isEmpty()) {
+        if (!allowed(this) || !graph.repository.collecting()) { stopSelf(); return START_NOT_STICKY }
+        try {
+            startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } catch (_: IllegalStateException) {
+            // Android 12+ refuses a foreground start from the background (ForegroundServiceStartNotAllowedException),
+            // which is what a START_STICKY restart after the process was killed is. Opening ProAppStore starts it again.
+            graph.local.message = "Android stopped location sharing in the background. Open ProAppStore to resume."
             stopSelf(); return START_NOT_STICKY
         }
-        startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         if (!started) {
             started = true; running = true
             try {
                 // Native Android API; no WebView timers, Google account or Play Services dependency.
                 for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                    if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 5f, this, Looper.getMainLooper())
+                    // No distance filter: LocationPolicy.shouldEmit decides, and needs fixes while still for the heartbeat.
+                    if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 0f, this, Looper.getMainLooper())
                 }
             } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return START_NOT_STICKY }
             scope.launch {
                 while (isActive) {
                     notePermission(this@LocationService, graph.local)
-                    if (!allowed(this@LocationService) || graph.local.paused || recipients().isEmpty() || graph.repository.token() == null) { stopSelf(); break }
-                    try { graph.repository.sync() } catch (_: Exception) { /* durable queue is retried by WorkManager too */ }
+                    if (!allowed(this@LocationService) || !graph.repository.collecting()) { stopSelf(); break }
+                    // Battery: no request while there is nothing to upload or revoke, apart from a grant refresh.
+                    val now = System.currentTimeMillis()
+                    if (LocationPolicy.syncDue(graph.local.count(), graph.local.blocked().isNotEmpty(), lastSyncAt, now)) {
+                        lastSyncAt = now
+                        try { graph.repository.sync() } catch (_: Exception) { /* durable queue is retried by WorkManager too */ }
+                    }
                     getSystemService(NotificationManager::class.java).notify(1, notification())
                     delay(30_000)
                 }
@@ -54,7 +68,6 @@ class LocationService : Service(), LocationListenerCompat {
         }
         return START_STICKY
     }
-    private fun recipients(): List<String> = LocationPolicy.recipients(graph.local.apps(), graph.local.excluded(), System.currentTimeMillis())
     override fun onLocationChanged(location: Location) {
         if (graph.local.paused || !allowed(this) || location.time <= lastFixAt) return
         val point = TrackPoint(UUID.randomUUID().toString(), location.time, location.latitude, location.longitude, location.accuracy,
@@ -62,11 +75,14 @@ class LocationService : Service(), LocationListenerCompat {
         if (!LocationPolicy.valid(point, System.currentTimeMillis())) return
         lastFixAt = point.at
         lastFix = LiveFix(point.at, point.lat, point.lng)
+        val speed = location.takeIf { it.hasSpeed() && it.hasSpeedAccuracy() }?.speed
+        if (!LocationPolicy.shouldEmit(lastEmitted, point, speed)) return
+        lastEmitted = point
         scope.launch {
             try {
                 // Re-evaluate consent after crossing onto the storage dispatcher.
                 if (!graph.local.paused) {
-                    val current = recipients().toSet()
+                    val current = graph.repository.recipients().toSet()
                     val retained = point.copy(grants = point.grants.filter { it in current })
                     if (retained.grants.isNotEmpty()) graph.local.enqueue(retained)
                 }
