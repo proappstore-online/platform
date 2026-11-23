@@ -42,4 +42,4 @@ ADR-015 describes the companion as a place users visit for account connection, c
 - If an app later sells its own subscription, linking to that checkout from the storefront becomes an Apple 3.1.1 (in-app purchase) question at submission. The storefront links only to the apps themselves today.
 
 **Neutral:**
-- Android has no storefront yet. Parity is a separate decision.
+- The Android companion has a matching Store tab under the same rules (#638).

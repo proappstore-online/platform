@@ -28,6 +28,8 @@ Build and install from Xcode (developer preview; not on the App Store). Choose *
 
 The **Storefront** tab lists every public PAS app. Search, browse by category, or open an app's page for its description and features. **Open** takes you to the app in your browser. The store works offline from the last copy it downloaded. Apps you have enabled for background features appear under **Yours**.
 
+The first time you open an app, ProAppStore shows how to add it to your Home Screen (Share → Add to Home Screen). Choose **Don't show this again** to skip the guide for every app.
+
 ## Control sharing
 
 - **Pause all** stops new location collection. Already collected updates may still sync.

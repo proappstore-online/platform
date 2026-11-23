@@ -148,6 +148,10 @@ final class ScreenshotTests: XCTestCase {
         try await shot("storefront-xxl", height: 2_400, StorefrontView(model: model, store: catalogue).environment(\.dynamicTypeSize, .accessibility2))
         try await shot("store-detail-xxl", height: 1_800, NavigationStack { AppDetailView(app: ski, model: model, open: { _ in }) }.environment(\.dynamicTypeSize, .accessibility2))
         try await shot("storefront-320", height: 1_400, width: 320, StorefrontView(model: model, store: catalogue))
+        // #628: the Add to Home Screen guide, as Open on Run first shows it.
+        let run = try XCTUnwrap(apps.first { $0.id == "run" })
+        let scratch = InstallGuide(defaults: try XCTUnwrap(UserDefaults(suiteName: "online.proappstore.companion.screenshots")))
+        try await shot("install-guide", wait: 3, InstallGuideSheet(app: run, guide: scratch, open: {}, cancel: {}))
     }
 
     /// pause() records at the real clock; the walk needs the pause in the past.

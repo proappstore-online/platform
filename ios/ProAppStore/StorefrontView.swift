@@ -6,6 +6,8 @@ struct StorefrontView: View {
     @ObservedObject var store: CatalogueStore
     @Environment(\.openURL) private var openURL
     @State var query = ""
+    @State private var guideFor: CatalogueApp?
+    var guide = InstallGuide()
 
     var body: some View {
         NavigationStack {
@@ -17,10 +19,17 @@ struct StorefrontView: View {
             .refreshable { await store.refresh() }
             .navigationDestination(for: CatalogueApp.self) { app in AppDetailView(app: app, model: model, open: openApp) }
         }
+        .sheet(item: $guideFor) { app in
+            InstallGuideSheet(app: app, guide: guide, open: {
+                guide.markSeen(app.id); guideFor = nil; openURL(app.appUrl)
+            }, cancel: { guideFor = nil })
+        }
     }
 
-    /// Every Open button goes through here.
-    func openApp(_ app: CatalogueApp) { openURL(app.appUrl) }
+    /// Every Open button goes through here: the first time per app, the Add to Home Screen guide (#628).
+    func openApp(_ app: CatalogueApp) {
+        if guide.shouldShow(app.id) { guideFor = app } else { openURL(app.appUrl) }
+    }
 
     private var catalogue: Catalogue { store.catalogue }
 
