@@ -307,6 +307,33 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try events(local).map(\.kind), [.grantLost, .grantRestored])
     }
 
+    /// #647: the history queries on hot paths (acknowledge per id, the 2 s per-app refresh, expiry every sync) use
+    /// an index. Without one they scan up to 200,000 rows while holding the store lock.
+    func testHotHistoryQueriesUseAnIndex() throws {
+        let local = try store(apps: [app("ski", "g")])
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        defer { sqlite3_close(db) }
+        func plan(_ sql: String) -> String {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "EXPLAIN QUERY PLAN " + sql, -1, &statement, nil) == SQLITE_OK else { return "prepare failed" }
+            defer { sqlite3_finalize(statement) }
+            var details: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW { details.append(String(cString: sqlite3_column_text(statement, 3))) }
+            return details.joined(separator: "; ")
+        }
+        for (sql, index) in [
+            ("UPDATE share_points SET sent_at = 1 WHERE point_id = 'p' AND sent_at IS NULL", "share_points_point"),
+            ("SELECT MAX(sent_at) FROM share_points WHERE app_id = 'ski'", "COVERING INDEX share_points_app_sent"),
+            ("SELECT COUNT(*) FROM share_points WHERE app_id = 'ski' AND sent_at IS NULL", "COVERING INDEX share_points_app_sent"),
+            ("DELETE FROM share_points WHERE at < 1", "share_points_at"),
+            ("SELECT rowid FROM share_points ORDER BY at DESC LIMIT -1 OFFSET 200000", "share_points_at"),
+        ] {
+            let detail = plan(sql)
+            XCTAssertTrue(detail.contains(index), "\(sql): \(detail)")
+            XCTAssertFalse(detail.contains("TEMP B-TREE"), "\(sql): \(detail)")
+        }
+    }
+
     private func sqliteHandle(_ url: URL) -> OpaquePointer? {
         var db: OpaquePointer?
         return sqlite3_open(url.path, &db) == SQLITE_OK ? db : nil

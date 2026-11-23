@@ -44,6 +44,10 @@ final class LocalStore: @unchecked Sendable {
               lat REAL NOT NULL, lng REAL NOT NULL, accuracy REAL NOT NULL, sent_at INTEGER, PRIMARY KEY(app_id, point_id))
             """)
         try exec("CREATE INDEX IF NOT EXISTS share_points_app_at ON share_points(app_id, at)")
+        // acknowledge() by point id, refresh()'s per-app last upload and pending count, expire() by age (#647).
+        try exec("CREATE INDEX IF NOT EXISTS share_points_point ON share_points(point_id)")
+        try exec("CREATE INDEX IF NOT EXISTS share_points_app_sent ON share_points(app_id, sent_at)")
+        try exec("CREATE INDEX IF NOT EXISTS share_points_at ON share_points(at)")
         for path in [fileURL.path, fileURL.path + "-wal", fileURL.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
             try FileManager.default.setAttributes(protection, ofItemAtPath: path)
         }
