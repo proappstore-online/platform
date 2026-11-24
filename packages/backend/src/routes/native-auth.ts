@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { verifySession } from '@proappstore/build-core';
 import type { Env } from '../types.js';
@@ -20,10 +21,17 @@ const hex = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}
 const escape = (s: string) => s.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
 const base = (c: Ctx) => (c.env.APP_BASE || 'https://api.proappstore.online').replace(/\/$/, '');
 const row = (c: Ctx, id: string) => c.env.DB.prepare('SELECT * FROM native_pairings WHERE id = ? AND expires_at > ?').bind(id, Date.now()).first<Pairing>();
-function page(c: Ctx, body: string) {
+function page(c: Ctx, body: string, status: ContentfulStatusCode = 200) {
   c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
-  return c.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect ProAppStore</title><style>body{font:17px system-ui;max-width:440px;margin:64px auto;padding:24px;color:#241638;background:#faf8ff}a,button{display:block;margin:16px 0;padding:16px;border-radius:12px;background:#6d28d9;color:white;text-align:center;border:0;font:inherit}small{display:block;overflow-wrap:anywhere}</style><main>${body}</main></html>`);
+  return c.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect ProAppStore</title><style>body{font:17px system-ui;max-width:440px;margin:64px auto;padding:24px;color:#241638;background:#faf8ff}a,button{display:block;margin:16px 0;padding:16px;border-radius:12px;background:#6d28d9;color:white;text-align:center;border:0;font:inherit}small{display:block;overflow-wrap:anywhere}</style><main>${body}</main></html>`, status);
 }
+// #680: pages a person sees. An error is a page with the same status, never the API's JSON body; /start and /complete stay JSON.
+const browserPage = (handler: (c: Ctx) => Promise<Response>) => async (c: Ctx) => {
+  try { return await handler(c); } catch (e) {
+    if (!(e instanceof HttpError)) throw e; // a 500 still reaches the global handler and its logging
+    return page(c, `<h1>Couldn't connect your phone</h1><p>${escape(e.message)}</p>`, e.status as ContentfulStatusCode);
+  }
+};
 nativeAuthRoutes.use('/native/auth/*', async (c, next) => {
   c.header('Cache-Control', 'no-store');
   // same-origin, not no-referrer: under no-referrer browsers send `Origin: null` on the approve
@@ -40,7 +48,7 @@ nativeAuthRoutes.post('/native/auth/start', async c => {
     .bind(id, body.challenge, body.label.trim(), Date.now() + PAIRING_MS).run();
   return c.json({ id, authorizationUrl: `${base(c)}${PREFIX}/authorize?id=${id}`, expiresIn: PAIRING_MS / 1000 });
 });
-nativeAuthRoutes.get('/native/auth/authorize', async c => {
+nativeAuthRoutes.get('/native/auth/authorize', browserPage(async c => {
   const id = c.req.query('id') ?? '';
   const pairing = hex(id) ? await row(c, id) : null;
   if (!pairing || pairing.approved || pairing.user_id) throw new HttpError('Connection expired. Start again from the ProAppStore app on your phone.', 400);
@@ -57,7 +65,7 @@ nativeAuthRoutes.get('/native/auth/authorize', async c => {
   const returnTo = `${base(c)}${PREFIX}/callback`;
   const login = (provider: string) => `${base(c)}/v1/auth/${provider}/start?response_mode=query&return_to=${encodeURIComponent(returnTo)}`;
   return page(c, `<h1>Connect your phone</h1><p>Sign in with the same account you use in your PAS apps.</p><p>Device: ${escape(pairing.label)}</p><small>Check this code matches your phone: ${id.slice(0, 8).toUpperCase()}</small><a href="${escape(login('google'))}">Continue with Google</a><a href="${escape(login('github'))}">Continue with GitHub</a><p>This connects your account. Location sharing stays off until you enable an app on your phone.</p>`);
-});
+}));
 async function browserPairing(c: Ctx): Promise<{ pairing: Pairing; nonce: string }> {
   const [id, nonce] = (getCookie(c, COOKIE) ?? '').split('.');
   if (!hex(id) || !hex(nonce)) throw new HttpError('Start this connection from the ProAppStore app on your phone.', 403);
@@ -65,7 +73,7 @@ async function browserPairing(c: Ctx): Promise<{ pairing: Pairing; nonce: string
   if (!pairing || pairing.approved || pairing.browser_hash !== await nativeHash(nonce)) throw new HttpError('Connection expired. Start again.', 403);
   return { pairing, nonce };
 }
-nativeAuthRoutes.get('/native/auth/callback', async c => {
+nativeAuthRoutes.get('/native/auth/callback', browserPage(async c => {
   const { pairing, nonce } = await browserPairing(c);
   const code = c.req.query('code') ?? '';
   const session = code ? await redeemExchangeCode(c.env, code) : null;
@@ -80,16 +88,18 @@ nativeAuthRoutes.get('/native/auth/callback', async c => {
     .bind(claims.uid, pairing.id, Date.now()).run();
   if (!result.meta.changes) throw new HttpError('Connection already used.', 409);
   return page(c, `<h1>Connect ${escape(pairing.label)}?</h1><p>Account: ${escape(claims.login || claims.uid)}</p><small>Phone code: ${pairing.id.slice(0, 8).toUpperCase()}</small><p>Only continue if you started this request on your phone. No apps receive your location yet.</p><form method="post" action="${PREFIX}/approve"><input type="hidden" name="nonce" value="${nonce}"><button>Connect this phone</button></form>`);
-});
-nativeAuthRoutes.post('/native/auth/approve', async c => {
+}));
+nativeAuthRoutes.post('/native/auth/approve', browserPage(async c => {
   if (c.req.header('Origin') !== new URL(base(c)).origin) throw new HttpError('Invalid approval origin.', 403);
   const { pairing, nonce } = await browserPairing(c);
   const form = await c.req.parseBody();
   if (form.nonce !== nonce || !pairing.user_id) throw new HttpError('Invalid connection approval.', 403);
-  await c.env.DB.prepare('UPDATE native_pairings SET approved = 1 WHERE id = ? AND user_id IS NOT NULL AND expires_at > ?').bind(pairing.id, Date.now()).run();
+  const approved = await c.env.DB.prepare('UPDATE native_pairings SET approved = 1 WHERE id = ? AND user_id IS NOT NULL AND expires_at > ?').bind(pairing.id, Date.now()).run();
+  // Expired since browserPairing() read it: never say connected when the phone's /complete will refuse.
+  if (!approved.meta.changes) throw new HttpError('Connection expired. Start again from the ProAppStore app on your phone.', 403);
   deleteCookie(c, COOKIE, { secure: true, path: '/' });
   return page(c, '<h1>Phone connected</h1><p>Return to ProAppStore to choose which apps may receive location.</p><a href="proappstore://native/connected">Return to ProAppStore</a>');
-});
+}));
 nativeAuthRoutes.post('/native/auth/complete', async c => {
   const body = await nativeBody(c);
   if (!hex(body.id) || !hex(body.verifier)) throw new HttpError('Invalid connection proof.', 400);

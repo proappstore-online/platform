@@ -103,6 +103,70 @@ describe('consumer native companion', () => {
     expect((await request(`/native/auth/authorize?id=${p.id}`, 'GET', undefined, undefined, { Cookie: forged })).status).toBe(403);
     await authorize(p);
   });
+  describe('pairing pages a person sees render errors as pages (#680)', () => {
+    const isPage = async (response: Response, status: number, text: string) => {
+      expect(response.status).toBe(status);
+      expect(response.headers.get('content-type')).toMatch(/^text\/html/);
+      expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      const body = await response.text();
+      expect(body).toContain(text); expect(body).not.toContain('Phone connected');
+    };
+    const approve = (p: { cookie: string }, nonce: string) => app.request('https://api.proappstore.online/v1/native/auth/approve', { method: 'POST', headers: {
+      Cookie: p.cookie, Origin: 'https://api.proappstore.online', 'Content-Type': 'application/x-www-form-urlencoded',
+    }, body: `nonce=${nonce}` }, env);
+    /** A pairing signed in at the callback, not yet approved; returns its form nonce. */
+    const signedIn = async () => {
+      const p = await pairing(), code = crypto.randomUUID();
+      const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code))).toString('base64url');
+      await db.prepare('INSERT INTO auth_exchange_codes (code_hash, claims, expires_at, created_at) VALUES (?, ?, ?, ?)')
+        .bind(hash, JSON.stringify({ uid: 'google:1', login: 'Alice', roles: ['user'] }), Date.now() + 60_000, Date.now()).run();
+      const callback = await request(`/native/auth/callback?code=${code}`, 'GET', undefined, undefined, { Cookie: p.cookie });
+      return { ...p, nonce: (await callback.text()).match(/name="nonce" value="([a-f0-9]+)"/)![1] };
+    };
+
+    it('authorize and callback errors are HTML with the message; /start and /complete stay JSON', async () => {
+      await isPage(await request('/native/auth/authorize?id=00'), 400, 'Connection expired. Start again from the ProAppStore app on your phone.');
+      await isPage(await request(`/native/auth/authorize?id=${'0'.repeat(64)}`), 400, 'Connection expired.');
+      await isPage(await request('/native/auth/callback?code=x'), 403, 'Start this connection from the ProAppStore app on your phone.');
+      const start = await request('/native/auth/start', 'POST', {});
+      expect(start.status).toBe(400); expect(start.headers.get('content-type')).toMatch(/^application\/json/);
+      const p = await pairing();
+      const complete = await request('/native/auth/complete', 'POST', { id: p.id, verifier: 'c'.repeat(64) });
+      expect(complete.status).toBe(403); expect(complete.headers.get('content-type')).toMatch(/^application\/json/);
+    });
+    it('escapes the message it renders', async () => {
+      // A child refusal carries an apostrophe (#669): it renders escaped, inside the page.
+      db.sql.exec("UPDATE users SET is_child = 1 WHERE id = 'google:1'");
+      const p = await pairing(), code = crypto.randomUUID();
+      const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code))).toString('base64url');
+      await db.prepare('INSERT INTO auth_exchange_codes (code_hash, claims, expires_at, created_at) VALUES (?, ?, ?, ?)')
+        .bind(hash, JSON.stringify({ uid: 'google:1', login: 'Alice', roles: ['user'] }), Date.now() + 60_000, Date.now()).run();
+      await isPage(await request(`/native/auth/callback?code=${code}`, 'GET', undefined, undefined, { Cookie: p.cookie }), 403,
+        'The ProAppStore phone app isn&#39;t available for this account.');
+    });
+    it('approve of an expired pairing is a 403 page, never "Phone connected", and /complete refuses', async () => {
+      const p = await signedIn();
+      db.sql.exec('UPDATE native_pairings SET expires_at = 1');
+      await isPage(await approve(p, p.nonce), 403, 'Connection expired');
+      expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
+    });
+    it('approve checks its own write: a pairing that expires after it was read is not reported connected', async () => {
+      const p = await signedIn(), prepare = db.prepare.bind(db);
+      // Expire the row in the gap between browserPairing()'s read and the approving UPDATE.
+      const spy = vi.spyOn(db, 'prepare').mockImplementation((query: string) => {
+        if (query.startsWith('UPDATE native_pairings SET approved = 1')) db.sql.exec('UPDATE native_pairings SET expires_at = 1');
+        return prepare(query);
+      });
+      const response = await approve(p, p.nonce);
+      spy.mockRestore();
+      await isPage(response, 403, 'Connection expired. Start again from the ProAppStore app on your phone.');
+      // The pairing cookie is kept: the person is told to start again, not signed out of this browser's pairing.
+      expect(response.headers.get('Set-Cookie')).toBeNull();
+      expect(db.sql.prepare('SELECT approved FROM native_pairings').get()).toEqual({ approved: 0 });
+      expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
+    });
+  });
   it('refuses a child account at the callback, deletes its pairing, and refuses one flagged before /complete (#669)', async () => {
     db.sql.exec("INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at, is_child) VALUES ('credential:kid','credential','kid','kid',0,0,1)");
     const p = await pairing();
@@ -112,7 +176,7 @@ describe('consumer native companion', () => {
       .bind(hash, JSON.stringify({ uid: 'credential:kid', login: 'kid', roles: ['user'] }), Date.now() + 60_000, Date.now()).run();
     const callback = await request(`/native/auth/callback?code=${code}`, 'GET', undefined, undefined, { Cookie: p.cookie });
     expect(callback.status).toBe(403);
-    expect(await callback.json()).toEqual({ error: "The ProAppStore phone app isn't available for this account." });
+    expect(await callback.text()).toContain('The ProAppStore phone app isn&#39;t available for this account.');
     expect(db.sql.prepare('SELECT 1 FROM native_pairings WHERE id = ?').all(p.id)).toHaveLength(0);
     expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
     // An adult approved in the browser, then flagged before the phone completes: no device is issued.
