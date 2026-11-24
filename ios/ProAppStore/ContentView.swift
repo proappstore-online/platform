@@ -74,6 +74,10 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         let live: () -> Set<String> = { [weak self] in self?.live == true ? repository.local.sessionIds() : [] }
         collector.sessions = live; heartRate.sessions = live
         collector.authorizationChanged = { [weak self] in self?.continuePendingStart() }
+        repository.diagnosticsDevice = { [weak self] in
+            guard let self else { return nil }
+            return await Diagnostics.device(collector, heartRate)
+        }
         if repository.token() != nil { try? local.seedIfEmpty() }
         refresh()
     }

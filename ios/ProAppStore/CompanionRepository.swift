@@ -10,6 +10,9 @@ actor CompanionRepository {
     private let secure: SecureStore
     private let api: PasApi
     private var last: Task<Void, Never> = Task {}
+    /// The main-actor state a diagnostics snapshot reports (#660), installed by `CompanionModel.init`; nil sends none.
+    /// `nonisolated(unsafe)`: written once, on the main actor, before the model starts any sync, and only read after.
+    nonisolated(unsafe) var diagnosticsDevice: (@MainActor () async -> DiagnosticsDevice?)?
 
     init(local: LocalStore, secure: SecureStore = SecureStore(), api: PasApi = PasApi()) {
         self.local = local; self.secure = secure; self.api = api
@@ -140,6 +143,8 @@ actor CompanionRepository {
     func sync() async throws {
         try await exclusive { [self] in
             guard let credential = token() else { return }
+            // Diagnostics turned off: the server copy goes first, before anything else (#660).
+            try await deleteDiagnosticsIfPending(credential)
             var points: Error?, heartRate: Error?, uploading = false
             do {
                 let blocked = local.blocked()
@@ -168,6 +173,7 @@ actor CompanionRepository {
             guard let failure = points ?? heartRate else {
                 local.lastSyncAttempt = local.lastSync; local.message = ""
                 try? local.syncSucceeded()
+                try await sendDiagnosticsIfDue(credential)
                 return
             }
             local.lastSyncAttempt = Self.now()
@@ -183,8 +189,50 @@ actor CompanionRepository {
                     if (error as? CompanionError)?.message == Self.notAcknowledged { try? local.record(rejected, detail: "partial_ack") }
                 }
             }
+            // A failed upload is when the report is most useful. Best effort: it never replaces `failure`, except a 401.
+            try await sendDiagnosticsIfDue(credential)
             throw failure
         }
+    }
+
+    /// First in a sync. The flag clears only on a 2xx, so turning off offline still deletes on the next connection. Best
+    /// effort, except a 401, which `device` has already expired.
+    private func deleteDiagnosticsIfPending(_ credential: String) async throws {
+        guard local.diagnosticsDeletePending else { return }
+        do {
+            _ = try await device("DELETE", Diagnostics.PATH, credential)
+            local.diagnosticsDeletePending = false
+        } catch { if Self.status(error) == 401 { throw error } }
+    }
+
+    /// Last in a sync, after both stages, whether they succeeded or not. Best effort: a failure here never reaches the
+    /// sync's message, errors or activity log and never throws, except a 401 (the device path's expiry).
+    private func sendDiagnosticsIfDue(_ credential: String) async throws {
+        guard local.diagnosticsEnabled, let provider = diagnosticsDevice else { return }
+        let now = Self.now(), sentAt = local.diagnosticsSentAt
+        if sentAt != 0 && now - sentAt < Diagnostics.CHANGE_MS { return } // nothing could be due; skip reading the store
+        guard let state = await provider(), let input = try? diagnosticsInput(state, now: now) else { return }
+        let snapshot = Diagnostics.build(input)
+        let fingerprint = Diagnostics.fingerprint(snapshot)
+        guard Diagnostics.due(sentAt: sentAt, lastFingerprint: local.diagnosticsFingerprint, fingerprint: fingerprint, now: now) else { return }
+        let json = Diagnostics.encode(snapshot)
+        do {
+            _ = try await device("PUT", Diagnostics.PATH, credential, body: Data("{\"snapshot\":".utf8) + json + Data("}".utf8))
+        } catch {
+            if Self.status(error) == 401 { throw error }
+            return
+        }
+        try? local.diagnosticsSent(at: now, fingerprint: fingerprint, snapshot: String(decoding: json, as: UTF8.self))
+    }
+
+    /// The snapshot's input from the store: counts, settings and the activity log, never a queued payload.
+    nonisolated func diagnosticsInput(_ state: DiagnosticsDevice, now: Int64) throws -> DiagnosticsInput {
+        DiagnosticsInput(now: now, version: AppInfo.current.version, build: AppInfo.current.build, device: state,
+                         entries: local.entries(), blocked: local.blocked(), expired: local.expired, sessions: local.sessions(),
+                         heartRateSensor: local.heartRateSensor != nil, queue: try local.count(), heartRateQueue: try local.heartRateCount(),
+                         lastSync: local.lastSync, lastSyncAttempt: local.lastSyncAttempt, lastSyncError: local.lastSyncError,
+                         heartRateLastUpload: local.heartRateLastUpload, heartRateSyncError: local.heartRateSyncError,
+                         sessionEnds: try local.sessionEnds(), activity: try local.activity(since: now - Diagnostics.WINDOW_MS))
     }
 
     private static let notAcknowledged = "Upload was not fully acknowledged. Device copy retained."

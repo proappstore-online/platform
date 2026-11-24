@@ -53,6 +53,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        DiagnosticsView(model: model)
         Button("Manage account") { open("https://dashboard.proappstore.online") }
         Button("Clear sharing history") { clearHistoryPrompt = true }
         Button("Disconnect this phone") { disconnectPrompt = true }.disabled(model.busy)

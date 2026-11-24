@@ -82,6 +82,25 @@ final class PasApiTests: XCTestCase {
         XCTAssertNil(PasApi.endpoint("native/me"))
     }
 
+    /// #660: every request names the client, so the server can list this phone's app version and last sync.
+    func testEveryRequestSendsTheClientHeaderAndStaysUnderNative() async throws {
+        let repository = try await connected()
+        repository.diagnosticsDevice = {
+            DiagnosticsDevice(os: "iOS 18.0", location: "whenInUse", precise: true, bluetooth: "allowed", notifications: "allowed",
+                              collecting: true, heartRateConnected: false)
+        }
+        try local.block("ski") // a queued revocation, so a DELETE is in the mix
+        StubProtocol.handler = { [me] request in request.url!.path == "/v1/native/me" ? .init(json: me) : .init(json: ["acknowledged": [String]()]) }
+        try await repository.sync()
+        XCTAssertEqual(PasApi.client, "ios/\(AppInfo.current.version) (\(AppInfo.current.build))")
+        XCTAssertTrue(StubProtocol.seen.contains { $0.url!.path == "/v1/native/diagnostics" && $0.httpMethod == "PUT" })
+        for request in StubProtocol.seen {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-PAS-Native-Client"), PasApi.client, request.url!.path)
+            XCTAssertTrue(request.url!.path.hasPrefix("/v1/native/"), request.url!.path)
+        }
+        XCTAssertNotNil(PasApi.endpoint(Diagnostics.PATH))
+    }
+
     func testRedirectIsRefused() async throws {
         StubProtocol.handler = { _ in .init(status: 302, redirect: URL(string: "https://attacker.example/steal")!) }
         do {

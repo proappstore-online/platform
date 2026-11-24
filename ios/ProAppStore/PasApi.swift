@@ -20,6 +20,9 @@ final class PasApi: Sendable {
         session = URLSession(configuration: configuration, delegate: RefuseRedirects(), delegateQueue: nil)
     }
 
+    /// Sent on every request (#660): the server records the app version and last sync for the user's device list.
+    static let client = "ios/\(AppInfo.current.version) (\(AppInfo.current.build))"
+
     /// The only URLs a request may target: `/v1/native/*` on the fixed origin. Nil for any other path.
     static func endpoint(_ path: String) -> URL? {
         path.hasPrefix("/native/") ? URL(string: "\(ORIGIN)/v1\(path)") : nil
@@ -30,6 +33,7 @@ final class PasApi: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(Self.client, forHTTPHeaderField: "X-PAS-Native-Client")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let body {
             request.httpBody = body

@@ -11,6 +11,7 @@
 		0E70BA3692621D5C761A7CE8 /* SharingDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF913A8258103BE26D6CBFD /* SharingDashboardView.swift */; };
 		0FF892C26A665D236FB8894C /* SecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769262658F18E1A5B8B96D31 /* SecureStore.swift */; };
 		1E864C3759DBC42CCA6A409B /* ProAppStoreApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */; };
+		237C569494C8C956CB3789C7 /* DiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC8F8B2B602804DF24EF6FFC /* DiagnosticsTests.swift */; };
 		3273BFFFFCA14C60CD5DE5FC /* AppSharingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F6CEFDA02AF7ED6DFD670F /* AppSharingView.swift */; };
 		341E9F482A30C12B43D813C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3649F54A1E2191EC5E2AFDF /* SettingsView.swift */; };
 		3CDAD3149756ABD376282471 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7556E70BC5BB0E7766C3CFA6 /* PrivacyInfo.xcprivacy */; };
@@ -51,6 +52,8 @@
 		EDE2973889F0FC802ED8F1FD /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DB4C07B7D7FC1CA5235B188 /* LocalStore.swift */; };
 		EE6714B5C4DA8A74E5424EF1 /* PrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */; };
 		F09F7FD6D8E2693E98D984EB /* SharingStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7022FD1C081ABF740353BD85 /* SharingStateTests.swift */; };
+		F17F7CFF363A93057F464D02 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB9A547FE5F49CF7C1D2157C /* DiagnosticsView.swift */; };
+		F1FFD91543D42D099F4B43B9 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01EFDC337D4CD98DCD134351 /* Diagnostics.swift */; };
 		F3DB9244288BC85F893B36B9 /* HeartRateViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D2965C38D0CF17C74C2A9A3 /* HeartRateViews.swift */; };
 		FC6BA3C17F1802519C473D2E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C731A49585E0996081CB72E8 /* Models.swift */; };
 		FD19ED31D8EAD506F36A93F9 /* ActivityLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03F406CD589719890C8FFC3 /* ActivityLogView.swift */; };
@@ -67,6 +70,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		01EFDC337D4CD98DCD134351 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
 		02F34D17F2EA035907DCD336 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0DBDAE8FB24F25D71C27BEB2 /* SharingMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingMapView.swift; sourceTree = "<group>"; };
 		0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProAppStoreApp.swift; sourceTree = "<group>"; };
@@ -103,6 +107,7 @@
 		A3ECA823208978BBFB0E10F9 /* InstallGuideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuideTests.swift; sourceTree = "<group>"; };
 		A3F921F2D2AE2A2C9DBAD439 /* CatalogueStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogueStoreTests.swift; sourceTree = "<group>"; };
 		ABB575299865B2E756E74140 /* SecureStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStoreTests.swift; sourceTree = "<group>"; };
+		AC8F8B2B602804DF24EF6FFC /* DiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTests.swift; sourceTree = "<group>"; };
 		ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasApiTests.swift; sourceTree = "<group>"; };
 		B5B0B730CA674900317BE194 /* TrackShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackShape.swift; sourceTree = "<group>"; };
 		C731A49585E0996081CB72E8 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -118,6 +123,7 @@
 		EE66F7D0B7641EFC42BCB984 /* AppInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfo.swift; sourceTree = "<group>"; };
 		F03F406CD589719890C8FFC3 /* ActivityLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityLogView.swift; sourceTree = "<group>"; };
 		F5EAE88EA5DDD843F3062BF3 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		FB9A547FE5F49CF7C1D2157C /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -134,6 +140,8 @@
 				E7AB569974F332D24F5C7B43 /* CatalogueStore.swift */,
 				1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */,
 				639CF5D4AB25DD2EA7AE65EA /* ContentView.swift */,
+				01EFDC337D4CD98DCD134351 /* Diagnostics.swift */,
+				FB9A547FE5F49CF7C1D2157C /* DiagnosticsView.swift */,
 				6E25E3E8E4A5BBF82D7C116F /* HeartRate.swift */,
 				7BFD79A2E9962580A29F9C12 /* HeartRateCollector.swift */,
 				3D2965C38D0CF17C74C2A9A3 /* HeartRateViews.swift */,
@@ -184,6 +192,7 @@
 				A3F921F2D2AE2A2C9DBAD439 /* CatalogueStoreTests.swift */,
 				DF7D868A1FC701C1B55D4807 /* CatalogueTests.swift */,
 				D6B0229E71BB02A63AE73976 /* CompanionModelTests.swift */,
+				AC8F8B2B602804DF24EF6FFC /* DiagnosticsTests.swift */,
 				9FA00B727D9608AC11E007B2 /* HeartRateTests.swift */,
 				A3ECA823208978BBFB0E10F9 /* InstallGuideTests.swift */,
 				E465577ECE76DEF93158E2CF /* LocalStoreTests.swift */,
@@ -312,6 +321,8 @@
 				662900A1953BF8361746C05B /* CatalogueStore.swift in Sources */,
 				68CA481DB27F0957E164A73A /* CompanionRepository.swift in Sources */,
 				D18C979188FAAC166651199C /* ContentView.swift in Sources */,
+				F1FFD91543D42D099F4B43B9 /* Diagnostics.swift in Sources */,
+				F17F7CFF363A93057F464D02 /* DiagnosticsView.swift in Sources */,
 				7A08A92DC9341302AF44CAD7 /* HeartRate.swift in Sources */,
 				E2E10C2906416DB3D3CD0372 /* HeartRateCollector.swift in Sources */,
 				F3DB9244288BC85F893B36B9 /* HeartRateViews.swift in Sources */,
@@ -343,6 +354,7 @@
 				E875352AD58CFF068A53A49B /* CatalogueStoreTests.swift in Sources */,
 				56BAE49C302244A943968E3D /* CatalogueTests.swift in Sources */,
 				7F42C1B1D30335B93593E7BF /* CompanionModelTests.swift in Sources */,
+				237C569494C8C956CB3789C7 /* DiagnosticsTests.swift in Sources */,
 				D33919234675735879D12E0D /* HeartRateTests.swift in Sources */,
 				8CF282C24F413EEC4AB7493F /* InstallGuideTests.swift in Sources */,
 				98EEA9E54C0E0C59E6E8034F /* LocalStoreTests.swift in Sources */,

@@ -311,6 +311,56 @@ final class LocalStore: @unchecked Sendable {
         set { try? setSetting("hrLastUpload", String(newValue)) }
     }
 
+    // MARK: Diagnostics (#660)
+    // The user's choice survives `clear()` and `clearForReconnect()`; the other four keys do not.
+
+    /// On by default.
+    var diagnosticsEnabled: Bool { setting("diagnosticsEnabled") != "0" }
+    var diagnosticsSentAt: Int64 { setting("diagnosticsSentAt").flatMap { Int64($0) } ?? 0 }
+    var diagnosticsFingerprint: String { setting("diagnosticsFingerprint") ?? "" }
+    /// The exact snapshot JSON last sent, for "View last report".
+    var diagnosticsLastSnapshot: String { setting("diagnosticsLastSnapshot") ?? "" }
+    /// Turned off and the server copy not yet deleted. Cleared only after the DELETE's 2xx.
+    var diagnosticsDeletePending: Bool {
+        get { setting("diagnosticsDeletePending") == "1" }
+        set { try? setSetting("diagnosticsDeletePending", newValue ? "1" : "0") }
+    }
+
+    /// Off: stop, and delete the server copy on the next sync, durably. On: the next sync sends at once.
+    func setDiagnostics(_ enabled: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            try setSetting("diagnosticsEnabled", enabled ? "1" : "0")
+            try setSetting("diagnosticsDeletePending", enabled ? "0" : "1")
+            if enabled { try exec("DELETE FROM settings WHERE key = 'diagnosticsSentAt'") }
+        }
+    }
+
+    /// After a 2xx only: when, the fingerprint, and the exact snapshot JSON sent.
+    func diagnosticsSent(at: Int64, fingerprint: String, snapshot: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            try setSetting("diagnosticsSentAt", String(at))
+            try setSetting("diagnosticsFingerprint", fingerprint)
+            try setSetting("diagnosticsLastSnapshot", snapshot)
+        }
+    }
+
+    /// The activity log since `since`, newest first, raw kinds included. Never reads points or heart-rate samples.
+    func activity(since: Int64, limit: Int = Diagnostics.MAX_EVENTS) throws -> [ActivityRow] {
+        try query("SELECT at, app_id, kind, detail FROM share_events WHERE at >= ? ORDER BY at DESC, id DESC LIMIT ?", [since, Int64(limit)], row: activityRow)
+    }
+
+    /// Every `session_ended` row; `Diagnostics.lastEnded` keeps each app's latest.
+    func sessionEnds() throws -> [ActivityRow] {
+        try query("SELECT at, app_id, kind, detail FROM share_events WHERE kind = ?", [ShareEvent.Kind.sessionEnded.rawValue], row: activityRow)
+    }
+
+    private func activityRow(_ row: OpaquePointer) -> ActivityRow {
+        ActivityRow(at: sqlite3_column_int64(row, 0), appId: sqlite3_column_type(row, 1) == SQLITE_NULL ? nil : String(cString: sqlite3_column_text(row, 1)),
+                    kind: String(cString: sqlite3_column_text(row, 2)), detail: String(cString: sqlite3_column_text(row, 3)))
+    }
+
     // MARK: Queue
 
     func enqueue(_ point: TrackPoint) throws {
@@ -461,7 +511,8 @@ final class LocalStore: @unchecked Sendable {
         try exec("DELETE FROM hr")
         try exec("DELETE FROM share_points WHERE sent_at IS NULL") // never shared, and now never will be
         try exec("DELETE FROM share_hr WHERE sent_at IS NULL")
-        try exec("DELETE FROM settings") // includes the chosen heart-rate sensor
+        // Includes the chosen heart-rate sensor. Keeps only the user's diagnostics choice (#660).
+        try exec("DELETE FROM settings WHERE key != 'diagnosticsEnabled'")
     }
 
     // MARK: Sharing history (#621)
