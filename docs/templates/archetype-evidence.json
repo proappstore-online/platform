@@ -629,7 +629,7 @@
       "archetype": "membership"
     },
     {
-      "id": "loopride",
+      "id": "rideshare",
       "purpose": "Recurring rides with a driver; map and rooms",
       "storefront_category": "transport",
       "live": true,
@@ -1139,7 +1139,7 @@
         "jobs",
         "dating",
         "doordrop",
-        "loopride",
+        "rideshare",
         "grasskarma"
       ],
       "demand": [
@@ -1203,7 +1203,7 @@
       },
       "do_not_copy": [
         "doordrop custom Worker API and Leaflet",
-        "loopride MapLibre",
+        "rideshare MapLibre",
         "dating seed_demo_profile tool",
         "room-rent app.db in a user path",
         "jobs requires_auth true on catalogue reads"
@@ -1227,7 +1227,7 @@
       "evidence_apps": [
         "room-rent",
         "meetup",
-        "loopride",
+        "rideshare",
         "doordrop",
         "flights"
       ],
@@ -1252,9 +1252,9 @@
       "tenancy": "n/a",
       "extract_from": {},
       "do_not_copy": [
-        "loopride MapLibre and doordrop Leaflet — substitutes for app.maps (PAS-STACK-017)"
+        "rideshare MapLibre and doordrop Leaflet — substitutes for app.maps (PAS-STACK-017)"
       ],
-      "reason_not_recommended": "Only room-rent and meetup use app.maps, both as an optional feature of a marketplace or membership shape; the two map-centred apps (loopride, doordrop) bypass the platform (third-party map libraries, custom Worker, no registered actions) and cannot be extracted. Maps are an optional capability of template-marketplace, not an archetype.",
+      "reason_not_recommended": "Only room-rent and meetup use app.maps, both as an optional feature of a marketplace or membership shape; the two map-centred apps (rideshare, doordrop) bypass the platform (third-party map libraries, custom Worker, no registered actions) and cannot be extracted. Maps are an optional capability of template-marketplace, not an archetype.",
       "clauses": [
         "PAS-STACK-017",
         "PAS-DATA-014"

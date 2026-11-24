@@ -63,6 +63,18 @@ describe("host auth token-handler routes", () => {
     expect(mutation.headers.get("Location")).toBeNull();
   });
 
+  it("redirects read navigation on an exact alias (a retired app host) to the canonical host", async () => {
+    const env = makeEnv();
+    const base = env.DB;
+    env.DB = { prepare: (sql: string) => sql.startsWith("SELECT domain FROM app_custom_domains")
+      ? { bind: () => ({ first: async () => ({ domain: "renamed.proappstore.online" }) }) }
+      : base.prepare(sql),
+    } as D1Database;
+    const response = await worker.fetch(new Request("https://app.example.com/trip/123?tab=map"), env, ctx());
+    expect(response.status).toBe(308);
+    expect(response.headers.get("Location")).toBe("https://renamed.proappstore.online/trip/123?tab=map");
+  });
+
   it("starts OAuth from an active custom domain on that same custom origin", async () => {
     const env = makeEnv();
     const res = await worker.fetch(

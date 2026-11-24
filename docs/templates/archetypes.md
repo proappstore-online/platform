@@ -34,7 +34,7 @@ All 26 app repositories of `proappstore-online` cloned locally were fetched to `
 | `jobs` | Job board: companies post jobs; users search, save, apply (business) | 35 / 4 / 6 | actions, auth, db | platform-cookie · fas:theme · blocked | keyless + migrations · 0 tests · 5/20 | 0 / 0 / 0 / 2 | with-fixes — MIT; legacy-bearer, catalogue reads declared requires_auth true + caller_unscoped | marketplace |
 | `kanban` | Team kanban boards in workspaces with invites, assignees, live presence (productivity) | 84 / 0 / 0 | actions, auth, db, notifications, rooms | none · fas:theme · blocked | keyless + migrations · 0 tests · 4/20 | 6 / 0 / 0 / 0 | with-fixes — MIT; legacy-bearer, fas:theme, runtime schema (no migrations.json) | membership |
 | `leads` | Lead management in projects with members and invites (—) | 54 / 9 / 8 | actions, auth | none · fas:theme · blocked | keyless + migrations · 0 tests · 0/20 | 0 / 0 / 0 / 0 | with-fixes — MIT; legacy-bearer, fas:theme, non-consumable project_invites | membership |
-| `loopride` | Recurring rides with a driver; map and rooms (transport) | 0 / 0 / 0 | auth, kv, maps, rooms | none · - · blocked | not keyless · 12 tests · 4/20 | 9 / 0 / 1 / 0 | no — MapLibre instead of app.maps; no registered actions; legacy-bearer | marketplace |
+| `rideshare` | Recurring rides with a driver; map and rooms (transport) | 0 / 0 / 0 | auth, kv, maps, rooms | none · - · blocked | not keyless · 12 tests · 4/20 | 9 / 0 / 1 / 0 | no — MapLibre instead of app.maps; no registered actions; legacy-bearer | marketplace |
 | `meet` | Instant 1-on-1 video meetings with availability and push (social) | 6 / 1 / 1 | actions, auth, db, kv, notifications, rooms | none · - · blocked | keyless + migrations · 7 tests · 3/20 | 0 / 0 / 0 / 0 | with-fixes — MIT; legacy-bearer, 1 table | none |
 | `meetup` | Groups, events, RSVPs, waitlists, group chat (social) | 45 / 11 / 7 | actions, auth, db, maps, rooms, storage | none · - · blocked | keyless + migrations · 1 tests · 4/20 | 2 / 0 / 0 / 0 | with-fixes — MIT; legacy-bearer, no PWA plugin, no ci.yml | membership |
 | `parents-clubs` | Template exercise (items / activities / responses) (—) | 5 / 3 / 3 | db | none · fas:theme · blocked | keyless + migrations · 2 tests · — | 0 / 2 / 0 / 0 | no — scaffold exercise | none |
@@ -54,8 +54,8 @@ Three domain spines recur across unrelated apps; one candidate named in the issu
 |---|---|---|
 | **Membership groups** — group · members with role · invite / join code · events + RSVPs · thread · activity | chess-academy, bandmates, meetup, kanban, leads, interns, grasskarma (7) | `group_members` / `band_members` / `members` / `project_members` with a `role` column and a `UNIQUE(group, user)`; `join_codes` / `invites` / `project_invites` / `join_requests`; `events` ×2, `rsvps`, `messages` ×4, `activity_log(s)` ×3; every statement scoped by a membership sub-query (kanban 122, chess 138, bandmates 84 such statements) |
 | **Back-office records workspace** — organisation · members with permissions · invitations · records with a status lifecycle · approvals · audit · invoices | crm, timetrack (complete); kanban, jobs, interns (partial) (2 + 3) | `companies` ×3, `projects` ×3, `invoices` ×2, `time_entries` ×2, `members` ×2; `update_company`, `list/create/update_project` are the only tool names three apps share; crm `access_roles` + `entity_audit`, timetrack `members.permissions` + `activity_log`; 0 unscoped statements in both |
-| **Two-sided listings marketplace** — public catalogue · owner-scoped listings · favourites · request (booking / application / match) · pair messaging · reviews | room-rent, jobs, dating (cloned); doordrop, loopride, grasskarma partially; carsads, clean-up, dog-walking-app on the storefront (3 + 3 + 3) | `favorites` ×3, `messages` ×4, `listings` / `jobs` / `profiles`, `bookings` / `applications` / `matches`; public reads declared `caller_unscoped` (room-rent 4, jobs 9); room-rent's `can_leave_review` guard |
-| Map-centred directory / field (named in the issue) | room-rent, meetup use `app.maps` as an option; loopride (MapLibre), doordrop (Leaflet, custom Worker) | no shared spine; the two map-first apps bypass the platform — **not an archetype**, an optional capability of the marketplace template |
+| **Two-sided listings marketplace** — public catalogue · owner-scoped listings · favourites · request (booking / application / match) · pair messaging · reviews | room-rent, jobs, dating (cloned); doordrop, rideshare, grasskarma partially; carsads, clean-up, dog-walking-app on the storefront (3 + 3 + 3) | `favorites` ×3, `messages` ×4, `listings` / `jobs` / `profiles`, `bookings` / `applications` / `matches`; public reads declared `caller_unscoped` (room-rent 4, jobs 9); room-rent's `can_leave_review` guard |
+| Map-centred directory / field (named in the issue) | room-rent, meetup use `app.maps` as an option; rideshare (MapLibre), doordrop (Leaflet, custom Worker) | no shared spine; the two map-first apps bypass the platform — **not an archetype**, an optional capability of the marketplace template |
 
 ## Scores
 
@@ -98,18 +98,18 @@ Three domain spines recur across unrelated apps; one candidate named in the issu
 
 **Ticket:** #191 (the full template definition — intended problems and non-goals, core pages and workflows, required / optional services, schema and action boundaries, extension points, security and tenancy model, metadata and compatibility, extract versus rewrite — lives in the ticket and is summarised here).
 
-- **Evidence apps:** `room-rent`, `jobs`, `dating`, `doordrop`, `loopride`, `grasskarma`.
+- **Evidence apps:** `room-rent`, `jobs`, `dating`, `doordrop`, `rideshare`, `grasskarma`.
 - **Demand:** marketplace ×2; real-estate; logistics; lifestyle; transport; business (jobs); strategy: Scheduling / booking, Property management, Field service / dispatch.
 - **Generic spine (extract):** tables `listings`, `favorites`, `requests`, `messages`, `reviews`, `blocks`, `reports`; actions `list_listings`, `search_listings`, `get_listing`, `create_listing`, `update_listing`, `archive_listing`, `create_request`, `set_request_status`, `list_messages`, `send_message`, `add_favorite`, `remove_favorite`, `can_review`, `create_review`.
 - **Services:** required `app.auth`, registered actions, `app.storage`; optional `app.maps`, `app.notifications`, `app.rooms`, `app.ai`, `app.email`.
 - **Tenancy:** Ready — public catalogue reads (requires_auth false, capped); owner-, requester- or pair-scoped writes.
 - **Extract from:** `room-rent` — listings / bookings / favorites / reviews / messages DDL, can_leave_review and host guards; `jobs` — public search / count / get tools (convert to requires_auth false); `dating` — blocks / reports.
-- **Do not copy:** doordrop custom Worker API and Leaflet; loopride MapLibre; dating seed_demo_profile tool; room-rent app.db in a user path; jobs requires_auth true on catalogue reads.
+- **Do not copy:** doordrop custom Worker API and Leaflet; rideshare MapLibre; dating seed_demo_profile tool; room-rent app.db in a user path; jobs requires_auth true on catalogue reads.
 - **Clauses the template must satisfy first:** [PAS-DATA-011](../standard/data.md#pas-data-011), [PAS-DATA-012](../standard/data.md#pas-data-012), [PAS-DATA-007](../standard/data.md#pas-data-007), [PAS-DATA-008](../standard/data.md#pas-data-008), [PAS-STACK-012](../standard/stack.md#pas-stack-012), [PAS-STACK-017](../standard/stack.md#pas-stack-017), [PAS-OPS-016](../standard/ops.md#pas-ops-016), [PAS-DATA-014](../standard/data.md#pas-data-014).
 
 ### Map-centred directory / field app — `map-centered-field`
 
-**Not recommended.** Only room-rent and meetup use app.maps, both as an optional feature of a marketplace or membership shape; the two map-centred apps (loopride, doordrop) bypass the platform (third-party map libraries, custom Worker, no registered actions) and cannot be extracted. Maps are an optional capability of template-marketplace, not an archetype.
+**Not recommended.** Only room-rent and meetup use app.maps, both as an optional feature of a marketplace or membership shape; the two map-centred apps (rideshare, doordrop) bypass the platform (third-party map libraries, custom Worker, no registered actions) and cannot be extracted. Maps are an optional capability of template-marketplace, not an archetype.
 
 ## Debt that must not be copied into any template
 
@@ -117,10 +117,10 @@ Three domain spines recur across unrelated apps; one candidate named in the issu
 - **Theme and viewport.** `fas:theme` in 9 apps and `user-scalable=no` in 22 of 26 — both are known deviations of the current template-app ([PAS-UI-002](../standard/ui.md#pas-ui-002), [PAS-UI-007](../standard/ui.md#pas-ui-007)); fixed at the source before any archetype is cut from it.
 - **State in browser storage.** crm keeps the active organisation id in `localStorage` (19 sites) and bandmates its search state (12): tenant selection is re-derived from the membership sub-query, preferences go to `app.kv` ([PAS-DATA-020](../standard/data.md#pas-data-020)).
 - **Runtime schema.** kanban and interns create tables from app code instead of `migrations.json` ([PAS-DATA-002](../standard/data.md#pas-data-002)).
-- **Bypassing the platform.** doordrop's custom Worker API and Leaflet, loopride's MapLibre, dating's `seed_demo_profile` tool, room-rent's `app.db` in a page, aiuniversity's eight raw `app.db` calls ([PAS-DATA-003](../standard/data.md#pas-data-003), [PAS-DATA-014](../standard/data.md#pas-data-014), [PAS-STACK-017](../standard/stack.md#pas-stack-017)).
+- **Bypassing the platform.** doordrop's custom Worker API and Leaflet, rideshare's MapLibre, dating's `seed_demo_profile` tool, room-rent's `app.db` in a page, aiuniversity's eight raw `app.db` calls ([PAS-DATA-003](../standard/data.md#pas-data-003), [PAS-DATA-014](../standard/data.md#pas-data-014), [PAS-STACK-017](../standard/stack.md#pas-stack-017)).
 - **Catalogue reads declared as authenticated.** jobs and meetup expose public catalogue reads with `requires_auth: true` plus `caller_unscoped`; a template ships them as deliberate public queries ([PAS-DATA-011](../standard/data.md#pas-data-011)).
 - **Non-consumable grants.** leads' `project_invites` has no `accepted_at`; kanban's `invites.accepted_at` is the shape to copy ([PAS-DATA-008](../standard/data.md#pas-data-008)).
-- **Gates.** Only chess-academy, crm, interns and leads pass all 20 compliance checks; only chess-academy (92), crm (231), interns (14) and loopride (12) have meaningful test suites; bandmates, meetup, room-rent, jobs, dating, grasskarma ship no tests.
+- **Gates.** Only chess-academy, crm, interns and leads pass all 20 compliance checks; only chess-academy (92), crm (231), interns (14) and rideshare (12) have meaningful test suites; bandmates, meetup, room-rent, jobs, dating, grasskarma ship no tests.
 
 ## Legality of reuse
 

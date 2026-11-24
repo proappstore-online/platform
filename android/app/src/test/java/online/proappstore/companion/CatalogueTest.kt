@@ -12,7 +12,7 @@ internal const val CATALOGUE_FIXTURE = """
 {"apps":[
  {"id":"meet","name":"Meet","category":"social","icon":"&#128222;","iconBg":"#ecfdf5","description":"Instant 1-on-1 video meetings with push notifications.","about":"Meet is a zero-install video calling app.\n\nDesigned for quick 1-on-1 calls, not large meetings.","appUrl":"https://meet.proappstore.online","type":"connected","proFeatures":["WebRTC video and audio calls","Availability toggle"],"websiteUrl":"https://about-meet.proappstore.online","iconUrl":"https://meet.proappstore.online/app-icon-512.png","socialImageUrl":"https://meet.proappstore.online/app-icon-512.png","cfProject":"proappstore-meet"},
  {"id":"grasskarma","name":"GrassKarma","category":"marketplace","icon":"🌱","iconBg":"#2D7D7D","description":"Hyper-local lawn care — neighbours share a mower, street by street.","about":"Built on the premise that most suburban streets have 3-4 lawnmowers for 20+ houses.","appUrl":"https://grasskarma.proappstore.online","proFeatures":["Karma tracking for contributions"],"iconUrl":"https://evil.example/icon.png","heroImageUrl":"http://grasskarma.proappstore.online/og.png"},
- {"id":"loopride","name":"Rideshare","category":"transport","icon":"&#128260;","iconBg":"not-a-colour","description":"Recurring rides.","appUrl":"https://rideshare.proappstore.online","iconUrl":"https://rideshare.proappstore.online/icon-512.png","heroImageUrl":"https://proappstore.online/og/rideshare.png"},
+ {"id":"rideshare","name":"Rideshare","category":"transport","icon":"&#128260;","iconBg":"not-a-colour","description":"Recurring rides.","appUrl":"https://rideshare.proappstore.online","iconUrl":"https://rideshare.proappstore.online/icon-512.png","heroImageUrl":"https://proappstore.online/og/rideshare.png"},
  {"id":"Bad Id","name":"Invalid","appUrl":"https://bad.proappstore.online"},
  {"id":"insecure","name":"Insecure","appUrl":"http://insecure.proappstore.online"},
  {"id":"offsite","name":"Offsite","appUrl":"https://evil.example"},
@@ -33,7 +33,7 @@ class CatalogueTest {
     }
 
     @Test fun invalidEntriesAreSkippedNotFatal() {
-        assertEquals(listOf("meet", "grasskarma", "loopride"), fixture().apps.map { it.id })
+        assertEquals(listOf("meet", "grasskarma", "rideshare"), fixture().apps.map { it.id })
         assertNull(Catalogue.parse("not json"))
         assertNull(Catalogue.parse("""{"apps":{}}"""))
     }

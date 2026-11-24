@@ -49,7 +49,7 @@ fi
 APPS=(
   "meetup|Meetup|social|&#128197;|#f5f3ff|Create events, groups, and real-time chat.|Create events,Event chat,Manage groups"
   "dating|Dating|social|&#10084;|#fff1f2|Swipe-style dating with real-time chat when both like each other.|Profile photos,Real-time chat,Mutual-match detection"
-  "loopride|Loopride|transport|&#128260;|#ecfdf5|Recurring rides — set route once, driver shows up every week.|Recurring schedule,Live GPS tracking,Driver communication"
+  "rideshare|Rideshare|transport|&#128260;|#ecfdf5|Recurring rides — set route once, driver shows up every week.|Recurring schedule,Live GPS tracking,Driver communication"
   "studio|Studio|productivity|&#127908;|#fffaf0|Multi-tenant studio booking — Mindbody/Momence-shaped product on PAS.|Bookings,Class schedules,Member management"
   "bandmates|Bandmates|social|&#127928;|#fef3c7|Find musicians, manage bands, discover events.|Musician discovery,Band management,Real-time chat,Event RSVP"
 )

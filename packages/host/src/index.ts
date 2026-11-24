@@ -138,7 +138,8 @@ async function serve(request: Request, env: Env, ctx: ExecutionContext): Promise
 
   // Keep old auth callbacks and mutation origins usable during a brand move.
   // Navigation moves to the one declared host, preserving path and query.
-  if (route.matched === "platform" && (request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/.pas/")) {
+  // An exact alias (e.g. a retired platform host after an app-ID rename) moves too.
+  if (route.matched !== "wildcard" && (request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/.pas/")) {
     const canonical = await canonicalHostname(env.DB, route.slug);
     if (canonical && canonical !== url.hostname) {
       const target = new URL(url);

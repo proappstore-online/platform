@@ -25,7 +25,7 @@ const NATIVE_CATALOG = [{
   purpose: 'Keep recording your runs and walks while your phone is locked or Run is closed.',
   disclosure: 'ProAppStore collects precise location in the background to record your runs and walks for Run, including while your phone is locked and Run is closed. Coordinates are uploaded to the PAS platform and made available to Run for your account only. Run adds them only to an activity you are recording; it ignores location outside a recording. Platform copies expire after 7 days. You can pause collection or disconnect Run at any time. Runs you save stay in Run until you delete them or your Run account.',
 }, {
-  id: 'loopride', name: 'Rideshare', capability: 'location.background', version: '1',
+  id: 'rideshare', name: 'Rideshare', capability: 'location.background', version: '1',
   purpose: 'Keep dispatch and your rider seeing where you are while you drive, including when your phone is locked or Rideshare is closed.',
   disclosure: 'ProAppStore collects precise location in the background and sends each new position to Rideshare for your account, including while your phone is locked and Rideshare is closed. Rideshare shares it with dispatch while you are online as a driver, to offer you nearby rides, and with your rider while you are on their trip, so they can follow you. Rideshare ignores location while you are offline. Platform copies expire after 7 days. Rideshare keeps your position for 24 hours at most. You can pause collection or disconnect Rideshare at any time.',
 }, {
@@ -40,7 +40,7 @@ const NATIVE_CATALOG = [{
  * action to the "native" caller: an app's manifest can list the caller but cannot choose to receive points.
  */
 export const NATIVE_RELAYS: Readonly<Record<string, { capability: typeof NATIVE_LOCATION; action: string }>> = {
-  loopride: { capability: NATIVE_LOCATION, action: 'native_driver_location' },
+  rideshare: { capability: NATIVE_LOCATION, action: 'native_driver_location' },
 };
 /** The app's relay, or undefined. */
 export function nativeRelayOf(appId: string) { return Object.hasOwn(NATIVE_RELAYS, appId) ? NATIVE_RELAYS[appId] : undefined; }

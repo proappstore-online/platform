@@ -16,7 +16,7 @@ import { roleSubjects } from '../lib/role-subject.js';
  *
  * Each row is enriched with the latest matching submission's metadata
  * (name, category, description, etc.) when one exists. Apps provisioned
- * before the submissions flow existed (meetup, loopride, dating, etc.)
+ * before the submissions flow existed (meetup, rideshare, dating, etc.)
  * fall back to a Title Case of the id for `name`.
  */
 

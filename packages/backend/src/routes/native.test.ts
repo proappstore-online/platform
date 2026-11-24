@@ -27,7 +27,7 @@ beforeEach(() => {
   db.sql.exec(`PRAGMA foreign_keys=ON;
     INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at) VALUES
       ('google:1','google','1','Alice',0,0),('google:2','google','2','Bob',0,0);
-    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('run','google:1',0),('loopride','google:1',0),('other','google:2',0);`);
+    INSERT INTO apps (id, creator_id, created_at) VALUES ('ski','google:1',0),('run','google:1',0),('rideshare','google:1',0),('other','google:2',0);`);
 });
 async function pairing() {
   const verifier = 'b'.repeat(64);
@@ -185,7 +185,7 @@ describe('consumer native companion', () => {
     it('lists Run after Ski and grants it', async () => {
       const d = await device();
       const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string }[] };
-      expect(me.apps.map(a => a.id)).toEqual(['ski', 'run', 'loopride']);
+      expect(me.apps.map(a => a.id)).toEqual(['ski', 'run', 'rideshare']);
       expect((await grant(d.token, 'run')).id).toMatch(/^[a-f0-9]{64}$/);
     });
     it('delivers a point only to the app whose grant it carries', async () => {
@@ -231,7 +231,7 @@ describe('consumer native companion', () => {
       expect(versions).toEqual({
         'ski/location.background': '5df42145f4869724018cb24247d4491b4b01e0181b5283905b0063558bb0c0d9',
         'run/location.background': 'bb685eb591d6084efda371e43517a1d5db1da70a54f33934b20fd518ed5f3586',
-        'loopride/location.background': '4b323484af0bd058ac60d5a64ab508a5044ca92ce6f27a2d105aaf9ffe6778b8',
+        'rideshare/location.background': '28a49db514cce6539014fe28f0d2385e97f7ae20080535d8bbf1a6ea2ab2fbdc',
         'run/heart_rate.ble': 'e38067cdcf71ad1368ed68b76625be9ce41629fbd8a18ab595c805f05e88720c',
       });
     });
@@ -324,7 +324,7 @@ describe('consumer native companion', () => {
       const cards = await (await request('/storefront/apps')).json() as { apps: { appId: string; nativeCapabilities: unknown }[] };
       expect(Object.fromEntries(cards.apps.map(a => [a.appId, a.nativeCapabilities]))).toEqual({
         ski: [{ id: 'location.background', name: 'Location' }], run: [{ id: 'location.background', name: 'Location' }, { id: 'heart_rate.ble', name: 'Heart rate' }],
-        loopride: [{ id: 'location.background', name: 'Location' }], other: [],
+        rideshare: [{ id: 'location.background', name: 'Location' }], other: [],
       });
     });
   });
@@ -460,7 +460,7 @@ describe('consumer native companion', () => {
       sent = []; calls = []; answer = async () => Response.json({ meta: { changes: 1 } });
       env.APP_EVENTS = { send: async (m: AppEventMessage, o?: { delaySeconds?: number }) => { sent.push({ m, ...(o ? { delaySeconds: o.delaySeconds } : {}) }); } } as unknown as Env['APP_EVENTS'];
       vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push({ url, body: JSON.parse(String(init.body)) }); return answer(); }));
-      await db.prepare("INSERT INTO app_tools (app_id, name, manifest, source, state, created_at, updated_at) VALUES ('loopride', ?, ?, 'code', 'live', 1, 1)")
+      await db.prepare("INSERT INTO app_tools (app_id, name, manifest, source, state, created_at, updated_at) VALUES ('rideshare', ?, ?, 'code', 'live', 1, 1)")
         .bind(RELAY.name, JSON.stringify(RELAY)).run();
     });
     afterEach(() => { vi.unstubAllGlobals(); });
@@ -475,7 +475,7 @@ describe('consumer native companion', () => {
     const relayRow = () => db.sql.prepare('SELECT status, delivered_at FROM native_relays').get();
     /** A grant whose consent predates the test's points. */
     const relayGrant = async (token: string) => {
-      const g = await grant(token, 'loopride');
+      const g = await grant(token, 'rideshare');
       db.sql.prepare('UPDATE native_grants SET consent_at = 0 WHERE id = ?').run(g.id);
       return g;
     };
@@ -483,19 +483,19 @@ describe('consumer native companion', () => {
     it('lists Rideshare with its disclosure and reports it available; only Rideshare names a relay', async () => {
       const d = await device();
       const me = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { id: string; name: string; disclosure: string }[] };
-      const rideshare = me.apps.find(a => a.id === 'loopride')!;
+      const rideshare = me.apps.find(a => a.id === 'rideshare')!;
       expect(rideshare.name).toBe('Rideshare');
       expect(rideshare.disclosure).toMatch(/dispatch while you are online as a driver.*your rider while you are on their trip.*expire after 7 days.*24 hours/);
-      const status = await request('/apps/loopride/native/status', 'GET', undefined, await readToken('google:1', 'loopride'));
+      const status = await request('/apps/rideshare/native/status', 'GET', undefined, await readToken('google:1', 'rideshare'));
       expect(await status.json()).toMatchObject({ available: true, enabled: false });
-      expect(Object.keys(NATIVE_RELAYS)).toEqual(['loopride']);
+      expect(Object.keys(NATIVE_RELAYS)).toEqual(['rideshare']);
     });
     it("runs the action as the device's owner with the newest point of an upload, and nothing about the device", async () => {
       const d = await device(), g = await relayGrant(d.token), now = Date.now();
       await upload(d.token, [{ ...point('a', now - 2000, [g.id]), lat: 1 }, { ...point('c', now, [g.id]), lat: 3 }, { ...point('b', now - 1000, [g.id]), lat: 2 }]);
       expect(sent).toHaveLength(1);
       expect(sent[0]!.delaySeconds).toBeUndefined();
-      expect(sent[0]!.m).toMatchObject({ type: 'native', app_id: 'loopride', id: 'google:1', name: 'native_driver_location' });
+      expect(sent[0]!.m).toMatchObject({ type: 'native', app_id: 'rideshare', id: 'google:1', name: 'native_driver_location' });
       expect(await drain()).toEqual(['ack']);
       expect(calls).toHaveLength(1);
       expect(calls[0]!.url).toContain('/execute');
@@ -537,8 +537,8 @@ describe('consumer native companion', () => {
       expect(db.sql.prepare('SELECT 1 FROM native_relays').all()).toHaveLength(0);
     });
     it.each([
-      ['revocation', (d: { token: string }) => request('/native/apps/loopride/location', 'DELETE', undefined, d.token)],
-      ['publisher transfer', async () => { db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='loopride'"); }],
+      ['revocation', (d: { token: string }) => request('/native/apps/rideshare/location', 'DELETE', undefined, d.token)],
+      ['publisher transfer', async () => { db.sql.exec("UPDATE apps SET creator_id='google:2' WHERE id='rideshare'"); }],
       ['disclosure change', async () => { db.sql.exec("UPDATE native_grants SET contract_version='stale'"); }],
       ['device expiry', async () => { db.sql.exec('UPDATE native_devices SET expires_at=0'); }],
     ])('a %s between upload and delivery stops the delivery', async (_, change) => {
@@ -569,7 +569,7 @@ describe('consumer native companion', () => {
     });
     it('refuses an action whose manifest is no longer a relay action at delivery', async () => {
       const d = await device(), g = await relayGrant(d.token);
-      db.sql.prepare("UPDATE app_tools SET manifest = ? WHERE app_id = 'loopride'").run(JSON.stringify({ ...RELAY, callers: ['user', 'native'] }));
+      db.sql.prepare("UPDATE app_tools SET manifest = ? WHERE app_id = 'rideshare'").run(JSON.stringify({ ...RELAY, callers: ['user', 'native'] }));
       await upload(d.token, [point('p', Date.now(), [g.id])]);
       expect(await drain()).toEqual(['ack']);
       expect(calls).toHaveLength(0);
@@ -577,15 +577,15 @@ describe('consumer native companion', () => {
     it('registration refuses a "native" caller anywhere but the reviewed relay action, in its exact shape', async () => {
       const register = async (appId: string, over: Record<string, unknown>) =>
         ((await validateToolSet([{ ...RELAY, ...over } as ToolManifest], undefined, appId))?.payload.error ?? null) as string | null;
-      expect(await register('loopride', {})).toBeNull();
+      expect(await register('rideshare', {})).toBeNull();
       expect(await register('run', {})).toMatch(/reserved for the action the reviewed native catalog relays to, and this app has none/);
-      expect(await register('loopride', { name: 'set_location' })).toMatch(/reserved .*\("native_driver_location"\)/);
-      expect(await register('loopride', { callers: ['user', 'native'] })).toMatch(/callers: \["native"\] only/);
-      expect(await register('loopride', { operation: 'query', sql: 'SELECT :lat + :lng + :accuracy + :at AS v FROM drivers WHERE id = :__user_id LIMIT 1' })).toMatch(/execute or batch/);
-      expect(await register('loopride', { auth: { app_roles: ['driver'] } })).toMatch(/role-gated/);
-      expect(await register('loopride', { params: { ...RELAY.params, speed: { type: 'number' } } })).toMatch(/exactly the params/);
-      expect(await register('loopride', { params: { ...RELAY.params, lat: { type: 'string' } } })).toMatch(/exactly the params/);
-      expect(await register('loopride', { callers: ['natives'] })).toMatch(/callers must be a non-empty array of .*"native"/);
+      expect(await register('rideshare', { name: 'set_location' })).toMatch(/reserved .*\("native_driver_location"\)/);
+      expect(await register('rideshare', { callers: ['user', 'native'] })).toMatch(/callers: \["native"\] only/);
+      expect(await register('rideshare', { operation: 'query', sql: 'SELECT :lat + :lng + :accuracy + :at AS v FROM drivers WHERE id = :__user_id LIMIT 1' })).toMatch(/execute or batch/);
+      expect(await register('rideshare', { auth: { app_roles: ['driver'] } })).toMatch(/role-gated/);
+      expect(await register('rideshare', { params: { ...RELAY.params, speed: { type: 'number' } } })).toMatch(/exactly the params/);
+      expect(await register('rideshare', { params: { ...RELAY.params, lat: { type: 'string' } } })).toMatch(/exactly the params/);
+      expect(await register('rideshare', { callers: ['natives'] })).toMatch(/callers must be a non-empty array of .*"native"/);
     });
   });
 });
