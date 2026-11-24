@@ -11,7 +11,11 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
 
-class CompanionRepository(val local: LocalStore, private val secure: SecureStore, private val api: PasApi) {
+/** [diagnosticsDevice] reads the Context-held state a diagnostics snapshot reports (#660); null sends none. */
+class CompanionRepository(
+    val local: LocalStore, private val secure: SecureStore, private val api: PasApi,
+    private val diagnosticsDevice: () -> DiagnosticsDevice? = { null },
+) {
     private val operations = Mutex()
     fun token(): String? = try { secure.read().optString("token").takeIf { it.isNotBlank() } } catch (_: Exception) {
         local.stop("unlock_failed"); local.message = "The device connection could not be unlocked. Reconnect your account."; null
@@ -98,6 +102,9 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     } }
     suspend fun sync() = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: return@withLock
+        val request: (String, String, JSONObject?) -> Unit = { method, path, body -> device(method, path, credential, body) }
+        // Diagnostics turned off: the server copy goes first, before anything else (#660).
+        Diagnostics.deleteIfPending(local, request)
         var uploading = false; var partial = false; var heartRateStage = false
         /** Up to 10 batches, stopping at an empty queue. Exact acknowledgement (#621): anything less keeps the device copy. */
         fun upload(path: String, key: String, next: () -> List<JSONObject>, ack: (List<String>) -> Unit) {
@@ -138,9 +145,22 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
                 if (uploading && (status == 400 || status == 413)) local.record(rejected, detail = "$status")
                 if (partial) local.record(rejected, detail = "partial_ack")
             }
+            // A failed upload is when the report is most useful. Best effort: it never replaces `e`, except a 401.
+            sendDiagnostics(request)
             throw e
         }
+        sendDiagnostics(request)
     } }
+    /** Last in a sync, after both uploads (#660). Never touches the sync's error state; only a 401 escapes. */
+    private fun sendDiagnostics(request: (String, String, JSONObject?) -> Unit) {
+        val now = System.currentTimeMillis()
+        Diagnostics.sendIfDue(local, now, { diagnosticsDevice()?.let { Diagnostics.build(diagnosticsInput(it, now)) } }, request)
+    }
+    private fun diagnosticsInput(device: DiagnosticsDevice, now: Long) = DiagnosticsInput(
+        now, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toString(), device,
+        local.entries(), local.blocked(), local.expired, local.sessions(), local.heartRateSensor != null, local.count(), local.heartRateCount(),
+        local.lastSync, local.lastSyncAttempt, local.lastSyncError, local.heartRateLastUpload, local.heartRateSyncError,
+        local.sessionEnds(), local.activity(now - Diagnostics.WINDOW_MS))
     /**
      * Reconnecting before the connection expires (#652): uploads what it can, then takes the expiry path, which keeps
      * the history. The old credential is only forgotten: revoking it would delete the platform copies already shared,

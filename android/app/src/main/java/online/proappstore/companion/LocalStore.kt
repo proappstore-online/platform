@@ -2,6 +2,7 @@ package online.proappstore.companion
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
@@ -13,7 +14,7 @@ import org.json.JSONObject
  * (a 30-day copy of what was shared with each app). Both are in the same backup-excluded database as the queue and
  * never leave the phone. Version 3 adds Run's strap heart rate (#634): its queue `hr` and its 30-day history `share_hr`.
  */
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", null, 3) {
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", null, 3), DiagnosticsStore {
     private val prefs = context.getSharedPreferences("native-settings", Context.MODE_PRIVATE).also(SharingSessions::migrate)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE points(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
@@ -209,6 +210,37 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         get() = prefs.getString("bluetooth", "") ?: ""
         set(value) { prefs.edit().putString("bluetooth", value).apply() }
 
+    // Diagnostics (#660): the user's choice survives [clear]; the other four keys do not.
+
+    override val diagnosticsEnabled: Boolean get() = prefs.getBoolean("diagnosticsEnabled", true)
+    override val diagnosticsSentAt: Long get() = prefs.getLong("diagnosticsSentAt", 0)
+    override val diagnosticsFingerprint: String get() = prefs.getString("diagnosticsFingerprint", "") ?: ""
+    override var diagnosticsDeletePending: Boolean
+        get() = prefs.getBoolean("diagnosticsDeletePending", false)
+        set(value) { check(prefs.edit().putBoolean("diagnosticsDeletePending", value).commit()) }
+    /** The exact snapshot JSON last sent, "" until then. */
+    val diagnosticsLastSnapshot: String get() = prefs.getString("diagnosticsLastSnapshot", "") ?: ""
+    override fun diagnosticsSent(at: Long, fingerprint: String, snapshot: String) {
+        check(prefs.edit().putLong("diagnosticsSentAt", at).putString("diagnosticsFingerprint", fingerprint).putString("diagnosticsLastSnapshot", snapshot).commit())
+    }
+    /** Off: stop, and delete the server copy on the next sync, durably. On: the next sync sends at once. */
+    @Synchronized fun setDiagnostics(enabled: Boolean) {
+        val edit = prefs.edit().putBoolean("diagnosticsEnabled", enabled).putBoolean("diagnosticsDeletePending", !enabled)
+        if (enabled) edit.remove("diagnosticsSentAt")
+        check(edit.commit())
+    }
+    /** The activity log since `since`, newest first, raw kinds included. Never reads points or heart-rate samples. */
+    @Synchronized fun activity(since: Long, limit: Int = Diagnostics.MAX_EVENTS): List<ActivityRow> = readableDatabase.rawQuery(
+        "SELECT at, app_id, kind, detail FROM share_events WHERE at >= ? ORDER BY at DESC, id DESC LIMIT ?", arrayOf(since.toString(), limit.toString())).use { it.rows() }
+    /** Every `session_ended` row; [Diagnostics.lastEnded] keeps each app's latest. */
+    @Synchronized fun sessionEnds(): List<ActivityRow> = readableDatabase.rawQuery(
+        "SELECT at, app_id, kind, detail FROM share_events WHERE kind = ?", arrayOf(ShareEvent.Kind.SESSION_ENDED.raw)).use { it.rows() }
+    private fun Cursor.rows(): List<ActivityRow> = buildList {
+        while (moveToNext()) add(ActivityRow(getLong(0), if (isNull(1)) null else getString(1), getString(2), getString(3)))
+    }
+    /** Every setting except the user's diagnostics choice. */
+    private fun clearSettings() { check(prefs.edit().clear().putBoolean("diagnosticsEnabled", diagnosticsEnabled).commit()) }
+
     // Heart-rate queue (#634)
 
     /** Re-filters recipients against current consent and sessions before insert. */
@@ -304,7 +336,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
     /** Disconnect, or pairing a different account: everything. */
     @Synchronized fun clear() {
         transaction { db -> listOf("points", "hr", "share_events", "share_points", "share_hr").forEach { db.delete(it, null, null) } }
-        check(prefs.edit().clear().commit())
+        clearSettings()
     }
     /**
      * Pairing the same account after an expiry (#652): the queue and the settings, which hold the old device's grants,
@@ -316,7 +348,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
             db.delete("share_points", "sent_at IS NULL", null) // never shared, and now never will be
             db.delete("share_hr", "sent_at IS NULL", null)
         }
-        check(prefs.edit().clear().commit())
+        clearSettings()
     }
 
     // Sharing history (#621) and activity log (#624)

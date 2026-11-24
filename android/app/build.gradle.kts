@@ -42,7 +42,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    // BuildConfig carries VERSION_NAME/VERSION_CODE for the X-PAS-Native-Client header and diagnostics (#660).
+    buildFeatures { compose = true; buildConfig = true }
 }
 // A release task must never quietly produce an unsigned artifact or use a debug key.
 gradle.taskGraph.whenReady {

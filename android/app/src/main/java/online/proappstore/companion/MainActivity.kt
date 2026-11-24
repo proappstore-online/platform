@@ -29,8 +29,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -65,6 +68,9 @@ data class CompanionState(
     val heartRateReadingAt: Long = 0,
     /** `on`, `off` or `unauthorized` (Bluetooth.state). */
     val bluetooth: String = "on",
+    // Diagnostics (#660): the switch, when the last report was sent, a pending server delete, and the exact report sent.
+    val diagnosticsEnabled: Boolean = true, val diagnosticsSentAt: Long = 0, val diagnosticsDeletePending: Boolean = false,
+    val diagnosticsLastSnapshot: String = "",
 )
 
 /** A sensor seen by the "Choose sensor" scan. Its address stays on this phone. */
@@ -156,7 +162,9 @@ class MainActivity : ComponentActivity() {
                         disable = { entry -> local({ graph.local.block(entry.key) }) { reconcile(); act { graph.repository.disable(entry) } } },
                         chooseSensor = { choosing = true; sensors = emptyList(); if (Bluetooth.canScan(this)) startScan() else bluetoothRequest.launch(Bluetooth.scanPermissions()) },
                         forgetSensor = { local({ graph.local.heartRateSensor = null; graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "forgotten") }) { reconcile() } },
-                        load = { appId, range -> withContext(Dispatchers.IO) { graph.local.heartRate(appId, range.first, range.last) } }))
+                        load = { appId, range -> withContext(Dispatchers.IO) { graph.local.heartRate(appId, range.first, range.last) } }),
+                    // Saved durably first, so turning off offline still deletes the server copy on the next sync (#660).
+                    diagnostics = { on -> local({ graph.local.setDiagnostics(on) }) { act { graph.repository.sync() } } })
                 if (choosing) AlertDialog(onDismissRequest = { closeSensors() },
                     title = { Text("Choose sensor") },
                     text = {
@@ -268,7 +276,9 @@ class MainActivity : ComponentActivity() {
             lastHeartRateByApp = local.entries().filter { it.capability == HeartRate.CAPABILITY }.mapNotNull { e -> local.lastHeartRate(e.appId)?.let { e.appId to it } }.toMap(),
             heartRateSensor = local.heartRateSensor != null, heartRateConnected = LocationService.heartRateConnected, heartRateBpm = LocationService.lastBpm,
             heartRateReadingAt = LocationService.lastReadingAt,
-            bluetooth = Bluetooth.state(this))
+            bluetooth = Bluetooth.state(this),
+            diagnosticsEnabled = local.diagnosticsEnabled, diagnosticsSentAt = local.diagnosticsSentAt,
+            diagnosticsDeletePending = local.diagnosticsDeletePending, diagnosticsLastSnapshot = local.diagnosticsLastSnapshot)
     }
     private fun act(action: suspend () -> Unit) {
         if (working) return
@@ -377,6 +387,8 @@ internal fun PasScreen(
     /** A `proappstore://native/apps/<appId>` link's app; [linkShown] clears it once shown. */
     link: String? = null, linkShown: () -> Unit = {},
     heartRate: HeartRateHooks = HeartRateHooks(),
+    /** Settings → Diagnostics switch (#660). */
+    diagnostics: (Boolean) -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(initialTab) }
     var sharingPage by remember { mutableStateOf<SharingPage>(SharingPage.Dashboard) }
@@ -436,7 +448,7 @@ internal fun PasScreen(
                     } ?: LaunchedEffect(page) { sharingPage = SharingPage.Dashboard } // the app left /native/me
                     is SharingPage.Activity -> ActivityScreen(state, page.appId) { sharingPage = page.from }
                 }
-                Tab.SETTINGS -> SettingsScreen(state, connect, permissions, disconnect, privacy, account, clearHistory, store.openUrl, reconnect)
+                Tab.SETTINGS -> SettingsScreen(state, connect, permissions, disconnect, privacy, account, clearHistory, store.openUrl, reconnect, diagnostics)
             }
         }
     }
@@ -478,10 +490,12 @@ private const val DELETE_ACCOUNT = "https://proappstore.online/privacy#data-dele
 @Composable
 private fun SettingsScreen(
     state: CompanionState, connect: () -> Unit, permissions: () -> Unit, disconnect: () -> Unit, privacy: () -> Unit, account: () -> Unit,
-    clearHistory: () -> Unit, openUrl: (String) -> Unit, reconnect: () -> Unit,
+    clearHistory: () -> Unit, openUrl: (String) -> Unit, reconnect: () -> Unit, diagnostics: (Boolean) -> Unit,
 ) {
     var disconnectPrompt by remember { mutableStateOf(false) }
     var clearPrompt by remember { mutableStateOf(false) }
+    var diagnosticsOffPrompt by remember { mutableStateOf(false) }
+    var reportShown by remember { mutableStateOf(false) }
     Column(Modifier.padding(horizontal = 24.dp).fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Spacer(Modifier.height(8.dp))
         Text("Settings", style = MaterialTheme.typography.headlineLarge)
@@ -498,6 +512,24 @@ private fun SettingsScreen(
                     Labeled("Location permission", Format.permission[state.permission] ?: state.permission)
                     if (state.permission != "whenInUse") TextButton(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
                     else Text("Precise location is allowed. Sharing runs only while you have started it for an app.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Share diagnostics", style = MaterialTheme.typography.bodyMedium)
+                        Switch(checked = state.diagnosticsEnabled, onCheckedChange = { on -> if (on) diagnostics(true) else diagnosticsOffPrompt = true })
+                    }
+                    Text("Helps you and ProAppStore see why sharing stopped. Never includes locations or heart rate.", style = MaterialTheme.typography.bodySmall)
+                    Text(when {
+                        !state.diagnosticsEnabled && state.diagnosticsDeletePending -> "Off. Deleting the copy on ProAppStore when online"
+                        !state.diagnosticsEnabled -> "Off. The copy on ProAppStore is deleted"
+                        state.diagnosticsSentAt > 0 -> "Last sent ${Format.relative(state.diagnosticsSentAt, state.now)}"
+                        else -> "Not sent yet"
+                    }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.diagnosticsLastSnapshot.isNotBlank()) TextButton(onClick = { reportShown = true }) { Text("View last report") }
+                    Text("Connect Claude: add https://mcp.proappstore.online/mcp and sign in with this account to read your phones, app access, last 7 days of data and these reports.",
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
             TextButton(onClick = account) { Text("Manage account") }
@@ -528,4 +560,20 @@ private fun SettingsScreen(
         text = { Text("Deletes the sharing map, timeline and activity kept on this phone. Updates waiting to sync still upload.") },
         confirmButton = { TextButton(onClick = { clearPrompt = false; clearHistory() }) { Text("Clear history") } },
         dismissButton = { TextButton(onClick = { clearPrompt = false }) { Text("Cancel") } })
+    if (diagnosticsOffPrompt) AlertDialog(onDismissRequest = { diagnosticsOffPrompt = false },
+        title = { Text("Stop sending diagnostics and delete the copy on ProAppStore?") },
+        confirmButton = { TextButton(onClick = { diagnosticsOffPrompt = false; diagnostics(false) }) { Text("Turn off") } },
+        dismissButton = { TextButton(onClick = { diagnosticsOffPrompt = false }) { Text("Cancel") } })
+    // The exact bytes sent, so the user sees what their assistant sees.
+    if (reportShown) AlertDialog(onDismissRequest = { reportShown = false },
+        title = { Text("Last report") },
+        text = {
+            val pretty = remember(state.diagnosticsLastSnapshot) {
+                runCatching { org.json.JSONObject(state.diagnosticsLastSnapshot).toString(2) }.getOrDefault(state.diagnosticsLastSnapshot)
+            }
+            SelectionContainer {
+                Text(pretty, Modifier.verticalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = { reportShown = false }) { Text("Close") } })
 }

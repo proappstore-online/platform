@@ -8,7 +8,11 @@ class ApiFailure(val status: Int, message: String) : Exception(message)
 
 /** Open only so instrumented tests can answer for the server; the app constructs this one. */
 open class PasApi {
-    companion object { const val ORIGIN = "https://api.proappstore.online" }
+    companion object {
+        const val ORIGIN = "https://api.proappstore.online"
+        /** `X-PAS-Native-Client` (#660): `/native/me` records the platform, version and last sync from it. */
+        const val CLIENT = "android/${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+    }
     /** Only the platform origin receives the narrow native credential; redirects are refused. */
     open fun request(method: String, path: String, token: String? = null, body: JSONObject? = null): JSONObject {
         require(path.startsWith("/native/"))
@@ -18,6 +22,7 @@ open class PasApi {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 15_000; connection.readTimeout = 20_000
             connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("X-PAS-Native-Client", CLIENT)
             if (token != null) connection.setRequestProperty("Authorization", "Bearer $token")
             if (body != null) {
                 connection.doOutput = true
