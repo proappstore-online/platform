@@ -105,7 +105,9 @@ actor CompanionRepository {
             if local.blocked().contains(entry.key) { _ = try await device("DELETE", path, credential) }
             _ = try await device("PUT", path, credential, body: json(["version": entry.version, "enabled": true]))
             try updateMe(try await device("GET", "/native/me", credential))
-            try local.unblock(entry.key); try local.record(.heartRate, appId: entry.appId, detail: "enabled"); local.message = ""
+            // Ends Pause all like a location enable (#676), but never resumes this app: its pause covers its location too.
+            try local.unblock(entry.key); try local.record(.heartRate, appId: entry.appId, detail: "enabled")
+            try local.setPaused(false); local.message = ""
         }
     }
 

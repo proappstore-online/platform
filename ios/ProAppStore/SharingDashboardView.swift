@@ -197,7 +197,7 @@ struct SharingDashboardView: View {
                 Text(status).font(.title3.bold())
                 if model.paused {
                     Button("Resume all") { model.setPaused(false) }
-                        .buttonStyle(.borderedProminent).disabled(model.busy || !model.apps.contains(where: model.enabled))
+                        .buttonStyle(.borderedProminent).disabled(model.busy || !model.canResumeAll)
                 } else {
                     Button("Pause all") { model.setPaused(true) }.buttonStyle(.bordered)
                 }
@@ -210,7 +210,7 @@ struct SharingDashboardView: View {
     }
 
     private var status: String {
-        if model.paused { return "Location paused" }
+        if model.paused { return "Sharing paused" }
         let enabledApps = model.apps.filter(model.enabled)
         if !enabledApps.isEmpty && enabledApps.allSatisfy({ model.pausedApps.contains($0.id) }) { return "All apps paused" }
         if !collector.permitted { return "Location permission needed" }

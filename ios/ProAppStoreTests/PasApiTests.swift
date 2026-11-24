@@ -432,6 +432,39 @@ final class PasApiTests: XCTestCase {
         XCTAssertFalse(StubProtocol.seen.contains { $0.url!.path.hasSuffix("/location") }, "Run's location grant is untouched")
     }
 
+    /// Signed in on a fresh store (Pause all on, as after pairing), `/native/me` granting Run's heart rate.
+    private func freshWithHeartRate() throws -> (CompanionRepository, NativeEntry) {
+        try secure.write(["token": "ndev_test", "userId": "u1"])
+        try local.saveEntries(try JSONSerialization.data(withJSONObject: [hrEntry]))
+        var withCapabilities = me
+        withCapabilities["capabilities"] = [hrEntry]
+        StubProtocol.handler = { [withCapabilities] request in
+            request.url!.path == "/v1/native/me" ? .init(json: withCapabilities) : .init(json: ["grant": ["id": "hr1"]])
+        }
+        return (CompanionRepository(local: local, secure: secure, api: api), try XCTUnwrap(local.entries().first))
+    }
+
+    /// #676: heart rate alone must be able to start after a fresh pairing.
+    func testEnablingHeartRateEndsPauseAll() async throws {
+        let (repository, entry) = try freshWithHeartRate()
+        XCTAssertTrue(local.paused, "a fresh pairing starts under Pause all")
+        try await repository.enable(entry)
+        XCTAssertFalse(local.paused)
+        try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
+        XCTAssertEqual(try local.heartRateCount(), 1)
+    }
+
+    /// #676: enabling heart rate never resumes a paused Run, whose pause covers its location too.
+    func testEnablingHeartRateKeepsRunsOwnPause() async throws {
+        let (repository, entry) = try freshWithHeartRate()
+        try local.pause("run")
+        try await repository.enable(entry)
+        XCTAssertFalse(local.paused)
+        XCTAssertTrue(local.pausedApps().contains("run"))
+        try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
+        XCTAssertEqual(try local.heartRateCount(), 0)
+    }
+
     private static func read(_ stream: InputStream) -> Data {
         stream.open(); defer { stream.close() }
         var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)

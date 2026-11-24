@@ -67,6 +67,21 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertNil(model.expiresInDays)
     }
 
+    /// #676: under Pause all, an enabled heart-rate entry with no location app is enough to Resume all.
+    func testResumeAllCountsAHeartRateOnlyApp() throws {
+        try secure.write(["token": "ndev_test", "userId": "u1"])
+        let model = CompanionModel(repository: repository)
+        XCTAssertTrue(model.paused)
+        XCTAssertFalse(model.canResumeAll, "nothing enabled, nothing to resume")
+        let run: [String: Any] = ["appId": "run", "appName": "Run", "capability": "heart_rate.ble", "name": "Heart rate", "purpose": "p",
+                                  "disclosure": "d", "version": "hv", "grant": ["id": "hr1", "consent_at": 1]]
+        try local.saveEntries(try JSONSerialization.data(withJSONObject: [run]))
+        model.refresh()
+        XCTAssertTrue(model.paused)
+        XCTAssertTrue(model.apps.isEmpty)
+        XCTAssertTrue(model.canResumeAll)
+    }
+
     /// A rejected pairing is reported once; the next activation shows nothing and sends nothing.
     func testARejectedPairingIsShownOnceThenCleared() async throws {
         try secure.write(["pairId": String(repeating: "a", count: 64), "verifier": String(repeating: "b", count: 64)])

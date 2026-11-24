@@ -67,6 +67,9 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && !pausedApps.contains(app.id) && !paused }
     /// A non-location entry is on: granted, not disabled, connection not expired.
     func enabled(_ entry: NativeEntry) -> Bool { !expired && entry.grantId != nil && !blocked.contains(entry.key) }
+    /// Resume all can start something: a location app or any entry is enabled (#676). `apps` stays in: `entries` is
+    /// empty until the first `/native/me` after an upgrade.
+    var canResumeAll: Bool { apps.contains(where: enabled) || entries.contains(where: enabled) }
     /// This app's non-location entries, shown under its row.
     func otherEntries(_ appId: String) -> [NativeEntry] { entries.filter { $0.appId == appId && $0.capability != NativeEntry.LOCATION } }
     /// Both collectors follow the same rules: called wherever the screen changes what may be collected.
