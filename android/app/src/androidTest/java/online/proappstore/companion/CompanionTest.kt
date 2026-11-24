@@ -6,8 +6,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
+import android.os.Looper
+import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -172,6 +175,18 @@ class CompanionTest {
         assertEquals(1, reconnects)
         compose.onNodeWithText("Activity").performClick()
         compose.onNodeWithText("Connection to ProAppStore expired: sharing stopped", substring = true).assertExists()
+    }
+    @Test fun deleteAccountOpensTheWebPageSignedInAndSignedOut() {
+        val opened = mutableListOf<String>()
+        var signedIn by mutableStateOf(true)
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = signedIn), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+            initialTab = Tab.SETTINGS, store = StoreHooks(openUrl = { opened += it })) } }
+        // Signed in: next to Manage account, and in About (#663).
+        compose.onAllNodesWithText("Delete account").assertCountEquals(2)
+        compose.onAllNodesWithText("Delete account")[0].performScrollTo().performClick()
+        signedIn = false
+        compose.onNodeWithText("Delete account").performScrollTo().performClick()
+        assertEquals(List(2) { "https://proappstore.online/privacy#data-deletion" }, opened)
     }
     @Test fun theExpiryNoteShowsInSettingsOnlyWhenSet() {
         var reconnects = 0
@@ -627,5 +642,64 @@ class CompanionTest {
             }
             local.clear(); local.close()
         }
+    }
+
+    // Storage off the main thread (#663 criterion 5). The activity's own store, so its lock is the one contended.
+    private fun timeOnMain(scenario: ActivityScenario<MainActivity>, action: (MainActivity) -> Unit): Long {
+        val started = SystemClock.elapsedRealtime()
+        scenario.onActivity(action)
+        return SystemClock.elapsedRealtime() - started
+    }
+    private fun awaitState(scenario: ActivityScenario<MainActivity>, condition: (CompanionState) -> Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + 60_000
+        while (true) {
+            var met = false
+            scenario.onActivity { met = condition(it.state) }
+            if (met) return
+            assertTrue("state never assigned", SystemClock.elapsedRealtime() < deadline)
+            Thread.sleep(100)
+        }
+    }
+    @Test fun aRevocationOverAFullQueueNeverHoldsMainAndRefreshAssignsOnMain() {
+        val graph = ApplicationProvider.getApplicationContext<PasApplication>()
+        val local = graph.local
+        local.clear()
+        fun app(id: String, grant: String) = JSONObject().put("id", id).put("name", id).put("purpose", "Routes").put("disclosure", "Disclosure").put("version", "1")
+            .put("grant", JSONObject().put("id", grant).put("consent_at", 1))
+        local.saveApps(JSONArray().put(app("ski", "ski-g")).put(app("run", "run-g")))
+        // 60,000 queued points for Ski and Run: disabling Ski rewrites every one inside the store's lock.
+        local.writableDatabase.execSQL("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${LocationPolicy.MAX_QUEUE}) " +
+            "INSERT INTO points(id, at, payload) SELECT 'p' || i, i, '{\"id\":\"p' || i || '\",\"at\":' || i || ',\"lat\":1,\"lng\":2,\"accuracy\":5,\"grants\":[\"ski-g\",\"run-g\"]}' FROM n")
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitState(scenario) { it.apps.size == 2 }
+            val disabled = java.util.concurrent.atomic.AtomicBoolean(false)
+            val ski = local.apps().first { it.id == "ski" }
+            val disabling = kotlin.concurrent.thread { kotlinx.coroutines.runBlocking { graph.repository.disable(ski) }; disabled.set(true) }
+            Thread.sleep(200) // block() holds the lock by now
+            var thread: Thread? = null
+            val elapsed = timeOnMain(scenario) { thread = Thread.currentThread(); it.refresh() }
+            assertFalse("the revocation was still running, so the test measured contention", disabled.get())
+            assertTrue("refresh held Main for $elapsed ms", elapsed < 200)
+            assertEquals(Looper.getMainLooper().thread, thread)
+            // The read waits on IO for the lock, which the revocation holds for as long as it takes, then lands on Main.
+            disabling.join()
+            awaitState(scenario) { "ski" in it.blocked }
+        }
+        local.clear()
+    }
+    @Test fun clearingAFullHistoryReturnsToMainImmediately() {
+        val graph = ApplicationProvider.getApplicationContext<PasApplication>()
+        val local = graph.local
+        local.clear()
+        local.writableDatabase.execSQL("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${LocationPolicy.HISTORY_MAX_POINTS}) " +
+            "INSERT INTO share_points(app_id, point_id, at, lat, lng, accuracy, sent_at) SELECT 'ski', 'p' || i, i, 1, 2, 5, i FROM n")
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitState(scenario) { true }
+            val elapsed = timeOnMain(scenario) { it.clearHistory() }
+            assertTrue("clearHistory held Main for $elapsed ms", elapsed < 200)
+            awaitState(scenario) { s -> s.events.any { it.kind == ShareEvent.Kind.HISTORY_CLEARED } }
+            assertEquals(emptyList<TrackSample>(), local.track("ski", 0, Long.MAX_VALUE))
+        }
+        local.clear()
     }
 }

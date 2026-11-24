@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -33,8 +34,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class CompanionState(
     val signedIn: Boolean = false, val name: String = "", val apps: List<ConnectedApp> = emptyList(),
@@ -69,12 +74,21 @@ enum class Tab(val label: String, val icon: Int) {
 
 class MainActivity : ComponentActivity() {
     private val graph get() = application as PasApplication
-    private var state by mutableStateOf(CompanionState())
+    /** Read on IO, assigned here on Main (Compose snapshot state), in request order (#663). */
+    internal var state by mutableStateOf(CompanionState())
+        private set
+    /** The first read has landed; the screen and its initial tab wait for it rather than show a signed-out flash. */
+    private var ready by mutableStateOf(false)
+    private val reads = Mutex()
     private var error by mutableStateOf("")
     private var working by mutableStateOf(false)
     private var permissionExplanation by mutableStateOf(false)
     /** The app whose Start waits for the location permission flow. */
     private var pendingStart: String? = null
+    /** Around the one location request: what [PermissionDisclosure.step] needs to tell a prompt from no prompt. */
+    private var rationaleBefore = false
+    private var askedBefore = false
+    private val prompts get() = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
     /** A `proappstore://native/apps/<appId>` link's app, until the screen has shown it (ADR-020 §2). */
     private var link by mutableStateOf<String?>(null)
     private var refreshJob: Job? = null
@@ -94,43 +108,42 @@ class MainActivity : ComponentActivity() {
         // Android refuses more than 5 scan starts in 30 s; without this the dialog says "Looking" forever.
         override fun onScanFailed(errorCode: Int) { error = "Could not search for sensors. Try again."; stopScanning() }
     }
-    private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        refresh()
-        val app = pendingStart?.let { id -> state.apps.find { it.id == id } }
-        pendingStart = null
-        if (app != null && LocationService.allowed(this)) start(app) else maybeStart()
-    }
+    // Nothing follows the notification answer: the service has started, and its notification shows once allowed.
+    private val notificationRequest = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { locationAnswered() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
-        // Upgrade path: sessions for grants held before the history existed start at their consent time.
-        if (graph.repository.token() != null) runCatching { graph.local.seedIfEmpty() }
-        refresh()
+        lifecycleScope.launch {
+            // Upgrade path: sessions for grants held before the history existed start at their consent time.
+            withContext(Dispatchers.IO) { if (graph.repository.token() != null) runCatching { graph.local.seedIfEmpty() } }
+            reload()
+        }
         link = SharingSessions.linkedApp(intent?.dataString)
-        // Sharing when any app has a grant or the connection expired, otherwise the Store.
-        val initialTab = if (state.expired || state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE
         setContent {
             val colors = if (isSystemInDarkTheme()) darkColorScheme(primary = Color(0xFFC4B5FD)) else lightColorScheme(primary = Color(0xFF6D28D9))
             val catalogue by graph.catalogue.state.collectAsState()
             MaterialTheme(colorScheme = colors) {
+                if (!ready) return@MaterialTheme
                 PasScreen(state.copy(busy = working, message = error.ifBlank { state.message }),
                     connect = { act { open(graph.repository.startSignIn()) } },
                     // Enabling grants; Start on the row begins sharing (ADR-020 §2).
                     enable = { app -> act { graph.repository.enable(app); refresh(); if (!LocationService.allowed(this@MainActivity)) permissionExplanation = true } },
                     disable = { app -> act { graph.repository.disable(app) } },
-                    // Local writes, not `act`: Start and Stop work offline and instantly.
+                    // Local writes on IO, not `act`: Start and Stop work offline and instantly.
                     startApp = { app -> start(app) },
-                    stopApp = { app -> runCatching { graph.local.endSession(app.id, "user") }; reconcile(); refresh() },
-                    stopAll = { runCatching { graph.local.endAllSessions("all") }; stopService(Intent(this, LocationService::class.java)); refresh() },
+                    stopApp = { app -> local({ graph.local.endSession(app.id, "user") }) { reconcile() } },
+                    stopAll = { local({ graph.local.endAllSessions("all") }) { stopService(Intent(this, LocationService::class.java)) } },
                     permissions = { permissionExplanation = true },
                     sync = { act { graph.repository.sync() } },
-                    disconnect = { act { graph.local.endAllSessions("grant"); stopService(Intent(this@MainActivity, LocationService::class.java)); graph.repository.disconnect() } },
+                    disconnect = { act { withContext(Dispatchers.IO) { graph.local.endAllSessions("grant") }; stopService(Intent(this@MainActivity, LocationService::class.java)); graph.repository.disconnect() } },
                     privacy = { open("https://docs.proappstore.online/native-companion-users/") },
                     account = { open("https://dashboard.proappstore.online") },
                     // #628: the host shows an Install button on ?install=1. Built from the id; a renamed app redirects with the query.
                     openApp = { app -> open("https://${app.id}.proappstore.online/?install=1") },
-                    initialTab = initialTab,
+                    // Sharing when any app has a grant or the connection expired, otherwise the Store.
+                    initialTab = if (state.expired || state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE,
                     store = StoreHooks(catalogue, graph.images, refresh = { refreshCatalogue() }, open = { open(it.openUrl) }, openUrl = { open(it) }),
-                    clearHistory = { runCatching { graph.local.clearHistory() }.onFailure { error = it.message ?: "Could not clear history." }; refresh() },
+                    clearHistory = { clearHistory() },
                     loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } },
                     // Pairs again keeping the history (#652): after an expiry, or early from the expiry note.
                     reconnect = { act { graph.repository.renew(); stopService(Intent(this@MainActivity, LocationService::class.java)); open(graph.repository.startSignIn()) } },
@@ -138,9 +151,9 @@ class MainActivity : ComponentActivity() {
                     heartRate = HeartRateHooks(
                         enable = { entry -> act { graph.repository.enable(entry); refresh(); reconcile() } },
                         // Local block first (offline-safe, idempotent), so the service drops heart rate now; then the server revoke.
-                        disable = { entry -> graph.local.block(entry.key); reconcile(); act { graph.repository.disable(entry) } },
+                        disable = { entry -> local({ graph.local.block(entry.key) }) { reconcile(); act { graph.repository.disable(entry) } } },
                         chooseSensor = { choosing = true; sensors = emptyList(); if (Bluetooth.canScan(this)) startScan() else bluetoothRequest.launch(Bluetooth.scanPermissions()) },
-                        forgetSensor = { graph.local.heartRateSensor = null; runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "forgotten") }; reconcile(); refresh() },
+                        forgetSensor = { local({ graph.local.heartRateSensor = null; graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "forgotten") }) { reconcile() } },
                         load = { appId, range -> withContext(Dispatchers.IO) { graph.local.heartRate(appId, range.first, range.last) } }))
                 if (choosing) AlertDialog(onDismissRequest = { closeSensors() },
                     title = { Text("Choose sensor") },
@@ -152,9 +165,10 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     confirmButton = { TextButton(onClick = { closeSensors() }) { Text("Cancel") } })
+                // Play's prominent disclosure (#663): every location entry, before the request; "Not now" requests nothing.
                 if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false; pendingStart = null },
-                    title = { Text("Allow precise location") },
-                    text = { Text("ProAppStore collects precise location while you share with an app you started, including with your phone locked and that app closed. Updates go to PAS and only the apps you share with. Choose Precise location on the next screen. You can stop sharing or revoke access here.") },
+                    title = { Text(PermissionDisclosure.TITLE) },
+                    text = { Text(PermissionDisclosure.body(state.apps), Modifier.verticalScroll(rememberScrollState())) },
                     confirmButton = { TextButton(onClick = { permissionExplanation = false; requestLocation() }) { Text("Continue") } },
                     dismissButton = { TextButton(onClick = { permissionExplanation = false; pendingStart = null }) { Text("Not now") } })
             }
@@ -167,10 +181,11 @@ class MainActivity : ComponentActivity() {
         refreshCatalogue() // foreground only: never from location callbacks
         refreshJob?.cancel()
         refreshJob = lifecycleScope.launch {
-            try { graph.repository.finishSignIn(); if (graph.repository.token() != null) graph.repository.sync() }
+            // Both on IO; sync() returns at once without a credential.
+            try { graph.repository.finishSignIn(); graph.repository.sync() }
             catch (e: Exception) { if (e is CancellationException) throw e; if (!DeviceConnection.expired(e)) error = e.message ?: "Could not connect." }
-            refresh(); maybeStart()
-            while (isActive) { delay(2_000); refresh() }
+            reload(); maybeStart()
+            while (isActive) { delay(2_000); reload() }
         }
     }
     // The radio only: the dialog stays open behind a permission prompt (#673).
@@ -192,25 +207,46 @@ class MainActivity : ComponentActivity() {
     private fun closeSensors() { choosing = false; stopScanning() }
     private fun choose(sensor: Sensor) {
         closeSensors()
-        graph.local.heartRateSensor = sensor.address
-        runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "sensor_chosen") }
-        refresh(); reconcile()
+        local({ graph.local.heartRateSensor = sensor.address; graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "sensor_chosen") }) { reconcile() }
     }
     /** Starts the one collector service when it has something to run, else stops it; a running one re-applies its types. */
     private fun reconcile() {
-        if (LocationService.wanted(this, graph.repository)) maybeStart() else stopService(Intent(this, LocationService::class.java))
+        lifecycleScope.launch {
+            if (withContext(Dispatchers.IO) { LocationService.wanted(this@MainActivity, graph.repository) }) maybeStart()
+            else stopService(Intent(this@MainActivity, LocationService::class.java))
+        }
     }
+    /**
+     * A local write on IO (#663): it waits for the store's lock, which an upload or a revocation can hold. Then `then` on
+     * Main, and a refresh. Offline-capable: never through `act`.
+     */
+    private fun local(write: () -> Unit, then: () -> Unit = {}) {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching(write) }.onFailure { error = it.message ?: "Could not save on this phone." }
+            then(); reload()
+        }
+    }
+    /** Clear sharing history: up to 200,000 rows, deleted on IO (#663). */
+    internal fun clearHistory() = local({ graph.local.clearHistory() })
     /** A link only selects an app: it never grants, changes a permission or starts a session (ADR-020 §2). */
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); link = SharingSessions.linkedApp(intent.dataString) }
     private fun refreshCatalogue() { lifecycleScope.launch { graph.catalogue.refresh() } }
-    private fun refresh() {
+    /** Reads the state on IO and assigns it on Main (#663): the store's lock and the Keystore never block the UI. */
+    internal fun refresh() { lifecycleScope.launch { reload() } }
+    private suspend fun reload() = reads.withLock {
+        val next = withContext(Dispatchers.IO) { read() }
+        state = next; ready = true
+        if (next.expired && LocationService.running) stopService(Intent(this, LocationService::class.java))
+    }
+    /** Every storage, Keystore and system read behind [state]. IO only. */
+    private fun read(): CompanionState {
         val local = graph.local
         LocationService.notePermission(this, local); Bluetooth.note(this, local)
         val apps = local.apps()
         val connectivity = getSystemService(ConnectivityManager::class.java)
         val power = getSystemService(PowerManager::class.java)
         val signedIn = graph.repository.token() != null
-        state = CompanionState(signedIn, local.userName, apps, local.blocked(),
+        return CompanionState(signedIn, local.userName, apps, local.blocked(),
             LocationService.running, LocationService.allowed(this), local.count(), local.message,
             pairingCode = graph.repository.pairingCode(), lastSync = local.lastSync, sessions = local.sessions().associateBy { it.appId },
             now = System.currentTimeMillis(), events = runCatching { local.events() }.getOrDefault(emptyList()),
@@ -230,7 +266,6 @@ class MainActivity : ComponentActivity() {
             lastHeartRateByApp = local.entries().filter { it.capability == HeartRate.CAPABILITY }.mapNotNull { e -> local.lastHeartRate(e.appId)?.let { e.appId to it } }.toMap(),
             heartRateSensor = local.heartRateSensor != null, heartRateConnected = LocationService.heartRateConnected, heartRateBpm = LocationService.lastBpm,
             bluetooth = Bluetooth.state(this))
-        if (state.expired && LocationService.running) stopService(Intent(this, LocationService::class.java))
     }
     private fun act(action: suspend () -> Unit) {
         if (working) return
@@ -245,48 +280,67 @@ class MainActivity : ComponentActivity() {
     }
     /**
      * Start on an app's row or in a link's prompt (ADR-020 §2): needs a current grant, precise permission (the disclosure
-     * and permission flow first, then this again) and location turned on.
+     * and permission flow first, which then continues here, #663) and location turned on.
      */
     private fun start(app: ConnectedApp) {
-        val local = graph.local
-        if (local.expired || app.grantId == null || app.id in local.blocked()) return
+        if (state.expired || app.grantId == null || app.id in state.blocked) return
         if (!LocationService.allowed(this)) { pendingStart = app.id; permissionExplanation = true; return }
         if (!getSystemService(LocationManager::class.java).isLocationEnabled) { error = "Turn on location in Android settings, then tap Start."; return }
-        try { local.startSession(app.id) } catch (_: Exception) { error = "Could not start sharing on this phone."; return }
-        refresh(); maybeStart()
+        lifecycleScope.launch {
+            val started = withContext(Dispatchers.IO) { runCatching { graph.local.startSession(app.id) }.isSuccess }
+            if (!started) { error = "Could not start sharing on this phone."; return@launch }
+            reload(); maybeStart()
+        }
     }
     /**
      * Starts the collector only for sessions that already exist; it never creates one (ADR-020 §7). After the OS stopped
      * it, sessions past 12 hours end and the rest resume with the stationary clock restarted. Precise permission withdrawn
-     * ends them.
+     * ends them. The store and the credential are read on IO; the service starts only while the activity is visible.
      */
     private fun maybeStart() {
-        val local = graph.local
-        runCatching {
-            if (!LocationService.active) local.resumeSessions()
-            if (!LocationService.allowed(this)) local.endAllSessions("permission")
+        lifecycleScope.launch {
+            val allowed = LocationService.allowed(this@MainActivity)
+            val wanted = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (!LocationService.active) graph.local.resumeSessions()
+                    if (!allowed) graph.local.endAllSessions("permission")
+                }
+                LocationService.wanted(this@MainActivity, graph.repository)
+            }
+            if (!wanted || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompts.getBoolean("notifications", false)) {
+                prompts.edit().putBoolean("notifications", true).apply()
+                notificationRequest.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            try { LocationService.start(this@MainActivity) } catch (_: RuntimeException) { error = "Android could not start location sharing. Open ProAppStore and try again." }
         }
-        if (!LocationService.wanted(this, graph.repository)) return
-        val prompt = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompt.getBoolean("notifications", false)) {
-            prompt.edit().putBoolean("notifications", true).apply()
-            permissionRequest.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
-        }
-        try { LocationService.start(this) } catch (_: RuntimeException) { error = "Android could not start location sharing. Open ProAppStore and try again." }
     }
+    /** The disclosure's Continue: one foreground, precise request, with no background step (ADR-020 §8). */
     private fun requestLocation() {
-        when {
-            // Foreground and precise only: no background step (ADR-020 §8).
-            !LocationService.allowed(this) ->
-                permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-            Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED ->
-                permissionRequest.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
-            else -> {
-                val app = pendingStart?.let { id -> state.apps.find { it.id == id } }
-                pendingStart = null
-                if (app != null) start(app) else maybeStart()
+        if (LocationService.allowed(this)) { locationAnswered(); return } // allowed meanwhile in Android settings
+        rationaleBefore = shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)
+        askedBefore = prompts.getBoolean("location", false)
+        prompts.edit { putBoolean("location", true) }
+        permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+    /** The one step after the request (#663): precise continues the pending Start. Nothing here requests again, so a denial never loops. */
+    private fun locationAnswered() {
+        val app = pendingStart?.let { id -> state.apps.find { it.id == id } }
+        pendingStart = null
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        when (PermissionDisclosure.step(LocationService.allowed(this), coarse, rationaleBefore,
+            shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION), askedBefore)) {
+            PermissionDisclosure.Step.CONTINUE -> app?.let(::start)
+            PermissionDisclosure.Step.STOP -> Unit
+            PermissionDisclosure.Step.APPROXIMATE -> error = PermissionDisclosure.APPROXIMATE
+            PermissionDisclosure.Step.SETTINGS -> {
+                error = PermissionDisclosure.SETTINGS
+                try { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))) }
+                catch (_: RuntimeException) { }
             }
         }
+        rationaleBefore = false; askedBefore = false
+        refresh()
     }
     private fun open(url: String) {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: RuntimeException) { error = "No browser is available to open $url." }
@@ -414,6 +468,9 @@ internal fun StatusMessages(state: CompanionState) {
     if (state.message.isNotBlank()) Text(state.message, color = MaterialTheme.colorScheme.error)
 }
 
+/** Account deletion is requested on the web (#662). */
+private const val DELETE_ACCOUNT = "https://proappstore.online/privacy#data-deletion"
+
 /** Account, permissions, history and About. */
 @Composable
 private fun SettingsScreen(
@@ -441,6 +498,7 @@ private fun SettingsScreen(
                 }
             }
             TextButton(onClick = account) { Text("Manage account") }
+            TextButton(onClick = { openUrl(DELETE_ACCOUNT) }) { Text("Delete account") }
             TextButton(onClick = { clearPrompt = true }) { Text("Clear sharing history") }
             TextButton(onClick = { disconnectPrompt = true }, enabled = !state.busy) { Text("Disconnect this phone") }
         } else Button(onClick = connect, enabled = !state.busy) { Text("Sign in to ProAppStore") }
@@ -453,6 +511,8 @@ private fun SettingsScreen(
         }
         TextButton(onClick = privacy) { Text("How your data is used") }
         TextButton(onClick = { openUrl("https://proappstore.online/privacy") }) { Text("Privacy policy") }
+        // Reachable signed out too (Play's account-deletion rule, #663). The page explains; there is no deletion API yet (#662).
+        TextButton(onClick = { openUrl(DELETE_ACCOUNT) }) { Text("Delete account") }
         Spacer(Modifier.height(24.dp))
     }
     if (disconnectPrompt) AlertDialog(onDismissRequest = { disconnectPrompt = false },

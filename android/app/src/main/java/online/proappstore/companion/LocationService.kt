@@ -11,8 +11,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
 import android.location.LocationManager
+import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationListenerCompat
@@ -29,7 +29,13 @@ class LocationService : Service(), LocationListenerCompat {
     private val graph get() = application as PasApplication
     private val manager by lazy { getSystemService(LocationManager::class.java) }
     private var started = false
-    private var lastFixAt = 0L
+    /**
+     * Fixes arrive on this one thread, never Main (#663): the callback reads the store, whose lock an upload or a
+     * revocation can hold. One thread, so [lastFixAt] and [lastEmitted] stay single-writer.
+     */
+    private val fixes = HandlerThread("pas-location-fixes")
+    /** Written on [fixes]; the notification reads it from the 30 s loop. */
+    @Volatile private var lastFixAt = 0L
     /** The last fix that became a queued point (#639), and when the collector last synced. */
     private var lastEmitted: TrackPoint? = null
     private var lastSyncAt = 0L
@@ -54,6 +60,7 @@ class LocationService : Service(), LocationListenerCompat {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
+        fixes.start()
         getSystemService(NotificationManager::class.java).createNotificationChannels(listOf(
             NotificationChannel(CHANNEL, "Location sharing", NotificationManager.IMPORTANCE_LOW),
             NotificationChannel(ENDED_CHANNEL, "Sharing ended", NotificationManager.IMPORTANCE_DEFAULT)))
@@ -154,7 +161,7 @@ class LocationService : Service(), LocationListenerCompat {
             // Native Android API; no WebView timers, Google account or Play Services dependency.
             for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
                 // No distance filter: LocationPolicy.shouldEmit decides, and needs fixes while still for the heartbeat.
-                if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 0f, this, Looper.getMainLooper())
+                if (manager.allProviders.contains(provider)) manager.requestLocationUpdates(provider, 10_000L, 0f, this, fixes.looper)
             }
             listening = true
         } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return false }
@@ -221,7 +228,7 @@ class LocationService : Service(), LocationListenerCompat {
     override fun onProviderDisabled(provider: String) { graph.local.message = "Location is switched off. Waiting for a GPS signal." }
     override fun onDestroy() {
         unregisterReceiver(bluetoothState)
-        manager.removeUpdates(this); gatt?.close(); gatt = null; scope.cancel(); running = false; active = false; heartRateConnected = false
+        manager.removeUpdates(this); fixes.quitSafely(); gatt?.close(); gatt = null; scope.cancel(); running = false; active = false; heartRateConnected = false
         stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy()
     }
     private fun notification(t: CollectorTypes): Notification {
