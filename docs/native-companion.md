@@ -105,7 +105,7 @@ The collector is an Android location foreground service with an ongoing notifica
 
 The service continues with the screen locked until the session ends. A 30 s check ends sessions that are due and posts the end notification on its own channel (`pas-sharing-ended`). OS force-stop, permission changes, battery restrictions and GPS loss can interrupt collection. `START_STICKY` is not a guarantee: Android refuses a foreground start from the background, and v1 has no boot receiver. Opening the companion resumes an interrupted session under 12 hours, with its stationary clock restarted; nothing restarts it in the background. No fake audio, accessibility service, battery-policy bypass or downloaded native code is used.
 
-An Android intent can bring PAS forward but cannot grant access or start a session: `proappstore://native/apps/<appId>` opens the app's consent when it is not enabled, a Start prompt when it is, and its page while it is sharing. The initial custom URI carries no credentials. Verified App Links require a release signing certificate and Digital Asset Links deployment before public distribution.
+An Android intent can bring PAS forward but cannot grant access or start a session: `proappstore://native/apps/<appId>` opens the app's consent when it is not enabled, a Start prompt when it is, and its page while it is sharing. The custom URI carries no credentials and grants nothing. App Links are optional and not a Play requirement; if added, `assetlinks.json` must list the Play app-signing certificate's SHA-256 (Play Console → App integrity), not the upload certificate in `android/signing/`.
 
 ## Next delivery milestones
 

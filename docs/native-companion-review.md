@@ -8,7 +8,7 @@ Researched **2026-11-06**. This is a documented engineering assessment, not appr
 
 ## Exact product assessed
 
-One consumer native PAS app uses the same account as PAS web apps. Users separately enable supported services for named apps. PAS collects native data, uploads it to the platform, and the platform exposes it only to those authorized apps. Web apps are not hosted inside PAS. On iOS the companion also has a read-only native storefront (ADR-017): it lists the public catalogue and opens apps in the browser, with no web view and no purchase. Users normally stay in their web apps and visit PAS for discovery, connection, permission decisions and settings.
+One consumer native PAS app uses the same account as PAS web apps. Users separately enable supported services for named apps. PAS collects native data, uploads it to the platform, and the platform exposes it only to those authorized apps. Web apps are not hosted inside PAS. On iOS and Android the companion also has a read-only native storefront (ADR-017, #638): it lists the public catalogue and opens apps in the browser, with no web view and no purchase. Users normally stay in their web apps and visit PAS for discovery, connection, permission decisions and settings.
 
 ## Assessment
 
@@ -16,13 +16,41 @@ There is a credible approval path for a transparent location companion on both s
 
 ### Google Play
 
-Background location must provide substantial user benefit and be essential to a prominently described core feature. Automatic route recording/location sharing must be PAS's real documented functionality. A generic claim that other apps might need coordinates is not a sufficient product justification.
+Rechecked 2026-11-24 against the policies linked at the end of this section. Readiness tracker: #667.
 
-Provide prominent disclosure before the runtime permission, describe collection while closed and the recipient/use, supply the privacy policy and accurate Data Safety answers, and complete background-location review. A foreground service that behaves like ongoing background location remains subject to the background-location policy; it is not an exemption.
+**No background-location declaration.** Collection runs only in sessions the user starts in the app ([ADR-020](./adr/020-native-collection-sessions.md), #668), so the app does not declare `ACCESS_BACKGROUND_LOCATION`, and Play Console does not ask for the Location permissions declaration or its video. A location foreground service started while the app is visible keeps while-in-use access with the phone locked. If a track still holds an older bundle that declares the permission, Play asks anyway. In that case, retire that bundle rather than declare: declare only if Play insists, with one feature, "Records runs and walks for the Run app while the phone is locked".
 
-Foreground services must serve core user-facing functionality, be perceptible/stoppable and run only as needed. Location sharing, vehicle tracking, rideshare tracking and geofencing are listed examples. Submit the declaration and a video demonstrating the actual user flow. Automatic operation after explicit enablement must remain visible and controllable; do not implement an invisible general-purpose daemon.
+**Prominent disclosure** (User Data policy). It is shown before the location runtime request. It contains "location", says collection continues "while your phone is locked and the apps are closed", lists every recipient's reviewed purpose (built from `/native/me`, #663), and states the session rules. The per-app consent (the catalog disclosure) comes before it.
 
-Sources: [background location](https://support.google.com/googleplay/android-developer/answer/9799150), [foreground-service declarations](https://support.google.com/googleplay/android-developer/answer/13392821), [service use](https://support.google.com/googleplay/android-developer/answer/16559646), [sensitive permissions](https://support.google.com/googleplay/android-developer/answer/16558241).
+**Foreground services.**
+
+- *`location`:* use case "user-initiated location sharing". Description: "Records the route of a run, ski day or driving shift for the apps the user chose, during a session the user starts in the app. An ongoing notification shows it, with Stop. The session also ends after 30 minutes without movement or after 12 hours." *If deferred:* "The run or route has a gap for as long as the service is stopped." *Video (30 s or less):* Sharing → Run → Start → disclosure and precise-location prompt (first time) → the "ProAppStore is sharing your location · With Run" notification → lock the phone and walk → run.proappstore.online showing the points → Stop in the notification.
+- *`connectedDevice` (with #634):* "Reads the user's chosen Bluetooth heart-rate strap during a recorded run." *Video:* the in-app Choose sensor sheet and the bpm on Run's row. The policy says it "must show the in-app setup and subsequent device interaction, not system settings".
+- Services must "run only for as long as necessary". Sessions provide that: started by a tap, ended by Stop, a 30-minute stationary timeout or a 12-hour cap (ADR-020).
+
+**Health apps declaration.** Every app completes it. Choose Health and fitness → **Activity and Fitness**. Not a medical app. Health Connect (#635) also needs its own Health Connect permissions declaration; keep it out of the first production release.
+
+**Data Safety (draft).** Encrypted in transit: **yes** (HTTPS only, `usesCleartextTraffic="false"`, fixed origin in `PasApi.kt`). Users can request deletion: **yes**, at `https://proappstore.online/privacy#data-deletion`; Disconnect this phone deletes the phone's data without deleting the account. Independent security review: no.
+
+| Data type | Collected | Shared | Optional | Purpose | Basis |
+|---|---|---|---|---|---|
+| Location: precise | yes | no | yes | App functionality | Only for apps the user enables. Every recipient today is a PAS app from the same developer; the transfer follows a per-app consent. Recheck "shared" whenever an app from another publisher gets a catalog entry. |
+| Location: approximate | no | | | | `ACCESS_COARSE_LOCATION` is requested only because Android requires it alongside precise; approximate-only access never collects (`LocationService.allowed`). |
+| Personal info: name, email address, user IDs | yes | no | no | Account management, App functionality | Google or GitHub sign-in creates or uses the PAS account; the phone receives the name and id from `/native/me`. |
+| Device or other IDs | yes | no | no | App functionality, Fraud prevention and security | The installation credential (random, hashed on the server), the pairing id, and the device label (maker and model). |
+| Health and fitness: fitness info | yes, with #634 / #635 | no | yes | App functionality | Heart rate (bpm and time); workout summaries. |
+| App info and performance: diagnostics | yes, with #660 | no | yes (off switch; recheck whether a default-on toggle counts as "optional") | App functionality, Analytics | #660's report. |
+| App activity: app interactions | yes, with #660 | no | yes | App functionality, Analytics | The activity log inside #660's report records when the user enabled, paused and resumed sharing. #660 lists only Diagnostics; declare this too. |
+
+Not declared because it stays on the phone (Play exempts on-device-only data): the 30-day sharing history, strap names, and Store searches. Not collected: financial info, messages, photos, audio, files, calendar, contacts, browsing history, installed apps (the release manifest has no `QUERY_ALL_PACKAGES`).
+
+**Content rating (IARC).** Category: utility / productivity / other. Violence, sexuality, language, controlled substances, gambling: none. Users interact or exchange content: no. **Shares the user's current physical location with other users: yes** (Rideshare shows a driver's position to their rider). Digital purchases: no. Unrestricted web browsing: no (links open the system browser).
+
+**Target audience:** 18 and over only, with Restrict Minor Access (decided in #661). Child PAS accounts cannot pair (#669). **Ads:** none. **News, government, financial features:** no.
+
+**App access:** a dedicated review account and instructions (#666).
+
+Sources: [background location](https://support.google.com/googleplay/android-developer/answer/9799150), [foreground-service declarations](https://support.google.com/googleplay/android-developer/answer/13392821), [Device and Network Abuse](https://support.google.com/googleplay/android-developer/answer/9888379), [sensitive permissions](https://support.google.com/googleplay/android-developer/answer/9888170), [User Data](https://support.google.com/googleplay/android-developer/answer/10144311), [Data safety](https://support.google.com/googleplay/android-developer/answer/10787469), [account deletion](https://support.google.com/googleplay/android-developer/answer/13327111), [Health apps declaration](https://support.google.com/googleplay/android-developer/answer/14738291), [target audience](https://support.google.com/googleplay/android-developer/answer/9867159), [app access](https://support.google.com/googleplay/android-developer/answer/9859455).
 
 ### Apple, for a later iOS implementation
 
@@ -42,7 +70,7 @@ Source: [App Review Guidelines](https://developer.apple.com/app-store/review/gui
 
 **Google Play.** The collector's foreground service declares `location|connectedDevice` and starts with only the types whose permission is held and whose grant is active.
 
-- *Foreground-service declaration, `connectedDevice`:* "ProAppStore keeps a connection to a Bluetooth heart-rate strap the user chose, while they exercise, so the readings reach the fitness app they enabled (Run) with the screen off. The ongoing notification names what is shared and offers Pause; turning heart rate off or forgetting the sensor ends the connection."
+- *Foreground-service declaration, `connectedDevice`:* "ProAppStore keeps a connection to a Bluetooth heart-rate strap the user chose, while they exercise, so the readings reach the fitness app they enabled (Run) with the screen off. The ongoing notification names what is shared and offers Stop; turning heart rate off or forgetting the sensor ends the connection."
 - *Data Safety:* **Health and fitness → Fitness info**: collected, shared with the enabled PAS app for the user's account, not used for advertising, encrypted in transit, deletable (turn off, disconnect, or delete the app account); not processed ephemerally; required only for the heart-rate feature, which is optional.
 - Bluetooth permissions: `BLUETOOTH_SCAN` with `neverForLocation` and `BLUETOOTH_CONNECT` on API 31+, the legacy `BLUETOOTH`/`BLUETOOTH_ADMIN` up to API 30. On Android 10 and 11 the platform requires fine location for any BLE scan, so Choose sensor asks for it there; the scan still lists heart-rate sensors only.
 
@@ -56,10 +84,10 @@ These are feasibility precedents, not transferable approvals. Neither establishe
 ## Submission evidence to prepare
 
 - Working consumer account and live backend, named recipient app, reproducible permission flow.
-- A video: disclosure → OS permissions → enable Ski → lock phone → observe native notification → reopen Ski with recorded samples → revoke → verify delivery stops.
+- Videos as listed under Google Play above, one per declaration, 30 s or less each.
 - Explain automatic recording and its user benefit, accuracy mode, collection duration, offline queue, retention and battery behaviour.
-- Show pause all, per-app revocation, disconnect and deletion; disclose offline revocation latency and separately saved app data.
-- Finish Google Play declarations, privacy policy, Data Safety, app signing, account-deletion requirements and target-API checks.
+- Show Stop and Stop all, per-app revocation, disconnect and deletion; disclose offline revocation latency and separately saved app data.
+- Finish Google Play declarations, privacy policy, Data Safety, app signing and account-deletion requirements. Target API 36, 64-bit and 16 KB page alignment are verified (readiness tracker #667).
 - No developer console, arbitrary code loading, covert tracking, advertising use of location or blanket grants to future apps.
 
 Collection now runs only in sessions the user starts in the companion, which end on Stop, after 30 minutes without movement or after 12 hours ([ADR-020](./adr/020-native-collection-sessions.md)). That meets Play's rule that a location foreground service continue a user action and stop when the use is complete, and removes `ACCESS_BACKGROUND_LOCATION` from the Android app.

@@ -26,7 +26,7 @@ The [release runbook](../docs/native-android-release.md) follows HeartFull's sig
 
 - Existing PAS Google/GitHub account sign-in through the system browser; no credentials entered into a WebView.
 - Per-app disclosure and consent, with Ski as the first reviewed integration.
-- Native location foreground service and visible Pause all notification.
+- Native location foreground service in sessions the user starts (ADR-020), with a visible notification and Stop.
 - Private SQLite offline queue, exact upload acknowledgement, Keystore-protected installation credential.
 - Immediate local revoke, queued server revoke, reconnect/upload and device disconnect.
 - Consumer UI in Compose, system light/dark theme, explicit status/error states.
@@ -39,4 +39,4 @@ Location permission alone does not authorize an app. Each sample captures its re
 
 The backend/native prototype is not a Play-approved release. Verify on physical Android devices: lock screen, GPS loss, network loss, force-stop, denied/revoked permissions, offline app revocation, regrant, expired credentials, storage failure and multiple recipients. SDK permission handoff, Ski UI consumption, worker delivery, verified App Links, boot recovery and additional capabilities remain follow-ups listed in the platform documentation.
 
-The fixed production API origin is `https://api.proappstore.online`; release code does not expose a server URL or token field to users. The custom return URI contains no credentials and never grants permission. Public App Links will be added with the release certificate.
+The fixed production API origin is `https://api.proappstore.online`; release code does not expose a server URL or token field to users. The custom URI carries no credentials and grants nothing. App Links are optional and not a Play requirement; if added, `assetlinks.json` must list the Play app-signing certificate's SHA-256 (Play Console → App integrity), not the upload certificate in `android/signing/`.

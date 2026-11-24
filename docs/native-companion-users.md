@@ -57,6 +57,7 @@ On Android, ProAppStore's notification says when it is sharing heart rate. Bluet
 - **Disable an app** immediately stops that recipient on your phone. If offline, its platform disconnection finishes when the phone reconnects; ProAppStore displays that pending state.
 - **Disconnect this phone** stops collection and deletes its pending device updates and raw platform copies. Internet is required to finish disconnection.
 - Rides or other results already saved separately inside an app are managed by that app.
+- **Delete your account:** Settings → Delete account opens the [deletion page](https://proappstore.online/privacy#data-deletion).
 
 ## Your data
 
