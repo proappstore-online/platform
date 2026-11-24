@@ -12,7 +12,10 @@ targets:
   ProAppStore:
     type: application
     platform: iOS
-    sources: [ProAppStore]
+    # The activity's attributes and Stop intent are compiled into both targets: a LiveActivityIntent runs in the app (#625).
+    sources: [ProAppStore, ProAppStoreActivity/SharingActivityAttributes.swift]
+    dependencies:
+      - target: ProAppStoreActivity
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PAS_BUNDLE_ID)
@@ -20,7 +23,22 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
+        # Empty locally (automatic signing); the TestFlight archive sets one App Store profile per target.
+        PROVISIONING_PROFILE_SPECIFIER: $(PAS_APP_PROFILE)
         TARGETED_DEVICE_FAMILY: "1"
+  # The Lock Screen Live Activity (#625): Sharing with … and one Stop.
+  ProAppStoreActivity:
+    type: app-extension
+    platform: iOS
+    sources: [ProAppStoreActivity]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PAS_BUNDLE_ID).activity
+        INFOPLIST_FILE: ProAppStoreActivity/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        PROVISIONING_PROFILE_SPECIFIER: $(PAS_ACTIVITY_PROFILE)
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
   ProAppStoreTests:
     type: bundle.unit-test
     platform: iOS

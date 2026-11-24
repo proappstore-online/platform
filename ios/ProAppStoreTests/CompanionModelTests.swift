@@ -149,6 +149,21 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertEqual(model.heartRate.recipients(at: now), ["hr1"])
     }
 
+    /// #625: the Lock Screen activity's Stop is Stop all (ADR-020 §5). It ends every session with the `all` detail and
+    /// sends no request, like the button, so it never touches a grant, consent or the queue.
+    func testTheLockScreenStopEndsEverySessionWithoutARequest() async throws {
+        let model = try makeModel(location: true, heartRate: true)
+        model.startSession(try XCTUnwrap(model.apps.first))
+        XCTAssertEqual(Set(model.sessions.keys), ["run"])
+        StubProtocol.seen = []
+        _ = try await StopSharingIntent().perform()
+        XCTAssertTrue(model.sessions.isEmpty)
+        XCTAssertTrue(local.sessions().isEmpty)
+        XCTAssertEqual(try local.events().filter { $0.kind == .sessionEnded }.map(\.detail), ["all"])
+        XCTAssertNotNil(model.apps.first?.grantId, "the grant stays")
+        XCTAssertEqual(StubProtocol.seen.count, 0)
+    }
+
     /// ADR-020 §2: a link never starts anything.
     func testAnAppLinkOpensConsentTheStartPromptOrThePage() throws {
         let link = URL(string: "proappstore://native/apps/run")!

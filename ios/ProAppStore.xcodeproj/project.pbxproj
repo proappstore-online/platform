@@ -7,19 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		064891A7A08E816B9DB9DCB8 /* ProAppStoreActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FB93B39BDD6153E195CA3264 /* ProAppStoreActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0CD8C70D084E8DE0147AE467 /* TrackShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5B0B730CA674900317BE194 /* TrackShape.swift */; };
 		0E70BA3692621D5C761A7CE8 /* SharingDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF913A8258103BE26D6CBFD /* SharingDashboardView.swift */; };
 		0FF892C26A665D236FB8894C /* SecureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769262658F18E1A5B8B96D31 /* SecureStore.swift */; };
 		1E864C3759DBC42CCA6A409B /* ProAppStoreApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */; };
+		22D16A66B8F20B0EAAB178C1 /* SharingActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0529EFB01642F618C4E25E /* SharingActivity.swift */; };
 		237C569494C8C956CB3789C7 /* DiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC8F8B2B602804DF24EF6FFC /* DiagnosticsTests.swift */; };
 		3273BFFFFCA14C60CD5DE5FC /* AppSharingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F6CEFDA02AF7ED6DFD670F /* AppSharingView.swift */; };
 		341E9F482A30C12B43D813C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3649F54A1E2191EC5E2AFDF /* SettingsView.swift */; };
 		3CDAD3149756ABD376282471 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7556E70BC5BB0E7766C3CFA6 /* PrivacyInfo.xcprivacy */; };
 		45981C916F97CCF35F6C413A /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6DEF5945A8E6C5C8377316 /* ScreenshotTests.swift */; };
 		4BB86174E9F9566B63E42E77 /* AppInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A292A82436A16B586312173C /* AppInfoTests.swift */; };
+		50FE7599E4140FE0C1A38DDB /* SharingActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA27A0529333AA3492FE5B6 /* SharingActivityAttributes.swift */; };
 		53643E7099CACCC616082AB3 /* PasApiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */; };
 		56BAE49C302244A943968E3D /* CatalogueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF7D868A1FC701C1B55D4807 /* CatalogueTests.swift */; };
 		5DA9277E0E345043D4346F60 /* SharingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */; };
+		6505E49F3F358F466265B9BC /* SharingActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FDB57E2C44534248A20464 /* SharingActivityWidget.swift */; };
 		65D44EA4EA3245A7B7FDC942 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 02F34D17F2EA035907DCD336 /* Assets.xcassets */; };
 		662900A1953BF8361746C05B /* CatalogueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AB569974F332D24F5C7B43 /* CatalogueStore.swift */; };
 		66AB4AC8D7DE99540749A4C2 /* Catalogue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12290EBE98D87AC41E272DF6 /* Catalogue.swift */; };
@@ -44,6 +48,7 @@
 		D18C979188FAAC166651199C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 639CF5D4AB25DD2EA7AE65EA /* ContentView.swift */; };
 		D33919234675735879D12E0D /* HeartRateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FA00B727D9608AC11E007B2 /* HeartRateTests.swift */; };
 		D541F7448999494A139F9172 /* InstallGuideSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8211AE4AF61B5A945D034DF3 /* InstallGuideSheet.swift */; };
+		D56D68EDB5CFF2F7CB61BA72 /* SharingActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B31D24E4369EABB59377B2A /* SharingActivityTests.swift */; };
 		E2E10C2906416DB3D3CD0372 /* HeartRateCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BFD79A2E9962580A29F9C12 /* HeartRateCollector.swift */; };
 		E875352AD58CFF068A53A49B /* CatalogueStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F921F2D2AE2A2C9DBAD439 /* CatalogueStoreTests.swift */; };
 		EA2D96BF4307505FC00F3781 /* SecureStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB575299865B2E756E74140 /* SecureStoreTests.swift */; };
@@ -51,6 +56,7 @@
 		EB08D843EDCF4D39ADEF14DF /* SharingSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BCB8DA994D2C69B65E7A6E /* SharingSessionTests.swift */; };
 		EDE2973889F0FC802ED8F1FD /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DB4C07B7D7FC1CA5235B188 /* LocalStore.swift */; };
 		EE6714B5C4DA8A74E5424EF1 /* PrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */; };
+		EEA80E8AC5E7DE29123531D5 /* SharingActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA27A0529333AA3492FE5B6 /* SharingActivityAttributes.swift */; };
 		F09F7FD6D8E2693E98D984EB /* SharingStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7022FD1C081ABF740353BD85 /* SharingStateTests.swift */; };
 		F17F7CFF363A93057F464D02 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB9A547FE5F49CF7C1D2157C /* DiagnosticsView.swift */; };
 		F1FFD91543D42D099F4B43B9 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01EFDC337D4CD98DCD134351 /* Diagnostics.swift */; };
@@ -67,13 +73,36 @@
 			remoteGlobalIDString = BBB2AD8205752E4F1FA0BCD7;
 			remoteInfo = ProAppStore;
 		};
+		D804E8922625AADE0686E471 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 421BE5C3E50C6F0FB5BFB935 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 04CC3A90BE62A6CE9053800F;
+			remoteInfo = ProAppStoreActivity;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		78EDDB8D38BD7A7CF5A1297A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				064891A7A08E816B9DB9DCB8 /* ProAppStoreActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		01EFDC337D4CD98DCD134351 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
 		02F34D17F2EA035907DCD336 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		0B31D24E4369EABB59377B2A /* SharingActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingActivityTests.swift; sourceTree = "<group>"; };
 		0DBDAE8FB24F25D71C27BEB2 /* SharingMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingMapView.swift; sourceTree = "<group>"; };
 		0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProAppStoreApp.swift; sourceTree = "<group>"; };
+		0DFA9C3265540686049363BD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		12290EBE98D87AC41E272DF6 /* Catalogue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalogue.swift; sourceTree = "<group>"; };
 		1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionRepository.swift; sourceTree = "<group>"; };
 		198026FF9DE4924087A189D6 /* ActivityText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityText.swift; sourceTree = "<group>"; };
@@ -99,6 +128,8 @@
 		7B6DEF5945A8E6C5C8377316 /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
 		7BFD79A2E9962580A29F9C12 /* HeartRateCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateCollector.swift; sourceTree = "<group>"; };
 		8211AE4AF61B5A945D034DF3 /* InstallGuideSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuideSheet.swift; sourceTree = "<group>"; };
+		9C0529EFB01642F618C4E25E /* SharingActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingActivity.swift; sourceTree = "<group>"; };
+		9CA27A0529333AA3492FE5B6 /* SharingActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingActivityAttributes.swift; sourceTree = "<group>"; };
 		9FA00B727D9608AC11E007B2 /* HeartRateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateTests.swift; sourceTree = "<group>"; };
 		A292A82436A16B586312173C /* AppInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfoTests.swift; sourceTree = "<group>"; };
 		A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingSession.swift; sourceTree = "<group>"; };
@@ -112,6 +143,7 @@
 		B5B0B730CA674900317BE194 /* TrackShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackShape.swift; sourceTree = "<group>"; };
 		C731A49585E0996081CB72E8 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyTests.swift; sourceTree = "<group>"; };
+		C9FDB57E2C44534248A20464 /* SharingActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingActivityWidget.swift; sourceTree = "<group>"; };
 		CB96C3C1C45B24091E7E5B31 /* ProAppStoreTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ProAppStoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D6B0229E71BB02A63AE73976 /* CompanionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModelTests.swift; sourceTree = "<group>"; };
 		D92609594B1A9DA482B821EC /* StorefrontView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorefrontView.swift; sourceTree = "<group>"; };
@@ -123,6 +155,7 @@
 		EE66F7D0B7641EFC42BCB984 /* AppInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfo.swift; sourceTree = "<group>"; };
 		F03F406CD589719890C8FFC3 /* ActivityLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityLogView.swift; sourceTree = "<group>"; };
 		F5EAE88EA5DDD843F3062BF3 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
+		FB93B39BDD6153E195CA3264 /* ProAppStoreActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ProAppStoreActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		FB9A547FE5F49CF7C1D2157C /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -157,6 +190,7 @@
 				0DC7B1DA01FACFF5104E8361 /* ProAppStoreApp.swift */,
 				769262658F18E1A5B8B96D31 /* SecureStore.swift */,
 				A3649F54A1E2191EC5E2AFDF /* SettingsView.swift */,
+				9C0529EFB01642F618C4E25E /* SharingActivity.swift */,
 				5EF913A8258103BE26D6CBFD /* SharingDashboardView.swift */,
 				0DBDAE8FB24F25D71C27BEB2 /* SharingMapView.swift */,
 				A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */,
@@ -179,6 +213,7 @@
 			isa = PBXGroup;
 			children = (
 				55848593523B544CACECAEF8 /* ProAppStore.app */,
+				FB93B39BDD6153E195CA3264 /* ProAppStoreActivity.appex */,
 				CB96C3C1C45B24091E7E5B31 /* ProAppStoreTests.xctest */,
 			);
 			name = Products;
@@ -201,6 +236,7 @@
 				C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */,
 				7B6DEF5945A8E6C5C8377316 /* ScreenshotTests.swift */,
 				ABB575299865B2E756E74140 /* SecureStoreTests.swift */,
+				0B31D24E4369EABB59377B2A /* SharingActivityTests.swift */,
 				27BCB8DA994D2C69B65E7A6E /* SharingSessionTests.swift */,
 				7022FD1C081ABF740353BD85 /* SharingStateTests.swift */,
 				D9716F47DA58833A53137DBF /* SharingTimelineTests.swift */,
@@ -209,11 +245,22 @@
 			path = ProAppStoreTests;
 			sourceTree = "<group>";
 		};
+		B3B76584083401C6A999CCDD /* ProAppStoreActivity */ = {
+			isa = PBXGroup;
+			children = (
+				0DFA9C3265540686049363BD /* Info.plist */,
+				9CA27A0529333AA3492FE5B6 /* SharingActivityAttributes.swift */,
+				C9FDB57E2C44534248A20464 /* SharingActivityWidget.swift */,
+			);
+			path = ProAppStoreActivity;
+			sourceTree = "<group>";
+		};
 		B5DA4387BA5DC1AC62B05660 = {
 			isa = PBXGroup;
 			children = (
 				6F3524E82E3B3571A6D8B098 /* Config */,
 				018C2E1B5E6BAD74409C8A1A /* ProAppStore */,
+				B3B76584083401C6A999CCDD /* ProAppStoreActivity */,
 				AC90555DAE69CC4641ED30A4 /* ProAppStoreTests */,
 				98C89DC650825F7DAF1C16FF /* Products */,
 			);
@@ -222,6 +269,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		04CC3A90BE62A6CE9053800F /* ProAppStoreActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6D94BD4098362C71CAC1FE46 /* Build configuration list for PBXNativeTarget "ProAppStoreActivity" */;
+			buildPhases = (
+				DC9A3BBE9B866159AC2D2EE7 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ProAppStoreActivity;
+			packageProductDependencies = (
+			);
+			productName = ProAppStoreActivity;
+			productReference = FB93B39BDD6153E195CA3264 /* ProAppStoreActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		5C09288114041D8F22ABCFBE /* ProAppStoreTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A2A9C0F0607F19547AF75EEF /* Build configuration list for PBXNativeTarget "ProAppStoreTests" */;
@@ -246,10 +310,12 @@
 			buildPhases = (
 				3E7089DC2CD032D160500EA2 /* Sources */,
 				D1BC5F80FCEE67747250003C /* Resources */,
+				78EDDB8D38BD7A7CF5A1297A /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A294DD35FF72E3E075EE2D13 /* PBXTargetDependency */,
 			);
 			name = ProAppStore;
 			packageProductDependencies = (
@@ -267,6 +333,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					04CC3A90BE62A6CE9053800F = {
+						ProvisioningStyle = Automatic;
+					};
 					5C09288114041D8F22ABCFBE = {
 						ProvisioningStyle = Automatic;
 					};
@@ -290,6 +359,7 @@
 			projectRoot = "";
 			targets = (
 				BBB2AD8205752E4F1FA0BCD7 /* ProAppStore */,
+				04CC3A90BE62A6CE9053800F /* ProAppStoreActivity */,
 				5C09288114041D8F22ABCFBE /* ProAppStoreTests */,
 			);
 		};
@@ -336,12 +406,23 @@
 				1E864C3759DBC42CCA6A409B /* ProAppStoreApp.swift in Sources */,
 				0FF892C26A665D236FB8894C /* SecureStore.swift in Sources */,
 				341E9F482A30C12B43D813C6 /* SettingsView.swift in Sources */,
+				22D16A66B8F20B0EAAB178C1 /* SharingActivity.swift in Sources */,
+				EEA80E8AC5E7DE29123531D5 /* SharingActivityAttributes.swift in Sources */,
 				0E70BA3692621D5C761A7CE8 /* SharingDashboardView.swift in Sources */,
 				87A7CEFE9D0C37FEDE398236 /* SharingMapView.swift in Sources */,
 				5DA9277E0E345043D4346F60 /* SharingSession.swift in Sources */,
 				75823E5936D4B8B7348DB8AB /* SharingTimeline.swift in Sources */,
 				7A35EE7A8EDF59AF6533F23B /* StorefrontView.swift in Sources */,
 				0CD8C70D084E8DE0147AE467 /* TrackShape.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DC9A3BBE9B866159AC2D2EE7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				50FE7599E4140FE0C1A38DDB /* SharingActivityAttributes.swift in Sources */,
+				6505E49F3F358F466265B9BC /* SharingActivityWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -363,6 +444,7 @@
 				EE6714B5C4DA8A74E5424EF1 /* PrivacyTests.swift in Sources */,
 				45981C916F97CCF35F6C413A /* ScreenshotTests.swift in Sources */,
 				EA2D96BF4307505FC00F3781 /* SecureStoreTests.swift in Sources */,
+				D56D68EDB5CFF2F7CB61BA72 /* SharingActivityTests.swift in Sources */,
 				EB08D843EDCF4D39ADEF14DF /* SharingSessionTests.swift in Sources */,
 				F09F7FD6D8E2693E98D984EB /* SharingStateTests.swift in Sources */,
 				785950B0825B2C3A06F84982 /* SharingTimelineTests.swift in Sources */,
@@ -377,6 +459,11 @@
 			isa = PBXTargetDependency;
 			target = BBB2AD8205752E4F1FA0BCD7 /* ProAppStore */;
 			targetProxy = 76AB34E24CFFA2D9CBAAA04D /* PBXContainerItemProxy */;
+		};
+		A294DD35FF72E3E075EE2D13 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 04CC3A90BE62A6CE9053800F /* ProAppStoreActivity */;
+			targetProxy = D804E8922625AADE0686E471 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -443,6 +530,24 @@
 			};
 			name = Debug;
 		};
+		221F03487B23D5D456B6C154 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ProAppStoreActivity/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PAS_BUNDLE_ID).activity";
+				PROVISIONING_PROFILE_SPECIFIER = "$(PAS_ACTIVITY_PROFILE)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		27EBE1B54FF81841BB66528D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -474,6 +579,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PAS_BUNDLE_ID)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(PAS_APP_PROFILE)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -492,6 +598,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PAS_BUNDLE_ID)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(PAS_APP_PROFILE)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -570,9 +677,36 @@
 			};
 			name = Release;
 		};
+		F2A6926DD72CA1D481D230EB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = ProAppStoreActivity/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PAS_BUNDLE_ID).activity";
+				PROVISIONING_PROFILE_SPECIFIER = "$(PAS_ACTIVITY_PROFILE)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		6D94BD4098362C71CAC1FE46 /* Build configuration list for PBXNativeTarget "ProAppStoreActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F2A6926DD72CA1D481D230EB /* Debug */,
+				221F03487B23D5D456B6C154 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		A2A9C0F0607F19547AF75EEF /* Build configuration list for PBXNativeTarget "ProAppStoreTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

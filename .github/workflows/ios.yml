@@ -57,6 +57,8 @@ jobs:
       IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
       IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
       IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+      # #625: the Live Activity extension (online.proappstore.companion.activity) needs its own App Store profile.
+      IOS_APPSTORE_ACTIVITY_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_ACTIVITY_PROFILE_BASE64 }}
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
       ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
       ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
@@ -67,7 +69,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for name in IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_APPSTORE_PROFILE_BASE64 ASC_API_KEY_ID ASC_API_ISSUER_ID ASC_API_KEY_P8_BASE64; do
+          for name in IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_APPSTORE_PROFILE_BASE64 IOS_APPSTORE_ACTIVITY_PROFILE_BASE64 ASC_API_KEY_ID ASC_API_ISSUER_ID ASC_API_KEY_P8_BASE64; do
             if [[ -z "${!name}" ]]; then echo "::error::Repository secret $name is not set. Create it with ops (pas/$name, consumer github-repo-secret: proappstore-online/platform) before dispatching (#685)."; missing=1; fi
           done
           exit $missing
@@ -92,20 +94,25 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           echo "PAS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-          profile="$RUNNER_TEMP/appstore.mobileprovision"
-          echo "$IOS_APPSTORE_PROFILE_BASE64" | base64 --decode > "$profile"
-          security cms -D -i "$profile" > "$RUNNER_TEMP/profile.plist"
-          uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
-          name=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
-          app_id=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
-          # An App Store profile lists no devices; a development or ad-hoc profile does.
-          if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$RUNNER_TEMP/profile.plist" > /dev/null 2>&1; then
-            echo "::error::IOS_APPSTORE_PROFILE_BASE64 is not an App Store distribution profile"; exit 1
-          fi
-          if [[ "$app_id" != "$TEAM_ID.$BUNDLE_ID" ]]; then echo "::error::Profile is for $app_id, expected $TEAM_ID.$BUNDLE_ID"; exit 1; fi
+          # One App Store profile per signed target: the app, and the Live Activity extension (#625).
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$profile" "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
-          echo "PAS_PROFILE_NAME=$name" >> "$GITHUB_ENV"
+          install_profile() { # <base64> <bundle id> <env name for its profile name>
+            local profile="$RUNNER_TEMP/$3.mobileprovision" plist="$RUNNER_TEMP/$3.plist" uuid name app_id
+            echo "$1" | base64 --decode > "$profile"
+            security cms -D -i "$profile" > "$plist"
+            uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")
+            name=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")
+            app_id=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$plist")
+            # An App Store profile lists no devices; a development or ad-hoc profile does.
+            if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$plist" > /dev/null 2>&1; then
+              echo "::error::The profile for $2 is not an App Store distribution profile"; exit 1
+            fi
+            if [[ "$app_id" != "$TEAM_ID.$2" ]]; then echo "::error::Profile is for $app_id, expected $TEAM_ID.$2"; exit 1; fi
+            cp "$profile" "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
+            echo "$3=$name" >> "$GITHUB_ENV"
+          }
+          install_profile "$IOS_APPSTORE_PROFILE_BASE64" "$BUNDLE_ID" PAS_APP_PROFILE
+          install_profile "$IOS_APPSTORE_ACTIVITY_PROFILE_BASE64" "$BUNDLE_ID.activity" PAS_ACTIVITY_PROFILE
 
           echo "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
           echo "PAS_ASC_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
@@ -115,7 +122,7 @@ jobs:
           xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -configuration Release
           -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/ProAppStore.xcarchive" archive
           CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_IDENTITY="Apple Distribution"
-          PROVISIONING_PROFILE_SPECIFIER="$PAS_PROFILE_NAME" OTHER_CODE_SIGN_FLAGS="--keychain $PAS_KEYCHAIN"
+          PAS_APP_PROFILE="$PAS_APP_PROFILE" PAS_ACTIVITY_PROFILE="$PAS_ACTIVITY_PROFILE" OTHER_CODE_SIGN_FLAGS="--keychain $PAS_KEYCHAIN"
           CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT="${GITHUB_SHA::7}"
       - name: Privacy manifest is in the archive
         run: test -f "$RUNNER_TEMP/ProAppStore.xcarchive/Products/Applications/ProAppStore.app/PrivacyInfo.xcprivacy"
@@ -134,7 +141,10 @@ jobs:
             <key>teamID</key><string>$TEAM_ID</string>
             <key>signingStyle</key><string>manual</string>
             <key>signingCertificate</key><string>Apple Distribution</string>
-            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PAS_PROFILE_NAME</string></dict>
+            <key>provisioningProfiles</key><dict>
+              <key>$BUNDLE_ID</key><string>$PAS_APP_PROFILE</string>
+              <key>$BUNDLE_ID.activity</key><string>$PAS_ACTIVITY_PROFILE</string>
+            </dict>
             <key>manageAppVersionAndBuildNumber</key><false/>
             <key>uploadSymbols</key><true/>
           </dict>
@@ -151,5 +161,5 @@ jobs:
         shell: bash
         run: |
           if [[ -n "${PAS_KEYCHAIN:-}" ]]; then security delete-keychain "$PAS_KEYCHAIN" || true; fi
-          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/profile.plist"
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP"/PAS_*_PROFILE.mobileprovision "$RUNNER_TEMP"/PAS_*_PROFILE.plist
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision

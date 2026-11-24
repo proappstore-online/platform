@@ -10,6 +10,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     let repository: CompanionRepository
     let collector: LocationCollector
     let heartRate: HeartRateCollector
+    private let activity = SharingActivity()
     private var local: LocalStore { repository.local }
 
     @Published private(set) var signedIn = false
@@ -74,6 +75,8 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         let live: () -> Set<String> = { [weak self] in self?.live == true ? repository.local.sessionIds() : [] }
         collector.sessions = live; heartRate.sessions = live
         collector.authorizationChanged = { [weak self] in self?.continuePendingStart() }
+        collector.evaluated = { [weak self] in self?.showActivity() }
+        StopSharingIntent.stopAll = { [weak self] in self?.stopAll() }
         repository.diagnosticsDevice = { [weak self] in
             guard let self else { return nil }
             return await Diagnostics.device(collector, heartRate)
@@ -108,6 +111,13 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func otherEntries(_ appId: String) -> [NativeEntry] { entries.filter { $0.appId == appId && $0.capability != NativeEntry.LOCATION } }
     /// Both collectors follow the same rules: called wherever the screen changes what may be collected.
     func evaluate() { collector.evaluate(); heartRate.evaluate() }
+
+    /// The Lock Screen activity follows the sessions the collectors serve: none before the companion is opened (`live`).
+    private func showActivity() {
+        let ids = collector.sessions()
+        let names = Dictionary(local.apps().map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        activity.show(SharingActivity.content(local.sessions().filter { ids.contains($0.appId) }, names: names))
+    }
 
     /// The app's state chip; `running` is the collector's.
     func state(_ app: ConnectedApp, running: Bool) -> SharingState {

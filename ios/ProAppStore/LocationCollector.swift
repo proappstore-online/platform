@@ -18,6 +18,8 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     var sessions: () -> Set<String> = { [] }
     /// Called after every authorization change, for a Start waiting on the While Using prompt.
     var authorizationChanged: () -> Void = {}
+    /// Called at the end of every `evaluate()`, for the Lock Screen activity (#625).
+    var evaluated: () -> Void = {}
 
     private let manager = CLLocationManager()
     private let repository: CompanionRepository
@@ -63,12 +65,13 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     /// no recipients, so nothing starts.
     func evaluate() {
         if repository.token() != nil && permitted && !recipients(at: CompanionRepository.now()).isEmpty {
-            guard !running else { return }
-            emitter = EmitFilter() // a new session starts with a point, not a heartbeat later
-            manager.startUpdatingLocation(); running = true
-            watchMotion()
-            dueCheck = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.endDueSessions(); self?.evaluate() }
+            if !running {
+                emitter = EmitFilter() // a new session starts with a point, not a heartbeat later
+                manager.startUpdatingLocation(); running = true
+                watchMotion()
+                dueCheck = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.endDueSessions(); self?.evaluate() }
+                }
             }
         } else {
             manager.stopUpdatingLocation()
@@ -78,6 +81,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
             dueCheck?.invalidate(); dueCheck = nil
             apply(stationary: false)
         }
+        evaluated()
     }
 
     /// Ends the sessions that are due (ADR-020 §3): precise or location permission withdrawn, or the stationary and
