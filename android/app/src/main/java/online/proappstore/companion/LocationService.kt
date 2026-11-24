@@ -2,8 +2,11 @@ package online.proappstore.companion
 
 import android.Manifest
 import android.app.*
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
@@ -33,10 +36,26 @@ class LocationService : Service(), LocationListenerCompat {
     private var listening = false
     private var gatt: HeartRateGatt? = null
     private val heartRatePolicy = HeartRatePolicy()
+    /**
+     * Bluetooth off and on again (#672): the 30 s check cannot see a toggle inside one window, and a `BluetoothGatt` from
+     * before the restart never reconnects. Off drops the connection (logged as `lost`); on makes a fresh one. Main thread.
+     */
+    private val bluetoothState = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> { gatt?.close(); gatt = null; onSensor(false) }
+                BluetoothAdapter.STATE_ON -> apply(types)
+                else -> return
+            }
+            Bluetooth.note(this@LocationService, graph.local)
+        }
+    }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Location sharing", NotificationManager.IMPORTANCE_LOW))
+        // A system broadcast still reaches a not-exported receiver.
+        ContextCompat.registerReceiver(this, bluetoothState, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PAUSE) { graph.local.paused = true; stopSelf(); return START_NOT_STICKY }
@@ -101,9 +120,14 @@ class LocationService : Service(), LocationListenerCompat {
             listening = true
         } catch (_: SecurityException) { graph.local.message = "Location permission changed."; stopSelf(); return false }
         if (!t.location && listening) { manager.removeUpdates(this); listening = false }
+        // Bluetooth off keeps the connected-device type (its permission is unchanged): only the connection waits (#672).
         val address = graph.local.heartRateSensor
-        if (gatt != null && (!t.connectedDevice || gatt?.address != address)) { gatt?.close(); gatt = null; heartRateConnected = false }
-        if (t.connectedDevice && gatt == null && address != null) {
+        val wanted = t.connectedDevice && address != null
+        val on = Bluetooth.on(this)
+        fun link() = HeartRateLink.next(wanted, on, gatt?.opened == true, gatt?.address == address)
+        if (link() == HeartRateLink.CLOSE) { gatt?.close(); gatt = null; heartRateConnected = false }
+        if (link() == HeartRateLink.CONNECT && address != null) {
+            gatt?.close() // a wrapper that never opened
             gatt = HeartRateGatt(this, address, ::onHeartRate, ::onSensor).also { it.connect() }
         }
         return true
@@ -156,6 +180,7 @@ class LocationService : Service(), LocationListenerCompat {
     }
     override fun onProviderDisabled(provider: String) { graph.local.message = "Location is switched off. Waiting for a GPS signal." }
     override fun onDestroy() {
+        unregisterReceiver(bluetoothState)
         manager.removeUpdates(this); gatt?.close(); gatt = null; scope.cancel(); running = false; heartRateConnected = false
         stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy()
     }

@@ -5,7 +5,7 @@ import org.junit.Test
 
 /**
  * #634: the parser vectors are copied verbatim from iOS HeartRateTests.swift (#631); keep the two lists identical.
- * Plus the sample policy, chart bucketing, activity text and the collector service's type selection.
+ * Plus the sample policy, chart bucketing, activity text, the collector service's type selection and the strap link (#672).
  */
 class HeartRateTest {
     private fun parse(vararg bytes: Int) = HeartRateMeasurement.parse(ByteArray(bytes.size) { bytes[it].toByte() })
@@ -131,6 +131,40 @@ class HeartRateTest {
         assertEquals(CollectorTypes(location = false, connectedDevice = true), CollectorTypes.select(false, true, true, true))
         assertFalse(CollectorTypes.select(true, false, true, false).any)
         assertFalse(CollectorTypes.select(false, true, false, true).any)
+    }
+
+    // The strap's connection across Bluetooth off and on (#672). next(wanted, bluetoothOn, open, sameAddress)
+
+    @Test fun bluetoothOffWithNoConnectionWaits() {
+        assertEquals(HeartRateLink.KEEP, HeartRateLink.next(wanted = true, bluetoothOn = false, open = false, sameAddress = false))
+    }
+
+    @Test fun bluetoothOnWithNoConnectionConnects() {
+        assertEquals(HeartRateLink.CONNECT, HeartRateLink.next(wanted = true, bluetoothOn = true, open = false, sameAddress = false))
+    }
+
+    @Test fun anOpenConnectionClosesWhenBluetoothGoesOff() {
+        assertEquals(HeartRateLink.CLOSE, HeartRateLink.next(wanted = true, bluetoothOn = false, open = true, sameAddress = true))
+    }
+
+    @Test fun aWrapperThatNeverOpenedIsReplacedOnceBluetoothIsOn() {
+        // connectGatt returned null with Bluetooth off: the same address must not count as connected (scenario 1).
+        assertEquals(HeartRateLink.CONNECT, HeartRateLink.next(wanted = true, bluetoothOn = true, open = false, sameAddress = true))
+    }
+
+    @Test fun aDifferentSensorClosesBeforeItConnects() {
+        assertEquals(HeartRateLink.CLOSE, HeartRateLink.next(wanted = true, bluetoothOn = true, open = true, sameAddress = false))
+        // Asked again after the close: now nothing is open, so one new client, never two.
+        assertEquals(HeartRateLink.CONNECT, HeartRateLink.next(wanted = true, bluetoothOn = true, open = false, sameAddress = false))
+    }
+
+    @Test fun anOpenConnectionToTheChosenSensorIsKept() {
+        assertEquals(HeartRateLink.KEEP, HeartRateLink.next(wanted = true, bluetoothOn = true, open = true, sameAddress = true))
+    }
+
+    @Test fun notWantedClosesAndNeverConnects() {
+        assertEquals(HeartRateLink.CLOSE, HeartRateLink.next(wanted = false, bluetoothOn = true, open = true, sameAddress = true))
+        assertEquals(HeartRateLink.KEEP, HeartRateLink.next(wanted = false, bluetoothOn = true, open = false, sameAddress = false))
     }
 
     @Test fun theNotificationSaysWhatIsShared() {

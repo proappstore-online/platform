@@ -121,14 +121,35 @@ data class CollectorTypes(val location: Boolean, val connectedDevice: Boolean) {
 }
 
 /**
+ * What the collector does with the strap's connection (#672). Pure, so the decision is tested off-device. `wanted`: the
+ * heart-rate type runs and a sensor is chosen. `open`: a [HeartRateGatt] exists whose `connectGatt` returned a connection
+ * (one that never opened, because Bluetooth was off, counts as none). `sameAddress`: that connection is to the chosen sensor.
+ * A changed sensor is [CLOSE], then, asked again with nothing open, [CONNECT]: never two clients on one strap.
+ */
+enum class HeartRateLink {
+    KEEP, CONNECT, CLOSE;
+
+    companion object {
+        fun next(wanted: Boolean, bluetoothOn: Boolean, open: Boolean, sameAddress: Boolean): HeartRateLink = when {
+            open && (!wanted || !bluetoothOn || !sameAddress) -> CLOSE
+            !open && wanted && bluetoothOn -> CONNECT
+            else -> KEEP
+        }
+    }
+}
+
+/**
  * The chosen strap's GATT connection, owned by the collector service. `connectGatt(autoConnect = true)` to the remembered
  * address: Android keeps reconnecting whenever the strap is in range until [close], with the screen off. Notifications on
- * 0x2A37 are enabled by writing CCCD 0x2902. Callers check [Bluetooth.permitted] first.
+ * 0x2A37 are enabled by writing CCCD 0x2902. Callers check [Bluetooth.permitted] first. A Bluetooth restart leaves the
+ * client registered with the stopped stack, so the collector closes this and makes a new one ([HeartRateLink], #672).
  */
 class HeartRateGatt(private val context: Context, val address: String, private val onReading: (ByteArray) -> Unit, private val onConnected: (Boolean) -> Unit) {
     private var gatt: BluetoothGatt? = null
     @Volatile var connected = false
         private set
+    /** `connectGatt` returned a connection. False before [connect], after [close], and when Bluetooth was off (AOSP returns null). */
+    val opened: Boolean get() = gatt != null
 
     private val callback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission") // only reached after connect(), which checked
