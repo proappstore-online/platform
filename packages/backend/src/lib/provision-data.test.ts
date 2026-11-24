@@ -16,7 +16,8 @@ vi.mock('./deploy-worker.js', () => ({
 const { provisionData } = await import('./provision-data.js');
 const { deployDataWorker } = await import('./deploy-worker.js');
 
-function fakeDb() {
+/** `recorded`: the app row's d1_database_id; `owner`: another app already recording the resolved uuid. */
+function fakeDb({ recorded, owner }: { recorded?: string; owner?: string } = {}) {
   const runs: { sql: string; args: unknown[] }[] = [];
   return {
     runs,
@@ -27,7 +28,12 @@ function fakeDb() {
           run: async () => {},
           // The creator-existence guard (#81) expects a real user; return a row
           // for that lookup, null otherwise.
-          first: async () => (/FROM users\b/i.test(sql) ? { 1: 1 } : null),
+          first: async () => {
+            if (/FROM users\b/i.test(sql)) return { 1: 1 };
+            if (/^SELECT d1_database_id FROM apps/i.test(sql)) return recorded ? { d1_database_id: recorded } : null;
+            if (/^SELECT id FROM apps WHERE d1_database_id/i.test(sql)) return owner ? { id: owner } : null;
+            return null;
+          },
         };
       },
     }),
@@ -122,5 +128,67 @@ describe('provisionData', () => {
 
     expect(result.steps[0]!.status).toBe('fail');
     expect(result.steps[0]!.detail).toContain('network down');
+  });
+
+  describe('the recorded d1_database_id is the authority (#688)', () => {
+    const d1Get = (status: number, body: unknown) => ({ ok: status < 400, status, json: () => Promise.resolve(body) } as Response);
+    const named = (uuid?: string) => d1Get(200, { success: true, result: uuid ? [{ uuid, name: 'pas-data-test-app' }] : [] });
+    const urls = () => mockFetch.mock.calls.map(([url, init]) => `${(init as RequestInit | undefined)?.method ?? 'GET'} ${String(url)}`);
+    const appWrites = (db: ReturnType<typeof fakeDb>) => db.runs.filter((r) => /INSERT INTO apps/i.test(r.sql));
+
+    it('binds the recorded database without creating one when the name agrees', async () => {
+      mockFetch.mockResolvedValueOnce(d1Get(200, { success: true, result: { uuid: 'rec-db' } })).mockResolvedValueOnce(named('rec-db'));
+      const db = fakeDb({ recorded: 'rec-db' });
+      const result = await provisionData({ ...base, db });
+      expect(urls()).toEqual([
+        'GET https://api.cloudflare.com/client/v4/accounts/acct/d1/database/rec-db',
+        'GET https://api.cloudflare.com/client/v4/accounts/acct/d1/database?name=pas-data-test-app',
+      ]);
+      expect(result.steps[0]).toEqual({ name: 'create_d1', status: 'skip', detail: 'pas-data-test-app already exists (rec-db)' });
+      expect(vi.mocked(deployDataWorker).mock.calls[0]![1]).toBe('rec-db');
+      expect(result.dbId).toBe('rec-db');
+    });
+
+    it('refuses to bind either database when the named one is not the recorded one', async () => {
+      mockFetch.mockResolvedValueOnce(d1Get(200, { success: true, result: { uuid: 'rec-db' } })).mockResolvedValueOnce(named('name-db'));
+      const db = fakeDb({ recorded: 'rec-db' });
+      const result = await provisionData({ ...base, db });
+      expect(result.steps[0]!).toMatchObject({ name: 'create_d1', status: 'fail' });
+      expect(result.steps[0]!.detail).toContain('rec-db');
+      expect(result.steps[0]!.detail).toContain('name-db');
+      expect(result.steps.slice(1).map((s) => s.status)).toEqual(['skip', 'skip']);
+      expect(deployDataWorker).not.toHaveBeenCalled();
+      expect(appWrites(db)).toEqual([]);
+      expect(urls().some((u) => u.startsWith('POST'))).toBe(false);
+    });
+
+    it('binds the recorded database when no database carries the app name (a renamed app)', async () => {
+      mockFetch.mockResolvedValueOnce(d1Get(200, { success: true, result: { uuid: 'rec-db' } })).mockResolvedValueOnce(named());
+      const result = await provisionData({ ...base, db: fakeDb({ recorded: 'rec-db' }) });
+      expect(urls().some((u) => u.startsWith('POST'))).toBe(false);
+      expect(vi.mocked(deployDataWorker).mock.calls[0]![1]).toBe('rec-db');
+      expect(result.steps.map((s) => s.status)).toEqual(['skip', 'ok', 'ok']);
+    });
+
+    it('refuses to create an empty replacement when the recorded database is gone', async () => {
+      mockFetch.mockResolvedValueOnce(d1Get(404, { success: false, errors: [{ message: 'not found' }] }));
+      const db = fakeDb({ recorded: 'gone-db' });
+      const result = await provisionData({ ...base, db });
+      expect(result.steps[0]).toEqual({ name: 'create_d1', status: 'fail', detail: 'recorded D1 gone-db not found; refusing to create an empty replacement' });
+      expect(urls()).toEqual(['GET https://api.cloudflare.com/client/v4/accounts/acct/d1/database/gone-db']);
+      expect(deployDataWorker).not.toHaveBeenCalled();
+      expect(appWrites(db)).toEqual([]);
+    });
+
+    it('refuses a database found by name that another app records as its own', async () => {
+      mockFetch
+        .mockResolvedValueOnce(d1Get(200, { success: false, errors: [{ message: 'already exists' }] }))
+        .mockResolvedValueOnce(named('rideshare-db'));
+      const db = fakeDb({ owner: 'rideshare' });
+      const result = await provisionData({ ...base, db });
+      expect(result.steps[0]).toEqual({ name: 'create_d1', status: 'fail', detail: 'D1 rideshare-db belongs to app rideshare' });
+      expect(deployDataWorker).not.toHaveBeenCalled();
+      expect(appWrites(db)).toEqual([]);
+    });
   });
 });

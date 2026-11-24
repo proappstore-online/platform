@@ -20,7 +20,7 @@ publisher                  PAS backend (api.proappstore.online)
   |                                       |-- 1. Validate app id
   |                                       |-- 2. Compliance check (fetch repo from GitHub, run checks)
   |                                       |-- 3. Register R2 host route (D1 routes table — Path B, no CF Pages)
-  |                                       |-- 4. Create per-app D1 database `pas-data-{id}`
+  |                                       |-- 4. Reuse the app's recorded D1 (apps.d1_database_id), or create `pas-data-{id}` for a new app
   |                                       |-- 5. Deploy `data-{id}.proappstore.online` worker
   |                                       |-- 6. Insert app record (platform apps table)
   |                                       |

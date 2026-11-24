@@ -36,6 +36,9 @@ function mockD1Claimed(claimedBy: string | null, ...stmts: ReturnType<typeof moc
       return mockStmt({ first: claimedBy ? { creator_id: claimedBy } : null });
     }
     if (/FROM users\b/i.test(sql)) return mockStmt({ first: { 1: 1 } });
+    // #688 D1 resolution: no recorded database and no other app owning one, so
+    // provisionData takes the create path these tests describe.
+    if (/^SELECT (d1_database_id|id) FROM apps\b/i.test(sql)) return mockStmt({ first: null });
     // #83 provisioning rate limit — answered out-of-band as "no attempts yet",
     // for the same reason as the guards above: it runs before the statements
     // these tests describe, and threading it through each sequence would bury

@@ -25,8 +25,9 @@ export interface ProvisionDataArgs {
 
 /**
  * Provision an app's DATA plane: D1 database + data worker + PAS app record.
- * Idempotent — D1 create skips when it already exists, the app record is
- * INSERT OR IGNORE, and re-deploying the (generic) data worker is harmless.
+ * Idempotent — an existing app is redeployed bound to its recorded D1 (#688), the
+ * app record is an upsert that never rewrites a good id, and re-deploying the
+ * (generic) data worker is harmless.
  *
  * Shared by `/v1/provision` (the CLI/SDK publish path) and `/v1/provision-data`
  * (the Agent Teams deploy stage, service-to-service) so a CLI-published app and
@@ -43,41 +44,16 @@ export async function provisionData(
   }
 
 
-  // 1. Create D1 database (skip if it already exists)
-  let dbId = '';
+  // 1. Resolve the app's D1 database (#688).
   const dbName = `pas-data-${appId}`;
+  let resolved: { dbId: string; step: Step };
   try {
-    const dbRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: dbName }),
-    });
-    const dbData = (await dbRes.json()) as { success: boolean; result?: { uuid: string }; errors?: { message: string }[] };
-    if (dbData.success && dbData.result) {
-      dbId = dbData.result.uuid;
-      steps.push({ name: 'create_d1', status: 'ok', detail: `${dbName} (${dbId})` });
-    } else {
-      const err = dbData.errors?.[0]?.message || 'unknown';
-      if (err.includes('already exists')) {
-        const listRes = await fetch(
-          `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database?name=${dbName}`,
-          { headers: { Authorization: `Bearer ${cfToken}` } },
-        );
-        const listData = (await listRes.json()) as { result?: { uuid: string; name: string }[] };
-        const existing = listData.result?.find((d) => d.name === dbName);
-        if (existing) {
-          dbId = existing.uuid;
-          steps.push({ name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${dbId})` });
-        } else {
-          steps.push({ name: 'create_d1', status: 'fail', detail: 'exists per create but list returned nothing' });
-        }
-      } else {
-        steps.push({ name: 'create_d1', status: 'fail', detail: err });
-      }
-    }
+    resolved = await resolveD1(db, appId, dbName, cfToken, cfAccount);
   } catch (e) {
-    steps.push({ name: 'create_d1', status: 'fail', detail: String(e) });
+    resolved = { dbId: '', step: { name: 'create_d1', status: 'fail', detail: String(e) } };
   }
+  const { dbId } = resolved;
+  steps.push(resolved.step);
 
   // 2. Deploy the data worker bound to that D1
   let dataWorkerUrl = '';
@@ -141,4 +117,61 @@ export async function provisionData(
   }
 
   return { steps, dataWorkerUrl, dbId };
+}
+
+const createD1Fail = (detail: string): { dbId: string; step: Step } => ({ dbId: '', step: { name: 'create_d1', status: 'fail', detail } });
+
+/** The uuid of the account's database named exactly `dbName`, if any. */
+async function namedD1(dbName: string, cfToken: string, cfAccount: string): Promise<string | undefined> {
+  const listRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database?name=${dbName}`,
+    { headers: { Authorization: `Bearer ${cfToken}` } },
+  );
+  const listData = (await listRes.json()) as { result?: { uuid: string; name: string }[] };
+  return listData.result?.find((d) => d.name === dbName)?.uuid;
+}
+
+/**
+ * #688: `apps.d1_database_id` is the authority for which database an app's data
+ * worker binds; the name `pas-data-<appId>` only finds the database of an app
+ * with no record yet. Every disagreement fails instead of guessing: binding by
+ * name would hand a renamed app a fresh empty database (or another app's), and
+ * binding the record over a differently-named live database would silently roll
+ * the worker back to it. A failed step leaves the deployed worker untouched.
+ */
+async function resolveD1(db: D1Database, appId: string, dbName: string, cfToken: string, cfAccount: string): Promise<{ dbId: string; step: Step }> {
+  const recorded = (await db.prepare('SELECT d1_database_id FROM apps WHERE id = ?').bind(appId).first<{ d1_database_id: string | null }>())?.d1_database_id;
+  if (recorded) {
+    // Never POST a create here: an existing app must keep its own database.
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database/${recorded}`, {
+      headers: { Authorization: `Bearer ${cfToken}` },
+    });
+    if (res.status === 404) return createD1Fail(`recorded D1 ${recorded} not found; refusing to create an empty replacement`);
+    const data = (await res.json()) as { success: boolean; errors?: { message: string }[] };
+    if (!data.success) return createD1Fail(`recorded D1 ${recorded}: ${data.errors?.[0]?.message || 'unknown'}`);
+    const named = await namedD1(dbName, cfToken, cfAccount);
+    if (named && named !== recorded) {
+      return createD1Fail(`${dbName} is ${named} but the app's recorded D1 is ${recorded}; refusing to bind either until an operator reconciles them`);
+    }
+    return { dbId: recorded, step: { name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${recorded})` } };
+  }
+
+  const dbRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: dbName }),
+  });
+  const dbData = (await dbRes.json()) as { success: boolean; result?: { uuid: string }; errors?: { message: string }[] };
+  if (dbData.success && dbData.result) {
+    return { dbId: dbData.result.uuid, step: { name: 'create_d1', status: 'ok', detail: `${dbName} (${dbData.result.uuid})` } };
+  }
+  const err = dbData.errors?.[0]?.message || 'unknown';
+  if (!err.includes('already exists')) return createD1Fail(err);
+  const existing = await namedD1(dbName, cfToken, cfAccount);
+  if (!existing) return createD1Fail('exists per create but list returned nothing');
+  // A database found by name may still be another app's (a retired ID's database
+  // is recorded on the app it was renamed to): never bind it to a second app.
+  const owner = await db.prepare('SELECT id FROM apps WHERE d1_database_id = ? AND id <> ?').bind(existing, appId).first<{ id: string }>();
+  if (owner) return createD1Fail(`D1 ${existing} belongs to app ${owner.id}`);
+  return { dbId: existing, step: { name: 'create_d1', status: 'skip', detail: `${dbName} already exists (${existing})` } };
 }
