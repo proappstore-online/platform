@@ -103,6 +103,29 @@ describe('consumer native companion', () => {
     expect((await request(`/native/auth/authorize?id=${p.id}`, 'GET', undefined, undefined, { Cookie: forged })).status).toBe(403);
     await authorize(p);
   });
+  it('refuses a child account at the callback, deletes its pairing, and refuses one flagged before /complete (#669)', async () => {
+    db.sql.exec("INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at, is_child) VALUES ('credential:kid','credential','kid','kid',0,0,1)");
+    const p = await pairing();
+    const code = crypto.randomUUID();
+    const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code))).toString('base64url');
+    await db.prepare('INSERT INTO auth_exchange_codes (code_hash, claims, expires_at, created_at) VALUES (?, ?, ?, ?)')
+      .bind(hash, JSON.stringify({ uid: 'credential:kid', login: 'kid', roles: ['user'] }), Date.now() + 60_000, Date.now()).run();
+    const callback = await request(`/native/auth/callback?code=${code}`, 'GET', undefined, undefined, { Cookie: p.cookie });
+    expect(callback.status).toBe(403);
+    expect(await callback.json()).toEqual({ error: "The ProAppStore phone app isn't available for this account." });
+    expect(db.sql.prepare('SELECT 1 FROM native_pairings WHERE id = ?').all(p.id)).toHaveLength(0);
+    expect((await request('/native/auth/complete', 'POST', { id: p.id, verifier: p.verifier })).status).toBe(403);
+    // An adult approved in the browser, then flagged before the phone completes: no device is issued.
+    const adult = await pairing(); await authorize(adult);
+    db.sql.exec("UPDATE users SET is_child = 1 WHERE id = 'google:1'");
+    const complete = await request('/native/auth/complete', 'POST', { id: adult.id, verifier: adult.verifier });
+    expect(complete.status).toBe(403);
+    expect(await complete.json()).toEqual({ error: "The ProAppStore phone app isn't available for this account." });
+    expect(db.sql.prepare('SELECT * FROM native_devices').all()).toHaveLength(0);
+    // is_child = 0 still pairs.
+    db.sql.exec("UPDATE users SET is_child = 0 WHERE id = 'google:1'");
+    expect((await device()).token).toMatch(/^ndev_/);
+  });
   it('stores only explicitly granted, post-consent points and makes retries idempotent', async () => {
     const d = await device(), g = await grant(d.token);
     const points = [point('valid', g.consent_at, [g.id]), point('old', g.consent_at - 1, [g.id]), point('unknown', g.consent_at, ['f'.repeat(64)])];

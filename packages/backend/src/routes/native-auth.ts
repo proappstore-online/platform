@@ -5,12 +5,15 @@ import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 import { claimAttempt } from '../lib/credential-rate-limit.js';
 import { nativeBody, nativeHash, nativeRandom } from '../lib/native-companion.js';
+import { isChildAccount } from '../lib/user-flags.js';
 import { redeemExchangeCode } from './auth.js';
 
 export const nativeAuthRoutes = new Hono<{ Bindings: Env }>();
 const PREFIX = '/v1/native/auth';
 const COOKIE = '__Host-pas_native_pairing';
 const PAIRING_MS = 10 * 60_000;
+// #669: the companion is declared for adults (Play 18+, #666); a child account (#513) never pairs.
+const CHILD_REFUSED = "The ProAppStore phone app isn't available for this account.";
 type Ctx = Context<{ Bindings: Env }>;
 interface Pairing { id: string; challenge: string; label: string; user_id: string | null; browser_hash: string | null; approved: number; expires_at: number; }
 const hex = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
@@ -68,6 +71,11 @@ nativeAuthRoutes.get('/native/auth/callback', async c => {
   const session = code ? await redeemExchangeCode(c.env, code) : null;
   const claims = session ? await verifySession(session, c.env.SESSION_SIGNING_KEY) : null;
   if (!claims) throw new HttpError('Sign-in did not finish. Start again from the ProAppStore app on your phone.', 401);
+  if (await isChildAccount(c.env.DB, claims.uid)) {
+    // Deleting the pairing makes the phone's /complete answer 403, which clears its pairing.
+    await c.env.DB.prepare('DELETE FROM native_pairings WHERE id = ?').bind(pairing.id).run();
+    throw new HttpError(CHILD_REFUSED, 403);
+  }
   const result = await c.env.DB.prepare('UPDATE native_pairings SET user_id = ? WHERE id = ? AND user_id IS NULL AND approved = 0 AND expires_at > ?')
     .bind(claims.uid, pairing.id, Date.now()).run();
   if (!result.meta.changes) throw new HttpError('Connection already used.', 409);
@@ -93,6 +101,8 @@ nativeAuthRoutes.post('/native/auth/complete', async c => {
   const consumed = await c.env.DB.prepare('DELETE FROM native_pairings WHERE id = ? AND challenge = ? AND approved = 1 AND expires_at > ? RETURNING user_id, label')
     .bind(body.id, challenge, Date.now()).first<{ user_id: string; label: string }>();
   if (!consumed) throw new HttpError('Connection already used. Start again.', 409);
+  // A child flag set between callback and complete still refuses the device.
+  if (await isChildAccount(c.env.DB, consumed.user_id)) throw new HttpError(CHILD_REFUSED, 403);
   const id = nativeRandom(), token = `ndev_${nativeRandom()}`, now = Date.now();
   await c.env.DB.prepare('INSERT INTO native_devices (id, user_id, label, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(id, consumed.user_id, consumed.label, await nativeHash(token), now, now + 90 * 24 * 60 * 60_000).run();
