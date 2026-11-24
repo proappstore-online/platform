@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <application android:name=".PasApplication" android:label="ProAppStore"
-        android:icon="@drawable/ic_pas" android:theme="@style/Theme.ProAppStore"
+        android:icon="@mipmap/ic_launcher" android:theme="@style/Theme.ProAppStore"
         android:allowBackup="false" android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="false"
         android:supportsRtl="true">

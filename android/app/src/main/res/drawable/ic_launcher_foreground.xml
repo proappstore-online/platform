@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #665: the kit's `apps` symbol (brand/generate.py SYMBOLS['apps'], its four rects as paths in the kit's 64-unit
+     coordinates), in the PAS ink colour. The group maps the 64-unit viewBox onto the 66dp safe zone centred in the
+     108dp adaptive-icon canvas: scale 66/64, offset (108 - 66) / 2. Never redraw it; re-derive it from the kit. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="1.03125" android:scaleY="1.03125" android:translateX="21" android:translateY="21">
+        <path android:fillColor="#FFFFFF" android:pathData="M20.5,18h6a3.5,3.5 0,0 1,3.5,3.5v6a3.5,3.5 0,0 1,-3.5,3.5h-6a3.5,3.5 0,0 1,-3.5,-3.5v-6a3.5,3.5 0,0 1,3.5,-3.5z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M38.5,15h6a3.5,3.5 0,0 1,3.5,3.5v6a3.5,3.5 0,0 1,-3.5,3.5h-6a3.5,3.5 0,0 1,-3.5,-3.5v-6a3.5,3.5 0,0 1,3.5,-3.5z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M20.5,36h6a3.5,3.5 0,0 1,3.5,3.5v6a3.5,3.5 0,0 1,-3.5,3.5h-6a3.5,3.5 0,0 1,-3.5,-3.5v-6a3.5,3.5 0,0 1,3.5,-3.5z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M38.5,33h6a3.5,3.5 0,0 1,3.5,3.5v6a3.5,3.5 0,0 1,-3.5,3.5h-6a3.5,3.5 0,0 1,-3.5,-3.5v-6a3.5,3.5 0,0 1,3.5,-3.5z" />
+    </group>
+</vector>
