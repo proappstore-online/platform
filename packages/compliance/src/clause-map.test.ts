@@ -64,7 +64,7 @@ describe('compliance → standard clause map', () => {
   });
 
   it('the live audit names are all mapped', () => {
-    for (const name of ['Reachable', 'Brand fonts (live)', 'Bundle size (live)', 'PWA manifest (live)', 'No tracking SDKs (live)', 'No unsafe 100vh (live)']) {
+    for (const name of ['Reachable', 'Brand fonts (live)', 'Bundle size (live)', 'PWA manifest (live)', 'No tracking SDKs (live)', 'No unsafe 100vh (live)', 'PWA 512 px icon (live)']) {
       expect(annotateByName({ name, status: 'pass', detail: 'x' }).checkId, name).toBeDefined();
     }
   });

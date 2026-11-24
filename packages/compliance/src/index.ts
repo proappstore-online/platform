@@ -13,6 +13,7 @@ import { checkHtmlMeta } from './checks/html-meta.js';
 import { checkLicenseMit } from './checks/license-mit.js';
 import { checkManifest } from './checks/manifest.js';
 import { checkMaskableIcon } from './checks/pwa-maskable-icon.js';
+import { checkPwaIcon512 } from './checks/pwa-icon-512.js';
 import { checkMcpD1Limits } from './checks/mcp-d1-limits.js';
 import { checkMcpUnscoped } from './checks/mcp-unscoped.js';
 import { checkNoBrandOverrides } from './checks/no-brand-overrides.js';
@@ -68,6 +69,7 @@ export {
   auditLive,
   checkBrandFontsLive,
   checkBundleSizeLive,
+  checkIcon512Live,
   checkManifestLive,
   checkNoTrackingLive,
   checkUnsafeVhLive,
@@ -91,6 +93,7 @@ export {
   checkLicenseMit,
   checkManifest,
   checkMaskableIcon,
+  checkPwaIcon512,
   checkMcpD1Limits,
   checkMcpUnscoped,
   checkNoBrandOverrides,
@@ -151,6 +154,7 @@ const RUNNERS: ReadonlyArray<{ id: string; run: (source: FileSource) => Promise<
   { id: 'pwa-offline', run: checkPwaOffline },
   { id: 'pwa-manifest', run: checkManifest },
   { id: 'pwa-maskable-icon', run: checkMaskableIcon },
+  { id: 'pwa-icon-512', run: checkPwaIcon512 },
   { id: 'dark-mode', run: checkDarkMode },
   { id: 'bundle-size', run: checkBundleSize },
   { id: 'claude-md-slim', run: checkClaudeMdSlim },

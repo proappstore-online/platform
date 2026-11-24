@@ -163,6 +163,7 @@ same from the clause side.
 | `pwa-offline` | PWA offline correctness | [PAS-UI-018](ui.md#pas-ui-018), [PAS-UI-019](ui.md#pas-ui-019) | partial | That a service worker is registered and the workbox config is sane; not that /.pas/* or authenticated responses stay uncached at runtime. |
 | `pwa-manifest` | PWA manifest | [PAS-UI-020](ui.md#pas-ui-020) | partial | The four required fields; the rest of the manifest is reviewed manually. |
 | `pwa-maskable-icon` | PWA maskable icon | [PAS-UI-020](ui.md#pas-ui-020) | full | Declaration only; the icon's safe zone is not rendered. |
+| `pwa-icon-512` | PWA 512 px icon | [PAS-UI-020](ui.md#pas-ui-020) | partial | Warn-only (#630): a square icon ≥512 px with purpose any is declared, and a root-relative src exists in web/public where the source can see its images (pas check; the publish gate fetches text files only). Pixel size is not decoded. |
 | `dark-mode` | Dark mode support | [PAS-UI-002](ui.md#pas-ui-002) | partial | Warn-only signal detection; the storage-key split (fas:theme vs stores-theme) and dark-scheme contrast are manual. |
 | `bundle-size` | Bundle size | [PAS-UI-021](ui.md#pas-ui-021), [PAS-STACK-024](stack.md#pas-stack-024) | partial | Warns when web/dist is unbuilt; measures the largest JS chunk only. |
 | `claude-md-slim` | CLAUDE.md is slim (no platform boilerplate) | [PAS-STACK-001](stack.md#pas-stack-001) | partial | Documentation hygiene of the scaffold's agent guide; warn-only and not a security signal. |
@@ -174,6 +175,7 @@ same from the clause side.
 | `brand-fonts-live` | Brand fonts (live) | [PAS-UI-001](ui.md#pas-ui-001) | partial | The fonts link in the served HTML only. |
 | `bundle-size-live` | Bundle size (live) | [PAS-UI-021](ui.md#pas-ui-021) | partial | HEAD size of the main bundle only. |
 | `pwa-manifest-live` | PWA manifest (live) | [PAS-UI-020](ui.md#pas-ui-020) | partial | Manifest reachable and minimally valid. |
+| `pwa-icon-512-live` | PWA 512 px icon (live) | [PAS-UI-020](ui.md#pas-ui-020) | partial | Warn-only (#630): the largest declared square icon ≥512 px with purpose any answers 200 with a PNG, JPEG or WebP type. |
 | `no-tracking-live` | No tracking SDKs (live) | [PAS-UI-022](ui.md#pas-ui-022), [PAS-STACK-021](stack.md#pas-stack-021) | partial | Known trackers in the served HTML and fetched scripts only. |
 | `unsafe-vh-live` | No unsafe 100vh (live) | [PAS-UI-010](ui.md#pas-ui-010) | partial | Served CSS text only. |
 

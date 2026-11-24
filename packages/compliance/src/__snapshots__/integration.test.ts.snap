@@ -446,6 +446,23 @@ exports[`failing-app snapshot > matches snapshot for full result shape 1`] = `
   },
   {
     "automation": "partial",
+    "checkId": "pwa-icon-512",
+    "citations": [
+      {
+        "clauseId": "PAS-UI-020",
+        "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020",
+      },
+    ],
+    "detail": "no manifest source (already reported by PWA manifest check)",
+    "evidence": {
+      "class": "configuration",
+      "detail": "no manifest source (already reported by PWA manifest check)",
+    },
+    "name": "PWA 512 px icon",
+    "status": "pass",
+  },
+  {
+    "automation": "partial",
     "checkId": "pwa-manifest",
     "citations": [
       {

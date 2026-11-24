@@ -4,6 +4,7 @@ import {
   auditLive,
   checkBrandFontsLive,
   checkBundleSizeLive,
+  checkIcon512Live,
   checkManifestLive,
   checkNoTrackingLive,
   checkUnsafeVhLive,
@@ -139,6 +140,50 @@ describe('checkManifestLive', () => {
   });
 });
 
+describe('checkIcon512Live (#630)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const manifest = { icons: [{ src: 'icon-192.png', sizes: '192x192' }, { src: 'icon-512.png', sizes: '512x512', purpose: 'any maskable' }] };
+
+  it('warns when the declared icon 404s (prolang)', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(new Response('', { status: 404 }));
+    const r = await checkIcon512Live(manifest, 'https://x.example/manifest.json');
+    expect(r.status).toBe('warn');
+    expect(r.detail).toContain('https://x.example/icon-512.png → HTTP 404');
+  });
+
+  it('passes on 200 image/png, fetching the 512 icon resolved against the manifest URL', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response('png', { status: 200, headers: { 'Content-Type': 'image/png' } }));
+    vi.stubGlobal('fetch', mockFetch);
+    const r = await checkIcon512Live(manifest, 'https://x.example/app/manifest.json');
+    expect(r.status).toBe('pass');
+    expect(mockFetch).toHaveBeenCalledWith('https://x.example/app/icon-512.png', expect.any(Object));
+  });
+
+  it('warns on a 200 that is not an image (an SPA fallback serving index.html)', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(new Response('<html>', { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    const r = await checkIcon512Live(manifest, 'https://x.example/manifest.json');
+    expect(r.status).toBe('warn');
+  });
+
+  it('warns without fetching when no icon qualifies (meetup), and passes when there is no manifest', async () => {
+    expect((await checkIcon512Live({ icons: [] }, 'https://x.example/manifest.json')).status).toBe('warn');
+    expect((await checkIcon512Live(undefined, undefined)).status).toBe('pass');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('a subrequest-cap error is a re-run warning', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Too many subrequests by single Worker invocation.'));
+    const r = await checkIcon512Live(manifest, 'https://x.example/manifest.json');
+    expect(r.status).toBe('warn');
+    expect(r.detail).toMatch(/re-run needed/);
+  });
+});
+
 describe('checkBundleSizeLive', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
@@ -223,10 +268,11 @@ describe('auditLive (integration)', () => {
       if (callCount === 1) return new Response(html, { status: 200 });
       if (url.endsWith('/manifest.json')) {
         return new Response(
-          JSON.stringify({ name: 'tip', display: 'standalone', start_url: '/' }),
+          JSON.stringify({ name: 'tip', display: 'standalone', start_url: '/', icons: [{ src: '/icon-512.png', sizes: '512x512' }] }),
           { status: 200 },
         );
       }
+      if (url.endsWith('/icon-512.png')) return new Response('png', { status: 200, headers: { 'Content-Type': 'image/png' } });
       if (url.endsWith('.css')) {
         return new Response('body { height: 100svh; }', { status: 200 });
       }
@@ -235,14 +281,17 @@ describe('auditLive (integration)', () => {
     });
     const r = await auditLive({ appId: 'tip', liveUrl: 'https://tip.example' });
     expect(r.reachable).toBe(true);
-    // 6 results: Reachable + tracking + fonts + manifest + bundle + vh.
+    // 7 results: Reachable + tracking + fonts + manifest + bundle + vh + 512 px icon.
     // Reachable is recorded on success too so stale fail rows from
     // earlier runs get overwritten on the next clean pass.
-    expect(r.results).toHaveLength(6);
+    expect(r.results).toHaveLength(7);
     const reachable = r.results.find((c) => c.name === 'Reachable');
     expect(reachable?.status).toBe('pass');
     const otherStatuses = r.results.filter((c) => c.name !== 'Reachable').map((c) => c.status);
-    expect(otherStatuses).toEqual(['pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(otherStatuses).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
+    // The icon check reuses the manifest the manifest check fetched: one request, not two.
+    const manifestFetches = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]) => String(u).endsWith('/manifest.json'));
+    expect(manifestFetches).toHaveLength(1);
   });
 
   it("downgrades subrequest-cap errors from fail → warn (not the app's fault)", async () => {

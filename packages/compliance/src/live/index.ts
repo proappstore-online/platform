@@ -7,6 +7,7 @@
  *   - Tracking SDK injection (script src, inline scripts, fetched JS)
  *   - Brand fonts presence (link href to fonts.googleapis.com)
  *   - PWA manifest reachable + valid
+ *   - The manifest's 512 px listing icon answers with an image
  *   - Main bundle size (HEAD request)
  *
  * What we CAN'T check post-publish:
@@ -20,6 +21,7 @@
 
 import { gzipByteLength } from '../lib/gzip.js';
 import { matchedTrackers } from '../checks/no-tracking.js';
+import { listingIconSize, type ManifestIcon } from '../checks/pwa-icon-512.js';
 import type { CheckResult } from '../types.js';
 import { annotateByName } from '../clause-map.js';
 
@@ -118,14 +120,16 @@ async function auditLiveRaw(input: LiveAuditInput): Promise<LiveAuditReport> {
   }
 
   // Run all checks in parallel — each is independent.
-  const [tracking, fonts, manifest, bundle, vh] = await Promise.all([
+  const loaded = loadManifest(html, input.liveUrl);
+  const [tracking, fonts, manifest, bundle, vh, icon] = await Promise.all([
     checkNoTrackingLive(html),
     checkBrandFontsLive(html),
-    checkManifestLive(html, input.liveUrl),
+    loaded.then((m) => m.result),
     checkBundleSizeLive(html, input.liveUrl),
     checkUnsafeVhLive(html, input.liveUrl),
+    loaded.then((m) => checkIcon512Live(m.manifest, m.url)),
   ]);
-  report.results.push(tracking, fonts, manifest, bundle, vh);
+  report.results.push(tracking, fonts, manifest, bundle, vh, icon);
   return report;
 }
 
@@ -165,49 +169,84 @@ export function checkBrandFontsLive(html: string): CheckResult {
 }
 
 export async function checkManifestLive(html: string, liveUrl: string): Promise<CheckResult> {
+  return (await loadManifest(html, liveUrl)).result;
+}
+
+interface LoadedManifest {
+  result: CheckResult;
+  /** The parsed manifest and its URL, when it was fetched and parsed. */
+  manifest?: { icons?: unknown };
+  url?: string;
+}
+
+/** Fetches the manifest once for both PWA manifest (live) and PWA 512 px icon (live). */
+async function loadManifest(html: string, liveUrl: string): Promise<LoadedManifest> {
+  const name = 'PWA manifest (live)';
   // Find the manifest link in the HTML, then fetch + validate it.
   const m = /<link[^>]*rel=["']manifest["'][^>]*href=["']([^"']+)["']/i.exec(html);
   if (!m) {
-    return {
-      name: 'PWA manifest (live)',
-      status: 'fail',
-      detail: 'no <link rel="manifest"> in HTML',
-    };
+    return { result: { name, status: 'fail', detail: 'no <link rel="manifest"> in HTML' } };
   }
   const href = m[1]!;
   const manifestUrl = new URL(href, liveUrl).toString();
   try {
     const res = await fetchWithTimeout(manifestUrl);
     if (!res.ok) {
-      return {
-        name: 'PWA manifest (live)',
-        status: 'fail',
-        detail: `${manifestUrl} → HTTP ${res.status}`,
-      };
+      return { result: { name, status: 'fail', detail: `${manifestUrl} → HTTP ${res.status}` } };
     }
-    const body = (await res.json()) as { name?: string; display?: string; start_url?: string };
+    const body = (await res.json()) as { name?: string; display?: string; start_url?: string; icons?: unknown };
     const missing: string[] = [];
     if (!body.name) missing.push('name');
     if (!body.display) missing.push('display');
     if (!body.start_url) missing.push('start_url');
-    if (missing.length > 0) {
-      return {
-        name: 'PWA manifest (live)',
-        status: 'fail',
-        detail: `manifest missing fields: ${missing.join(', ')}`,
-      };
-    }
-    return { name: 'PWA manifest (live)', status: 'pass', detail: manifestUrl };
+    const result: CheckResult = missing.length > 0
+      ? { name, status: 'fail', detail: `manifest missing fields: ${missing.join(', ')}` }
+      : { name, status: 'pass', detail: manifestUrl };
+    return { result, manifest: body, url: manifestUrl };
   } catch (err) {
     const skipped = isSubrequestCapError(err);
     return {
-      name: 'PWA manifest (live)',
-      status: skipped ? 'warn' : 'fail',
-      detail: skipped
+      result: {
+        name,
+        status: skipped ? 'warn' : 'fail',
+        detail: skipped
+          ? 'audit Worker hit subrequest cap — re-run needed'
+          : err instanceof Error
+            ? err.message
+            : 'manifest fetch/parse failed',
+      },
+    };
+  }
+}
+
+/**
+ * Fetches the manifest's largest square icon of at least 512 px with purpose `any` and warns unless
+ * it answers 200 with a PNG, JPEG or WebP type (#630): a declared icon that 404s leaves the app's
+ * storefront listing on its emoji. Takes the manifest `loadManifest` already fetched.
+ */
+export async function checkIcon512Live(manifest: { icons?: unknown } | undefined, manifestUrl: string | undefined): Promise<CheckResult> {
+  const name = 'PWA 512 px icon (live)';
+  if (!manifest || !manifestUrl) {
+    return { name, status: 'pass', detail: 'no manifest (already reported by PWA manifest (live))' };
+  }
+  const icons = (Array.isArray(manifest.icons) ? manifest.icons : []) as ManifestIcon[];
+  const best = icons
+    .filter((icon) => typeof icon?.src === 'string' && listingIconSize(icon) > 0)
+    .sort((a, b) => listingIconSize(b) - listingIconSize(a))[0];
+  if (!best) return { name, status: 'warn', detail: 'manifest declares no square icon ≥512 px with purpose "any"' };
+  const iconUrl = new URL(best.src as string, manifestUrl).toString();
+  try {
+    const res = await fetchWithTimeout(iconUrl);
+    const type = res.headers.get('content-type') ?? '';
+    if (res.ok && /^image\/(png|jpeg|webp)\b/i.test(type)) return { name, status: 'pass', detail: iconUrl };
+    return { name, status: 'warn', detail: `${iconUrl} → HTTP ${res.status}${type ? ` (${type})` : ''}` };
+  } catch (err) {
+    return {
+      name,
+      status: 'warn',
+      detail: isSubrequestCapError(err)
         ? 'audit Worker hit subrequest cap — re-run needed'
-        : err instanceof Error
-          ? err.message
-          : 'manifest fetch/parse failed',
+        : `${iconUrl}: ${err instanceof Error ? err.message : 'fetch failed'}`,
     };
   }
 }

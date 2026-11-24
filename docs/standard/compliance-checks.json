@@ -332,6 +332,21 @@
       "live": false
     },
     {
+      "id": "pwa-icon-512",
+      "name": "PWA 512 px icon",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "configuration",
+      "scope": "all",
+      "limits": "Warn-only (#630): a square icon ≥512 px with purpose any is declared, and a root-relative src exists in web/public where the source can see its images (pas check; the publish gate fetches text files only). Pixel size is not decoded.",
+      "live": false
+    },
+    {
       "id": "dark-mode",
       "name": "Dark mode support",
       "clauses": [
@@ -533,6 +548,21 @@
       "scope": "all",
       "live": true,
       "limits": "Manifest reachable and minimally valid."
+    },
+    {
+      "id": "pwa-icon-512-live",
+      "name": "PWA 512 px icon (live)",
+      "clauses": [
+        {
+          "clauseId": "PAS-UI-020",
+          "url": "https://docs.proappstore.online/standard/ui/#pas-ui-020"
+        }
+      ],
+      "automation": "partial",
+      "evidenceClass": "runtime",
+      "scope": "all",
+      "live": true,
+      "limits": "Warn-only (#630): the largest declared square icon ≥512 px with purpose any answers 200 with a PNG, JPEG or WebP type."
     },
     {
       "id": "no-tracking-live",
