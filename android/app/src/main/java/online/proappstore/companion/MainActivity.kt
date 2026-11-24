@@ -73,16 +73,21 @@ class MainActivity : ComponentActivity() {
     private var working by mutableStateOf(false)
     private var permissionExplanation by mutableStateOf(false)
     private var refreshJob: Job? = null
-    /** The "Choose sensor" scan: open only while its dialog is (#634). */
+    /** The "Choose sensor" dialog is open (#634). It survives the permission prompt's onPause (#673). */
     private var choosing by mutableStateOf(false)
+    /** The radio is scanning: only while [choosing] and resumed, so no path leaks a scan (#673). */
+    private var scanning = false
     private var sensors by mutableStateOf(emptyList<Sensor>())
-    private val bluetoothRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (Bluetooth.canScan(this)) startScan(); refresh() }
+    // onResume, which follows the prompt, starts the scan.
+    private val bluetoothRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh() }
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission") // a scan result implies the scan permission
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val name = result.scanRecord?.deviceName ?: (if (Bluetooth.permitted(this@MainActivity)) result.device.name else null) ?: "Heart-rate sensor"
             if (sensors.none { it.address == result.device.address }) sensors = sensors + Sensor(result.device.address, name)
         }
+        // Android refuses more than 5 scan starts in 30 s; without this the dialog says "Looking" forever.
+        override fun onScanFailed(errorCode: Int) { error = "Could not search for sensors. Try again."; stopScanning() }
     }
     private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh(); maybeStart() }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,7 +130,7 @@ class MainActivity : ComponentActivity() {
                         chooseSensor = { choosing = true; sensors = emptyList(); if (Bluetooth.canScan(this)) startScan() else bluetoothRequest.launch(Bluetooth.scanPermissions()) },
                         forgetSensor = { graph.local.heartRateSensor = null; runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "forgotten") }; reconcile(); refresh() },
                         load = { appId, range -> withContext(Dispatchers.IO) { graph.local.heartRate(appId, range.first, range.last) } }))
-                if (choosing) AlertDialog(onDismissRequest = { stopScan() },
+                if (choosing) AlertDialog(onDismissRequest = { closeSensors() },
                     title = { Text("Choose sensor") },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -134,7 +139,7 @@ class MainActivity : ComponentActivity() {
                             Text("Only standard Bluetooth heart-rate sensors are listed. The sensor's name and address stay on this phone.", style = MaterialTheme.typography.bodySmall)
                         }
                     },
-                    confirmButton = { TextButton(onClick = { stopScan() }) { Text("Cancel") } })
+                    confirmButton = { TextButton(onClick = { closeSensors() }) { Text("Cancel") } })
                 if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false },
                     title = { Text("Allow background location") },
                     text = { Text("ProAppStore collects precise location to automatically record routes for apps you enable, even when ProAppStore and those apps are closed. Updates go to PAS and only your enabled apps. Choose Precise location, then Allow all the time on the next settings screen. You can pause or revoke access here.") },
@@ -146,6 +151,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refresh(); maybeStart()
+        if (choosing) startScan() // also after the Nearby devices prompt (#673)
         refreshCatalogue() // foreground only: never from location callbacks
         refreshJob?.cancel()
         refreshJob = lifecycleScope.launch {
@@ -155,21 +161,25 @@ class MainActivity : ComponentActivity() {
             while (isActive) { delay(2_000); refresh() }
         }
     }
-    override fun onPause() { refreshJob?.cancel(); stopScan(); super.onPause() }
+    // The radio only: the dialog stays open behind a permission prompt (#673).
+    override fun onPause() { refreshJob?.cancel(); stopScanning(); super.onPause() }
     @SuppressLint("MissingPermission") // canScan checked
     private fun startScan() {
-        if (!Bluetooth.canScan(this)) return
+        if (scanning || !choosing || !Bluetooth.canScan(this)) return
         val scanner = getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner ?: run { error = "Turn on Bluetooth to find your sensor."; return }
         scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid.fromString(HeartRate.SERVICE)).build()),
             ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
+        scanning = true
     }
+    /** Stops a running scan whatever [choosing] says; runCatching absorbs the SecurityException of a since-revoked permission. */
     @SuppressLint("MissingPermission")
-    private fun stopScan() {
-        if (choosing && Bluetooth.canScan(this)) runCatching { getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
-        choosing = false
+    private fun stopScanning() {
+        if (scanning) runCatching { getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
+        scanning = false
     }
+    private fun closeSensors() { choosing = false; stopScanning() }
     private fun choose(sensor: Sensor) {
-        stopScan()
+        closeSensors()
         graph.local.heartRateSensor = sensor.address
         runCatching { graph.local.record(ShareEvent.Kind.HEART_RATE, detail = "sensor_chosen") }
         refresh(); reconcile()
