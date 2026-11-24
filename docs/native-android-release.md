@@ -32,11 +32,16 @@ Direct APKs use the upload certificate. Play-distributed installs use the Play a
 
 ## First Play Console setup
 
-1. ProAppStore exists in the OpenFrontier.One Play developer account (created 2026-11-24, package `online.proappstore.app`). Use the signed AAB from the workflow for the first upload and configure Play App Signing. The committed certificate identifies the **upload** key; Google's app-signing certificate may differ.
-2. Grant **`pas-play-publisher@proappstore-online.iam.gserviceaccount.com`** access to this app only: app information, testing-track releases, and production releases when ready. No account-wide or HeartFull access is needed. No extra GCP project role is needed for publishing.
-3. Complete the actual privacy policy, app access/reviewer instructions, Data Safety, content rating, background-location and foreground-service declarations, and required listing assets. The collector service declares two foreground-service types: `location`, and `connectedDevice` for Run's Bluetooth heart-rate strap (#634). Declare both, with the `connectedDevice` text and the Data Safety **Health and fitness → Fitness info** answer from the review notes. Use the [policy research](./native-companion-review.md); do not claim Ski web/worker integration or physical-device acceptance is finished.
-4. Complete the initial Console upload/setup needed for API access. Start with the appropriate testing track; the workflow supports an explicit `internal` / `draft` upload. A draft app may reject completed releases until Console setup is finished.
-5. Once the publisher can read the package and the product is ready, enable automatic publishing with repository variable `ANDROID_PLAY_PUBLISH_ENABLED=true`. `ANDROID_PLAY_TRACK=production` matches HeartFull's routine destination; use `internal` for testing. Automatic releases request `completed` status, so keep automation off while the app must remain draft.
+The owner's steps, values and order are tracked in #666. This is the pipeline's part.
+
+1. The app exists in the OpenFrontier.One Play developer account, package `online.proappstore.app` (Play app id 4975081324229106561), with Play App Signing. If Play has no bundle yet, upload the first `app-release.aab` by hand, from a workflow artifact: the Publishing API cannot make the first upload of a new app. The committed certificate identifies the **upload** key; Google's app-signing certificate may differ.
+2. Give `pas-play-publisher@proappstore-online.iam.gserviceaccount.com` access to this app only: view app information and release to testing tracks (production releases later). Then `gh workflow run android.yml --repo proappstore-online/platform --ref main -f publish=true -f track=internal -f status=draft` must succeed and read its track back. If Play reports `internal` as unknown, use the internal track name the error lists. A draft app accepts only `draft` releases until its first review.
+3. Complete App content (#666).
+4. Closed testing is optional for this account: it is a personal account created before 13 November 2023, so Play does not require a closed test before production access (#661). To use one anyway, create the track in Console, then `-f track=<its name> -f status=completed`.
+5. Automatic testing releases (optional): set `ANDROID_PLAY_PUBLISH_ENABLED=true` and `ANDROID_PLAY_TRACK=<testing track>`. Unset, automatic publishing targets `internal`. A push never publishes to `production`: with `ANDROID_PLAY_TRACK=production` the release job fails before building.
+6. Production is a manual release: `gh workflow run android.yml --repo proappstore-online/platform --ref main -f publish=true -f track=production -f status=completed`, after App content is complete and an internal build has been checked on a device (#666). Play then reviews it.
+
+The publisher validates the track against the app's real track list before uploading, and refuses an unknown one with the names Play reports.
 
 Build signed artifacts without publishing:
 

@@ -6,7 +6,9 @@ import { PlayRelease } from '../scripts/android-play-release.mjs';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const credentials = { client_email: 'pas-publisher@example.invalid', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) };
-function fixture({ uploaded = 12, verified = true, failUpload = false, staged = false } = {}) {
+// Play's real track list: internal testing is reported as `qa`, closed tracks carry Console-chosen names (#664).
+const PLAY_TRACKS = ['production', 'qa', 'beta', 'closed-testers'];
+function fixture({ uploaded = 12, verified = true, failUpload = false, staged = false, tracks = PLAY_TRACKS } = {}) {
   const calls: { url: string; init: RequestInit }[] = [];
   let edits = 0;
   let publishedStatus = 'completed';
@@ -16,12 +18,12 @@ function fixture({ uploaded = 12, verified = true, failUpload = false, staged = 
     if (url.includes('oauth2.googleapis.com')) return reply({ access_token: 'test-token' });
     if (url.endsWith('/edits') && init.method === 'POST') return reply({ id: `edit-${++edits}` });
     if (init.method === 'DELETE') return new Response(null, { status: 204 });
-    if (url.endsWith('/tracks')) return reply({ tracks: [{ releases: [{ versionCodes: ['3'] }] }, { releases: [{ versionCodes: ['9'] }] }] });
+    if (url.endsWith('/tracks')) return reply({ tracks: tracks.map((track, i) => ({ track, releases: i < 2 ? [{ versionCodes: [i ? '9' : '3'] }] : [] })) });
     if (url.endsWith('/bundles')) return reply({ bundles: [{ versionCode: 11 }] });
     if (url.endsWith('/apks')) return reply({ apks: [{ versionCode: 7 }] });
     if (url.includes('uploadType')) return reply({ versionCode: uploaded }, failUpload ? 403 : 200);
-    if (/\/tracks\/(production|internal)$/.test(url) && init.method === 'PUT') publishedStatus = JSON.parse(init.body as string).releases[0].status;
-    if (/\/tracks\/(production|internal)$/.test(url) && init.method === 'GET') return reply({ releases: edits > 1 ? [{ versionCodes: [verified ? '12' : '8'], status: publishedStatus }] : staged ? [{ versionCodes: ['8'], status: 'inProgress' }] : [] });
+    if (/\/tracks\/[a-z0-9:_-]+$/.test(url) && init.method === 'PUT') publishedStatus = JSON.parse(init.body as string).releases[0].status;
+    if (/\/tracks\/[a-z0-9:_-]+$/.test(url) && init.method === 'GET') return reply({ releases: edits > 1 ? [{ versionCodes: [verified ? '12' : '8'], status: publishedStatus }] : staged ? [{ versionCodes: ['8'], status: 'inProgress' }] : [] });
     return reply({});
   };
   return { client: new PlayRelease(credentials, { fetcher }), calls };
@@ -59,7 +61,7 @@ describe('PAS Android release pipeline', () => {
     expect(calls.at(-1)!.init.method).toBe('DELETE');
   });
   it('keeps an initial internal upload in draft status', async () => {
-    const { client, calls } = fixture();
+    const { client, calls } = fixture({ tracks: ['production', 'internal'] });
     expect(await client.publish(new Uint8Array([1]), 12, 'internal', 'draft')).toMatchObject({ track: 'internal', status: 'draft', verified: true });
     expect(JSON.parse(calls.find(c => c.init.method === 'PUT')!.init.body as string).releases[0].status).toBe('draft');
   });
@@ -80,7 +82,28 @@ describe('PAS Android release pipeline', () => {
   it('refuses untrusted token endpoints, invalid codes and unsupported tracks', async () => {
     expect(() => new PlayRelease({ ...credentials, token_uri: 'https://untrusted.invalid' })).toThrow('credential');
     await expect(fixture().client.nextCode(2_100_000_001)).rejects.toThrow('version code');
-    await expect(fixture().client.publish(new Uint8Array([1]), 12, 'beta', 'completed')).rejects.toThrow('track');
+    await expect(fixture().client.publish(new Uint8Array([1]), 12, '../edits', 'completed')).rejects.toThrow('track');
+    await expect(fixture().client.publish(new Uint8Array([1]), 12, 'production', 'inProgress')).rejects.toThrow('status');
+  });
+  it('publishes to a closed track named in Play Console', async () => {
+    const { client, calls } = fixture();
+    expect(await client.publish(new Uint8Array([1]), 12, 'closed-testers', 'completed')).toMatchObject({ track: 'closed-testers', verified: true });
+    expect(calls.some(c => c.init.method === 'PUT' && new URL(c.url).pathname.endsWith('/tracks/closed-testers'))).toBe(true);
+  });
+  it('refuses a track Play does not have, naming the tracks that exist, before uploading', async () => {
+    const { client, calls } = fixture();
+    await expect(client.publish(new Uint8Array([1]), 12, 'nope', 'completed')).rejects.toThrow('production, qa, beta, closed-testers');
+    expect(calls.some(c => c.url.includes('uploadType'))).toBe(false);
+    expect(calls.at(-1)!.init.method).toBe('DELETE');
+  });
+  it('never defaults automatic publishing to production', () => {
+    const workflow = readFileSync('.github/workflows/android.yml', 'utf8');
+    expect(workflow).toContain("vars.ANDROID_PLAY_TRACK || 'internal'");
+    expect(workflow).not.toMatch(/ANDROID_PLAY_TRACK \|\| 'production'/);
+    // Production is manual only: a push with ANDROID_PLAY_TRACK=production fails before building.
+    expect(workflow).toContain("if: env.PUBLISH_PLAY == 'true' && github.event_name != 'workflow_dispatch' && env.PLAY_TRACK == 'production'");
+    expect(workflow.indexOf('Automatic publishing never targets production')).toBeLessThan(workflow.indexOf('Publish and verify Google Play track'));
+    expect(workflow).toMatch(/track:\n\s+description: .*\n\s+type: string\n\s+default: internal/);
   });
   it('keeps publishing credentials out of pull requests and uses the runner router', () => {
     const workflow = readFileSync('.github/workflows/android.yml', 'utf8');

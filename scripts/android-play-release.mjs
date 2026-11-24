@@ -9,6 +9,7 @@ const API = `https://androidpublisher.googleapis.com/androidpublisher/v3/applica
 const UPLOAD = `https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/${PACKAGE}`;
 const TOKEN = 'https://oauth2.googleapis.com/token';
 const MAX_CODE = 2_100_000_000;
+const TRACK = /^[a-z0-9][a-z0-9:_-]{0,49}$/;
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
 const code = value => {
   const n = Number(value);
@@ -69,10 +70,14 @@ export class PlayRelease {
   }
   async publish(aab, expectedCode, track, status) {
     code(expectedCode);
-    if (!['internal', 'production'].includes(track) || !['draft', 'completed'].includes(status)) throw new Error('Unsupported release track or status.');
+    // Track names come from Play Console (closed tracks are named there), so validate the shape here
+    // and existence against the app's real track list below, never against a hard-coded pair (#664).
+    if (typeof track !== 'string' || !TRACK.test(track) || !['draft', 'completed'].includes(status)) throw new Error('Unsupported release track or status.');
     if (!(aab instanceof Uint8Array) || !aab.length) throw new Error('An AAB is required.');
     const token = await this.token();
     await this.edit(token, async id => {
+      const known = ((await this.request(token, 'GET', `/edits/${id}/tracks`)).tracks ?? []).map(t => t.track).filter(t => typeof t === 'string');
+      if (!known.includes(track)) throw new Error(`Google Play has no track "${track}". Tracks on this app: ${known.join(', ') || 'none'}.`);
       const current = await this.request(token, 'GET', `/edits/${id}/tracks/${track}`);
       if ((current.releases ?? []).some(r => ['inProgress', 'halted'].includes(r.status))) throw new Error('Resolve the existing staged rollout before replacing this track.');
       const bundle = await this.request(token, 'POST', `/edits/${id}/bundles?uploadType=media`, aab, true);
@@ -100,7 +105,7 @@ async function main() {
   if (command === 'next-code') console.log(await client.nextCode(code(args[0] ?? 1)));
   else if (command === 'publish' && args.length === 4) {
     console.log(JSON.stringify(await client.publish(readFileSync(args[0]), code(args[1]), args[2], args[3])));
-  } else throw new Error('Usage: next-code [minimum] | publish <aab> <versionCode> <internal|production> <draft|completed>');
+  } else throw new Error('Usage: next-code [minimum] | publish <aab> <versionCode> <track: a Play Console track name, e.g. internal, qa, beta, production or a closed track> <draft|completed>');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });

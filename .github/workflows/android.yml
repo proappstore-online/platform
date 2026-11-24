@@ -13,9 +13,8 @@ on:
         type: boolean
         default: false
       track:
-        description: Google Play target track
-        type: choice
-        options: [internal, production]
+        description: 'A track name from Play Console: internal or qa, your closed track, beta, production'
+        type: string
         default: internal
       status:
         description: Draft for initial setup; completed for a ready release
@@ -84,7 +83,7 @@ jobs:
       ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
       GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
       PUBLISH_PLAY: ${{ github.event_name == 'workflow_dispatch' && inputs.publish || github.event_name == 'push' && vars.ANDROID_PLAY_PUBLISH_ENABLED == 'true' }}
-      PLAY_TRACK: ${{ github.event_name == 'workflow_dispatch' && inputs.track || vars.ANDROID_PLAY_TRACK || 'production' }}
+      PLAY_TRACK: ${{ github.event_name == 'workflow_dispatch' && inputs.track || vars.ANDROID_PLAY_TRACK || 'internal' }}
       PLAY_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.status || 'completed' }}
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +99,13 @@ jobs:
           packages: 'platform-tools platforms;android-36'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
+      # Production is a manual release only: a push never publishes there, whatever ANDROID_PLAY_TRACK says.
+      - name: Automatic publishing never targets production
+        if: env.PUBLISH_PLAY == 'true' && github.event_name != 'workflow_dispatch' && env.PLAY_TRACK == 'production'
+        shell: bash
+        run: |
+          echo "::error::Automatic publishing never targets production. Set ANDROID_PLAY_TRACK to a testing track, and release to production with workflow_dispatch (-f track=production)."
+          exit 1
       - name: Choose a monotonic Android version code
         shell: bash
         run: |
