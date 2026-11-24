@@ -14,7 +14,8 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
     @Published private(set) var discovered: [Sensor] = []
     @Published private(set) var connected = false
     @Published private(set) var lastBpm: Int?
-    @Published private(set) var lastReadingAt: Date?
+    /// The chosen sensor, observable so the heart-rate line redraws when it changes (#682). Kept in `local`.
+    @Published private(set) var sensor: UUID?
 
     private let repository: CompanionRepository
     private var local: LocalStore { repository.local }
@@ -22,7 +23,6 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
     private var peripheral: CBPeripheral?
     private var scanning = false
     private var policy = HeartRatePolicy()
-    private var lastSyncAttempt = Date.distantPast
     private static let service = CBUUID(string: HeartRate.SERVICE)
     private static let measurement = CBUUID(string: HeartRate.MEASUREMENT)
 
@@ -31,7 +31,8 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
         super.init()
         // Created at launch only when a sensor was chosen, so iOS can restore the connection after terminating the app
         // and Bluetooth permission is never asked before the user picks a sensor.
-        if local.heartRateSensor != nil { start() }
+        sensor = local.heartRateSensor
+        if sensor != nil { start() }
     }
 
     private func start() {
@@ -51,6 +52,8 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
 
     /// Connects to or lets go of the chosen sensor to match the rules. Called on launch, activation, every state change.
     func evaluate() {
+        // Disconnecting and pairing clear the stored sensor too.
+        if sensor != local.heartRateSensor { sensor = local.heartRateSensor }
         guard let central, central.state == .poweredOn else { return }
         if shouldCollect, let id = local.heartRateSensor {
             if peripheral?.identifier != id { peripheral = central.retrievePeripherals(withIdentifiers: [id]).first; peripheral?.delegate = self }
@@ -76,17 +79,17 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
         stopScan()
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
         peripheral = nil; connected = false; policy = HeartRatePolicy()
-        local.heartRateSensor = sensor.id
+        local.heartRateSensor = sensor.id; self.sensor = sensor.id
         try? local.record(.heartRate, detail: "sensor_chosen")
         evaluate()
     }
 
     /// Lets go of the sensor and forgets its identifier.
     func forget() {
-        local.heartRateSensor = nil
+        local.heartRateSensor = nil; sensor = nil
         try? local.record(.heartRate, detail: "forgotten")
         evaluate()
-        lastBpm = nil; lastReadingAt = nil
+        lastBpm = nil
     }
 
     /// The activity-log detail for a Bluetooth state, nil for transient ones.
@@ -132,6 +135,8 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         MainActor.assumeIsolated {
+            // A late callback for the strap "Change sensor" let go of is not about this one (#682).
+            guard peripheral.identifier == self.peripheral?.identifier else { return }
             connected = true
             try? local.record(.heartRate, detail: "connected")
             peripheral.discoverServices([Self.service])
@@ -140,6 +145,7 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
 
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         MainActor.assumeIsolated {
+            guard peripheral.identifier == self.peripheral?.identifier else { return }
             // Lost while still wanted (out of range, strap off): logged, then a new pending connect.
             if connected && shouldCollect { try? local.record(.heartRate, detail: "lost") }
             connected = false; evaluate()
@@ -147,7 +153,10 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        MainActor.assumeIsolated { connected = false; evaluate() }
+        MainActor.assumeIsolated {
+            guard peripheral.identifier == self.peripheral?.identifier else { return }
+            connected = false; evaluate()
+        }
     }
 
     // MARK: CBPeripheralDelegate
@@ -175,7 +184,7 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
         guard shouldCollect else { return evaluate() }
         let now = CompanionRepository.now()
         guard let reading = HeartRateMeasurement.parse(data), policy.accept(contact: reading.contact, at: now) else { return }
-        lastBpm = reading.bpm; lastReadingAt = Date()
+        lastBpm = reading.bpm
         do {
             if try local.enqueueHeartRate(HeartRateSample(id: UUID().uuidString, at: now, bpm: reading.bpm, grants: recipients(at: now))) {
                 // This sample filled the queue (#679): say why, then let go (shouldCollect is false at the cap).
@@ -187,9 +196,6 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
             local.message = error is HeartRateQueueFullError ? error.localizedDescription : "Could not save heart rate on this phone."
             return evaluate()
         }
-        if Date().timeIntervalSince(lastSyncAttempt) >= 15 {
-            lastSyncAttempt = Date()
-            Task { try? await repository.sync() }
-        }
+        repository.syncIfDue()
     }
 }

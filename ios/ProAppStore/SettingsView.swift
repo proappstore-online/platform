@@ -28,7 +28,7 @@ struct SettingsView: View {
             Button("Disconnect", role: .destructive) { model.disconnect() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Stops location sharing and deletes this phone’s pending updates and platform location copies. Saved rides in your apps are separate. An internet connection is needed to finish.")
+            Text("Stops sharing and deletes this phone’s pending updates and platform location and heart-rate copies. Saved rides in your apps are separate. An internet connection is needed to finish.")
         }
         .alert("Clear sharing history?", isPresented: $clearHistoryPrompt) {
             Button("Clear history", role: .destructive) { model.clearHistory() }

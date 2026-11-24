@@ -83,8 +83,9 @@ struct AppSharingView: View {
         .task(id: TrackKey(range: range, queued: model.queued, lastSync: model.lastSync)) {
             track = await TrackLoader.load(model.repository.local, apps: [app], all: model.apps, range: range)
         }
-        // #631: the bpm chart on the track's time axis, from the on-device heart-rate history.
-        .task(id: TrackKey(range: chartRange, queued: model.queuedHeartRate, lastSync: model.heartRateLastUpload)) {
+        // #631: the bpm chart on the track's time axis, from the on-device heart-rate history. Keyed on the stable
+        // `range`, never `chartRange`, whose open end moves with `now` on every render (#682, as #648 for the track).
+        .task(id: TrackKey(range: range, queued: model.queuedHeartRate, lastSync: model.heartRateLastUpload)) {
             let local = model.repository.local, id = app.id, range = chartRange
             heartRate = await Task.detached(priority: .userInitiated) {
                 HeartRateChart.buckets((try? local.heartRate(appId: id, from: range.lowerBound, to: range.upperBound)) ?? [], range: range)

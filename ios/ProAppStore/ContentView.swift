@@ -44,6 +44,8 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     private var error = ""
     private var authSession: ASWebAuthenticationSession?
     private var refreshTask: Task<Void, Never>?
+    /// A link that matched nothing before the first sync stored the entries (#682), handled once more after it.
+    private var pendingLink: URL?
 
     override convenience init() {
         let local: LocalStore
@@ -121,6 +123,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         } catch { self.error = error.localizedDescription }
         if repository.token() != nil { try? await repository.sync() }
         refresh(); evaluate()
+        if let link = pendingLink { handle(link); pendingLink = nil }
     }
 
     private func act(_ action: @escaping () async throws -> Void) {
@@ -167,10 +170,17 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         guard url.scheme == "proappstore", url.host == "native" else { return }
         let parts = url.pathComponents.filter { $0 != "/" }
         if parts == ["connected"] { completeSignIn() }
-        else if parts.count == 2, parts[0] == "apps", let app = apps.first(where: { $0.id == parts[1] }), !enabled(app) { consent = app }
-        else if parts.count == 3, parts[0] == "apps", parts[2] != NativeEntry.LOCATION,
-                let entry = entries.first(where: { $0.appId == parts[1] && $0.capability == parts[2] }), !enabled(entry) { entryConsent = entry }
+        else if parts.count == 2, parts[0] == "apps" {
+            guard let app = apps.first(where: { $0.id == parts[1] }) else { return keep(url) }
+            if !enabled(app) { consent = app }
+        } else if parts.count == 3, parts[0] == "apps", parts[2] != NativeEntry.LOCATION {
+            guard let entry = entries.first(where: { $0.appId == parts[1] && $0.capability == parts[2] }) else { return keep(url) }
+            if !enabled(entry) { entryConsent = entry }
+        }
     }
+
+    /// Signed in, an unknown app or entry may only be missing until the first `/native/me` after an upgrade (#682).
+    private func keep(_ url: URL) { if signedIn { pendingLink = url } }
 
     func enable(_ app: ConnectedApp) {
         act { [self] in
@@ -287,7 +297,7 @@ struct ExpiredCard: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Connection expired", systemImage: "link.badge.plus").font(.title3.bold())
-                Text("This phone is no longer connected to ProAppStore, so location sharing has stopped. Your sharing history stays on this phone. Reconnect, then turn sharing back on for each app.")
+                Text("This phone is no longer connected to ProAppStore, so sharing has stopped. Your sharing history stays on this phone. Reconnect, then turn sharing back on for each app.")
                     .font(.subheadline)
                 Button("Reconnect") { model.reconnect() }.buttonStyle(.borderedProminent).disabled(model.busy)
                 if !model.pairingCode.isEmpty { Text("Match this code in your browser: \(model.pairingCode)").font(.footnote) }

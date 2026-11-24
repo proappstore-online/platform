@@ -1,6 +1,7 @@
 import Charts
 import CoreBluetooth
 import SwiftUI
+import UIKit
 
 /// The reviewed disclosure for a non-location entry (#631), shown before its grant.
 struct HeartRateDisclosure: View {
@@ -45,11 +46,11 @@ struct HeartRateLine: View {
                         .font(.footnote).foregroundStyle(.orange)
                 }
                 HStack {
-                    Button(model.repository.local.heartRateSensor == nil ? "Choose sensor" : "Change sensor") { choosing = true }
+                    Button(heartRate.sensor == nil ? "Choose sensor" : "Change sensor") { choosing = true }
                         .buttonStyle(.bordered)
                     Spacer()
                     Menu {
-                        if model.repository.local.heartRateSensor != nil { Button("Forget sensor") { heartRate.forget(); model.refresh() } }
+                        if heartRate.sensor != nil { Button("Forget sensor") { heartRate.forget() } }
                         Button("Turn off heart rate for \(entry.appName)", role: .destructive) { model.disable(entry) }
                     } label: { Label("More", systemImage: "ellipsis.circle").labelStyle(.iconOnly) }
                         .disabled(model.busy)
@@ -57,14 +58,14 @@ struct HeartRateLine: View {
                 }
             }
         }
-        .sheet(isPresented: $choosing) { ChooseSensorSheet(heartRate: heartRate) { model.refresh() } }
+        .sheet(isPresented: $choosing) { ChooseSensorSheet(heartRate: heartRate) }
     }
 
     private var state: String {
         if model.blocked.contains(entry.key) { return entry.grantId != nil ? "Turning off…" : "Off" }
         guard model.enabled(entry) else { return "Off" }
         if model.paused || model.pausedApps.contains(entry.appId) { return "Paused" }
-        if model.repository.local.heartRateSensor == nil { return "No sensor chosen" }
+        if heartRate.sensor == nil { return "No sensor chosen" }
         if model.queuedHeartRate >= HeartRatePolicy.MAX_QUEUE { return "Stopped: upload queue full" }
         switch heartRate.bluetooth {
         case .poweredOff: return "Bluetooth is off"
@@ -85,18 +86,27 @@ struct HeartRateLine: View {
 /// this phone.
 struct ChooseSensorSheet: View {
     @ObservedObject var heartRate: HeartRateCollector
-    let chosen: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    if heartRate.discovered.isEmpty {
-                        Label("Looking for heart-rate sensors. Put your strap on so it wakes up.", systemImage: "antenna.radiowaves.left.and.right")
+                    // Scanning needs Bluetooth on and allowed (#682): otherwise say so instead of looking forever.
+                    switch heartRate.bluetooth {
+                    case .poweredOff:
+                        Label("Turn on Bluetooth to find your sensor", systemImage: "antenna.radiowaves.left.and.right.slash")
+                    case .unauthorized:
+                        Label("Allow Bluetooth for ProAppStore in Settings", systemImage: "antenna.radiowaves.left.and.right.slash")
+                        Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
+                    default:
+                        if heartRate.discovered.isEmpty {
+                            Label("Looking for heart-rate sensors. Put your strap on so it wakes up.", systemImage: "antenna.radiowaves.left.and.right")
+                        }
                     }
                     ForEach(heartRate.discovered) { sensor in
-                        Button(sensor.name) { heartRate.choose(sensor); chosen(); dismiss() }
+                        Button(sensor.name) { heartRate.choose(sensor); dismiss() }
                     }
                 } footer: {
                     Text("Only standard Bluetooth heart-rate sensors are listed. The sensor's name and identifier stay on this phone.")

@@ -82,6 +82,24 @@ final class CompanionModelTests: XCTestCase {
         XCTAssertTrue(model.canResumeAll)
     }
 
+    /// #682: the first launch after an upgrade has no entries until `catchUp()`'s sync, and the link arrives before it.
+    func testARunHeartRateLinkBeforeTheFirstSyncIsHandledAfterIt() async throws {
+        try secure.write(["token": "ndev_test", "userId": "u1"])
+        let model = CompanionModel(repository: repository)
+        model.handle(URL(string: "proappstore://native/apps/run/heart_rate.ble")!)
+        XCTAssertNil(model.entryConsent)
+        let run: [String: Any] = ["appId": "run", "appName": "Run", "capability": "heart_rate.ble", "name": "Heart rate", "purpose": "p",
+                                  "disclosure": "d", "version": "hv", "grant": NSNull()]
+        var withCapabilities = me
+        withCapabilities["capabilities"] = [run]
+        StubProtocol.handler = { [withCapabilities] _ in .init(json: withCapabilities) }
+        await model.catchUp()
+        XCTAssertEqual(model.entryConsent?.key, "run/heart_rate.ble")
+        model.entryConsent = nil
+        await model.catchUp()
+        XCTAssertNil(model.entryConsent, "handled once")
+    }
+
     /// A rejected pairing is reported once; the next activation shows nothing and sends nothing.
     func testARejectedPairingIsShownOnceThenCleared() async throws {
         try secure.write(["pairId": String(repeating: "a", count: 64), "verifier": String(repeating: "b", count: 64)])
