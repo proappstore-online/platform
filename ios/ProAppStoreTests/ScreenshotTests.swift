@@ -30,7 +30,7 @@ final class ScreenshotTests: XCTestCase {
             ["id": "run", "name": "Run", "purpose": "Records runs and walks", "disclosure": "Disclosure", "version": "v", "grant": ["id": "g-run", "consent_at": consent]],
             ["id": "rideshare", "name": "Rideshare", "purpose": "Shares your pickup location", "disclosure": "Disclosure", "version": "v", "grant": NSNull()],
         ]
-        let me: [String: Any] = ["user": ["id": "u1", "name": "Serge"], "device": ["id": "d1", "label": "iPhone (iOS 18.0)"], "apps": apps]
+        let me: [String: Any] = ["user": ["id": "u1", "name": "Alex Example"], "device": ["id": "d1", "label": "iPhone (iOS 18.0)"], "apps": apps]
         try secure.write(["token": "ndev_screenshot", "userId": "u1"])
         let local = try LocalStore(directory: directory)
         try local.saveApps(try JSONSerialization.data(withJSONObject: apps))
