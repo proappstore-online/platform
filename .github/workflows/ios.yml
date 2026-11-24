@@ -3,6 +3,11 @@ on:
   push: { branches: [main], paths: ['ios/**', '.github/workflows/ios.yml'] }
   pull_request: { paths: ['ios/**', '.github/workflows/ios.yml'] }
   workflow_dispatch:
+    inputs:
+      testflight:
+        description: Archive, sign and upload to TestFlight (never submits for review)
+        type: boolean
+        default: false
 permissions: { contents: read }
 jobs:
   build-test:
@@ -35,3 +40,116 @@ jobs:
         run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'id=${{ steps.sim.outputs.udid }}' -derivedDataPath build/ios test CODE_SIGN_IDENTITY=- CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
       - name: Device build (unsigned)
         run: xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -destination 'generic/platform=iOS' -derivedDataPath build/ios build CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT=${GITHUB_SHA::7}
+
+  # #685: TestFlight upload, the manual iOS release path. It runs only when dispatched on main with testflight=true
+  # (never on a push), after build-test passes. It uploads a build; it never
+  # submits one for review. App Store Connect has required Xcode 26 / the iOS 26 SDK since 2026-04-28
+  # (developer.apple.com/news/upcoming-requirements), so this job archives with the newest stable Xcode on the macos-26 image, while
+  # build-test stays on Xcode 16 for parity with local builds. Signing is manual: an Apple Distribution certificate and
+  # an App Store provisioning profile for online.proappstore.companion (team 55DT52UQXE), repo-level secrets placed via ops.
+  testflight:
+    needs: build-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.testflight
+    runs-on: macos-26
+    timeout-minutes: 45
+    concurrency: { group: ios-testflight, cancel-in-progress: false }
+    env:
+      IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+      IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+      ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+      ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+      ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+      TEAM_ID: 55DT52UQXE
+      BUNDLE_ID: online.proappstore.companion
+    steps:
+      - name: Signing material is present
+        shell: bash
+        run: |
+          missing=0
+          for name in IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_APPSTORE_PROFILE_BASE64 ASC_API_KEY_ID ASC_API_ISSUER_ID ASC_API_KEY_P8_BASE64; do
+            if [[ -z "${!name}" ]]; then echo "::error::Repository secret $name is not set. Create it with ops (pas/$name, consumer github-repo-secret: proappstore-online/platform) before dispatching (#685)."; missing=1; fi
+          done
+          exit $missing
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
+      - name: Xcode in use
+        run: xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install certificate, profile and API key
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/pas-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$keychain" -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/dist.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # one argument per existing keychain path, by design
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "PAS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+          profile="$RUNNER_TEMP/appstore.mobileprovision"
+          echo "$IOS_APPSTORE_PROFILE_BASE64" | base64 --decode > "$profile"
+          security cms -D -i "$profile" > "$RUNNER_TEMP/profile.plist"
+          uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          name=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          app_id=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+          # An App Store profile lists no devices; a development or ad-hoc profile does.
+          if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$RUNNER_TEMP/profile.plist" > /dev/null 2>&1; then
+            echo "::error::IOS_APPSTORE_PROFILE_BASE64 is not an App Store distribution profile"; exit 1
+          fi
+          if [[ "$app_id" != "$TEAM_ID.$BUNDLE_ID" ]]; then echo "::error::Profile is for $app_id, expected $TEAM_ID.$BUNDLE_ID"; exit 1; fi
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$profile" "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
+          echo "PAS_PROFILE_NAME=$name" >> "$GITHUB_ENV"
+
+          echo "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          echo "PAS_ASC_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      # The workflow run number is the build number, as in build-test; it only grows, as App Store Connect requires.
+      - name: Archive (Apple Distribution, App Store profile)
+        run: >-
+          xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore -configuration Release
+          -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/ProAppStore.xcarchive" archive
+          CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_IDENTITY="Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER="$PAS_PROFILE_NAME" OTHER_CODE_SIGN_FLAGS="--keychain $PAS_KEYCHAIN"
+          CURRENT_PROJECT_VERSION=${{ github.run_number }} PAS_COMMIT="${GITHUB_SHA::7}"
+      - name: Privacy manifest is in the archive
+        run: test -f "$RUNNER_TEMP/ProAppStore.xcarchive/Products/Applications/ProAppStore.app/PrivacyInfo.xcprivacy"
+      # destination=upload exports the IPA and uploads it to App Store Connect in one step. Processing and TestFlight
+      # availability follow on Apple's side; submitting for review stays a manual step in App Store Connect.
+      - name: Export and upload to App Store Connect (TestFlight)
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PAS_PROFILE_NAME</string></dict>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/ProAppStore.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -authenticationKeyPath "$PAS_ASC_KEY" -authenticationKeyID "$ASC_API_KEY_ID" -authenticationKeyIssuerID "$ASC_API_ISSUER_ID"
+      - name: Release result
+        if: success()
+        run: echo "Uploaded build ${{ github.run_number }} ($GITHUB_SHA) of $BUNDLE_ID to App Store Connect app 6838534784 for TestFlight. Not submitted for review." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${PAS_KEYCHAIN:-}" ]]; then security delete-keychain "$PAS_KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/profile.plist"
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision

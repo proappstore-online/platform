@@ -19,7 +19,7 @@ Tests are ad-hoc signed (`CODE_SIGN_IDENTITY=-`) because an unsigned simulator h
 
 Bundle ID: `online.proappstore.companion` (`PAS_BUNDLE_ID` in `Config/Base.xcconfig`). iOS 17 minimum, Swift 5 language mode. No third-party packages.
 
-Device installs are signed in Xcode with your own team. `DEVELOPMENT_TEAM` is never committed: set it in Signing & Capabilities or in an untracked `Config/Local.xcconfig` (which may also override `PAS_BUNDLE_ID`). Distribution is developer installation only; there is no TestFlight or App Store build.
+Device installs are signed in Xcode with your own team. `DEVELOPMENT_TEAM` is never committed: set it in Signing & Capabilities or in an untracked `Config/Local.xcconfig` (which may also override `PAS_BUNDLE_ID`). TestFlight builds come only from CI (#685): the `testflight` job in `.github/workflows/ios.yml` archives `main` with the newest stable Xcode (26 or later; App Store Connect requires the iOS 26 SDK), signs it with the Apple Distribution certificate and App Store profile held in repository secrets, and uploads it to App Store Connect app 6838534784. It runs only when dispatched: `gh workflow run ios.yml --repo proappstore-online/platform --ref main -f testflight=true`. It never runs on a push, never submits for review, and fails at its first step, naming each missing secret, until all six exist (`IOS_DIST_CERT_P12_BASE64`, `IOS_DIST_CERT_PASSWORD`, `IOS_APPSTORE_PROFILE_BASE64`, `ASC_API_KEY_ID`, `ASC_API_ISSUER_ID`, `ASC_API_KEY_P8_BASE64`; held in ops under `pas`).
 
 ## Version and branding
 
