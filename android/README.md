@@ -14,7 +14,7 @@ Prerequisites: JDK 17, Android SDK platform 36 and platform tools. Set `ANDROID_
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. Package ID: `online.proappstore.companion`. Android 10/API 29 minimum; compile/target API 36. Dependency versions are pinned to a compatible stable SDK-36 toolchain.
+Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. Package ID (`applicationId`): `online.proappstore.app`; the Kotlin package is `online.proappstore.companion` (#684). Android 10/API 29 minimum; compile/target API 36. Dependency versions are pinned to a compatible stable SDK-36 toolchain.
 
 ## Android deployment
 

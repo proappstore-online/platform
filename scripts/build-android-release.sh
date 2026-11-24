@@ -34,6 +34,6 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 const paths = ['app/build/outputs/apk/release/app-release.apk', 'app/build/outputs/bundle/release/app-release.aab', 'app/build/outputs/mapping/release/mapping.txt'];
 mkdirSync('app/build/outputs/release', { recursive: true });
-writeFileSync('app/build/outputs/release/release.json', JSON.stringify({ packageName: 'online.proappstore.companion', versionCode: Number(process.env.ANDROID_BUILD_NUMBER), commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), artifacts: paths.map(path => ({ path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') })) }, null, 2));
+writeFileSync('app/build/outputs/release/release.json', JSON.stringify({ packageName: 'online.proappstore.app', versionCode: Number(process.env.ANDROID_BUILD_NUMBER), commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), artifacts: paths.map(path => ({ path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') })) }, null, 2));
 JS
 echo "Verified signed PAS APK and AAB: versionCode=$ANDROID_BUILD_NUMBER"

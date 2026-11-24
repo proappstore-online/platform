@@ -10,7 +10,7 @@ PAS uses HeartFull's current release model: test → signed Android App Bundle �
 
 The native companion is an early preview. Signing and release automation are configured, with dedicated PAS credentials. Google Play app registration, publisher permission, initial Console upload and policy declarations must be completed before Play automation can be enabled. A signed artifact is not a Play release; track acceptance is not Google review approval or proof of store availability.
 
-The package is **`online.proappstore.companion`**. Do not register a different package or replace the upload key after the first upload. The initial native implementation and pending Ski integration are described in [Native companion](./native-companion.md).
+The Play package (`applicationId`) is **`online.proappstore.app`**: `online.proappstore.companion` is taken on Google Play (#684). The Kotlin package and `namespace` stay `online.proappstore.companion`; iOS keeps that bundle ID. Do not register a different package or replace the upload key after the first upload. The initial native implementation and pending Ski integration are described in [Native companion](./native-companion.md).
 
 ## Routine delivery
 
@@ -32,7 +32,7 @@ Direct APKs use the upload certificate. Play-distributed installs use the Play a
 
 ## First Play Console setup
 
-1. Create ProAppStore in the intended Google Play developer account. Use the signed AAB from the workflow to establish `online.proappstore.companion` and configure Play App Signing. The committed certificate identifies the **upload** key; Google's app-signing certificate may differ.
+1. ProAppStore exists in the OpenFrontier.One Play developer account (created 2026-11-24, package `online.proappstore.app`). Use the signed AAB from the workflow for the first upload and configure Play App Signing. The committed certificate identifies the **upload** key; Google's app-signing certificate may differ.
 2. Grant **`pas-play-publisher@proappstore-online.iam.gserviceaccount.com`** access to this app only: app information, testing-track releases, and production releases when ready. No account-wide or HeartFull access is needed. No extra GCP project role is needed for publishing.
 3. Complete the actual privacy policy, app access/reviewer instructions, Data Safety, content rating, background-location and foreground-service declarations, and required listing assets. The collector service declares two foreground-service types: `location`, and `connectedDevice` for Run's Bluetooth heart-rate strap (#634). Declare both, with the `connectedDevice` text and the Data Safety **Health and fitness → Fitness info** answer from the review notes. Use the [policy research](./native-companion-review.md); do not claim Ski web/worker integration or physical-device acceptance is finished.
 4. Complete the initial Console upload/setup needed for API access. Start with the appropriate testing track; the workflow supports an explicit `internal` / `draft` upload. A draft app may reject completed releases until Console setup is finished.

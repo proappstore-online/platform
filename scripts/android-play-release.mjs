@@ -4,7 +4,7 @@ import { createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const PACKAGE = 'online.proappstore.companion';
+const PACKAGE = 'online.proappstore.app';
 const API = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${PACKAGE}`;
 const UPLOAD = `https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/${PACKAGE}`;
 const TOKEN = 'https://oauth2.googleapis.com/token';

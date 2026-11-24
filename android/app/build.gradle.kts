@@ -15,7 +15,7 @@ android {
     namespace = "online.proappstore.companion"
     compileSdk = 36
     defaultConfig {
-        applicationId = "online.proappstore.companion"
+        applicationId = "online.proappstore.app"
         minSdk = 29
         targetSdk = 36
         versionCode = buildNumber

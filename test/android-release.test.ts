@@ -42,7 +42,7 @@ describe('PAS Android release pipeline', () => {
   });
   it('uploads, validates, commits and verifies using a fresh edit', async () => {
     const { client, calls } = fixture();
-    expect(await client.publish(new Uint8Array([1]), 12, 'production', 'completed')).toMatchObject({ verified: true, packageName: 'online.proappstore.companion' });
+    expect(await client.publish(new Uint8Array([1]), 12, 'production', 'completed')).toMatchObject({ verified: true, packageName: 'online.proappstore.app' });
     const paths = calls.map(c => new URL(c.url).pathname);
     expect(paths.findIndex(p => p.endsWith(':validate'))).toBeLessThan(paths.findIndex(p => p.endsWith(':commit')));
     expect(paths.some(p => p.endsWith('/edits/edit-2/tracks/production'))).toBe(true);
