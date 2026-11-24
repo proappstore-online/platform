@@ -6,7 +6,8 @@ object ActivityText {
 
     fun category(kind: ShareEvent.Kind): Category = when (kind) {
         ShareEvent.Kind.ENABLED, ShareEvent.Kind.DISABLED, ShareEvent.Kind.PAUSED, ShareEvent.Kind.RESUMED, ShareEvent.Kind.PAUSED_ALL,
-        ShareEvent.Kind.RESUMED_ALL, ShareEvent.Kind.GRANT_LOST, ShareEvent.Kind.GRANT_RESTORED, ShareEvent.Kind.HISTORY_CLEARED, ShareEvent.Kind.HEART_RATE -> Category.SHARING
+        ShareEvent.Kind.RESUMED_ALL, ShareEvent.Kind.GRANT_LOST, ShareEvent.Kind.GRANT_RESTORED, ShareEvent.Kind.HISTORY_CLEARED, ShareEvent.Kind.HEART_RATE,
+        ShareEvent.Kind.SESSION_STARTED, ShareEvent.Kind.SESSION_ENDED -> Category.SHARING
         ShareEvent.Kind.STOPPED, ShareEvent.Kind.SYNC_FAILED, ShareEvent.Kind.SYNC_RECOVERED, ShareEvent.Kind.UPLOAD_REJECTED,
         ShareEvent.Kind.QUOTA, ShareEvent.Kind.PERMISSION, ShareEvent.Kind.QUEUE_FULL, ShareEvent.Kind.EXPIRED,
         ShareEvent.Kind.HEART_RATE_PROBLEM, ShareEvent.Kind.BLUETOOTH -> Category.PROBLEM
@@ -24,6 +25,17 @@ object ActivityText {
             ShareEvent.Kind.RESUMED -> "$app resumed by you"
             ShareEvent.Kind.PAUSED_ALL -> "All sharing paused by you"
             ShareEvent.Kind.RESUMED_ALL -> "All sharing resumed"
+            ShareEvent.Kind.SESSION_STARTED -> "Started sharing with $app"
+            ShareEvent.Kind.SESSION_ENDED -> "Stopped sharing with $app" + when (event.detail) {
+                "user" -> ""
+                "all" -> " (Stop all)"
+                "notification" -> " from the notification"
+                "stationary" -> ": no movement for 30 minutes"
+                "max" -> ": 12 hours reached"
+                "grant" -> ": access turned off or ended"
+                "permission" -> ": precise location permission withdrawn"
+                else -> ": ${event.detail}"
+            }
             ShareEvent.Kind.STOPPED -> "Sharing stopped: " + (mapOf(
                 "signed_out" to "this phone was signed out", "storage_failed" to "location could not be saved on this phone",
                 "unlock_failed" to "the device connection could not be unlocked")[event.detail] ?: event.detail)

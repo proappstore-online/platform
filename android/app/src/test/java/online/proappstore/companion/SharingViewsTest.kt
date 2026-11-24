@@ -67,6 +67,8 @@ class SharingViewsTest {
             Triple(HEART_RATE, "enabled", "Run heart rate turned on"),
             Triple(HEART_RATE_PROBLEM, "queue_full", "Heart-rate queue full: heart rate stopped until uploads catch up"),
             Triple(BLUETOOTH, "on", "Bluetooth turned on"),
+            Triple(SESSION_STARTED, "", "Started sharing with Run"),
+            Triple(SESSION_ENDED, "all", "Stopped sharing with Run (Stop all)"),
         )
         assertEquals(ShareEvent.Kind.entries.toSet(), table.map { it.first }.toSet())
         table.forEach { (kind, detail, expected) -> assertEquals(expected, sentence(kind, detail)) }
@@ -78,6 +80,9 @@ class SharingViewsTest {
         assertEquals(ActivityText.Category.PROBLEM, ActivityText.category(EXPIRED))
         assertEquals(ActivityText.Category.SHARING, ActivityText.category(PAUSED))
         assertEquals(ActivityText.Category.PROBLEM, ActivityText.category(SYNC_FAILED))
+        assertEquals(ActivityText.Category.SHARING, ActivityText.category(SESSION_ENDED))
+        assertEquals("Stopped sharing with Run: precise location permission withdrawn", sentence(SESSION_ENDED, "permission"))
+        assertEquals("Stopped sharing with Run: access turned off or ended", sentence(SESSION_ENDED, "grant"))
     }
 
     @Test fun everyKindRoundTripsItsStoredName() {
@@ -86,24 +91,22 @@ class SharingViewsTest {
     }
 
     @Test fun everyChip() {
-        data class Case(val granted: Boolean, val blocked: Boolean, val appPaused: Boolean, val pausedAll: Boolean, val running: Boolean, val chip: SharingState)
+        data class Case(val granted: Boolean, val blocked: Boolean, val session: Boolean, val running: Boolean, val chip: SharingState)
         listOf(
-            Case(true, false, false, false, true, SharingState.SHARING),
-            Case(true, false, true, false, true, SharingState.PAUSED),
-            Case(true, false, true, true, false, SharingState.PAUSED_ALL), // Pause all wins over the app's own pause
-            Case(true, false, false, true, false, SharingState.PAUSED_ALL),
-            Case(false, false, false, false, true, SharingState.OFF),
-            Case(false, true, false, false, true, SharingState.OFF), // revocation finished, grant gone
-            Case(true, true, false, false, true, SharingState.TURNING_OFF), // DELETE still pending
-            Case(true, true, true, true, false, SharingState.TURNING_OFF),
-            Case(true, false, false, false, false, SharingState.NOT_RECORDING), // e.g. permission lost
-        ).forEach { assertEquals(it.toString(), it.chip, SharingState.of(it.granted, it.blocked, it.appPaused, it.pausedAll, it.running)) }
+            Case(true, false, true, true, SharingState.SHARING),
+            Case(true, false, false, true, SharingState.STOPPED), // another app's session runs the collector
+            Case(true, false, false, false, SharingState.STOPPED),
+            Case(false, false, true, true, SharingState.OFF),
+            Case(false, true, false, true, SharingState.OFF), // revocation finished, grant gone
+            Case(true, true, true, true, SharingState.TURNING_OFF), // DELETE still pending
+            Case(true, false, true, false, SharingState.NOT_RECORDING), // e.g. the OS stopped the collector
+        ).forEach { assertEquals(it.toString(), it.chip, SharingState.of(it.granted, it.blocked, it.session, it.running)) }
     }
 
     /** #652: an expired connection enables nothing, and every app's chip says so. */
     @Test fun anExpiredConnectionEnablesNothing() {
         val app = ConnectedApp("ski", "Ski", "Routes", "D", "1", "g")
-        val state = CompanionState(expired = true, apps = listOf(app), paused = false, running = true)
+        val state = CompanionState(expired = true, apps = listOf(app), sessions = mapOf("ski" to Session("ski", 0, 0)), running = true)
         assertFalse(state.enabled(app))
         assertFalse(state.sharing(app))
         assertEquals(SharingState.EXPIRED, state.stateOf(app))

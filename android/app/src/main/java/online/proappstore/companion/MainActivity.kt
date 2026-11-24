@@ -17,7 +17,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -39,14 +38,16 @@ import kotlinx.coroutines.*
 
 data class CompanionState(
     val signedIn: Boolean = false, val name: String = "", val apps: List<ConnectedApp> = emptyList(),
-    val blocked: Set<String> = emptySet(), val paused: Boolean = true, val running: Boolean = false,
+    val blocked: Set<String> = emptySet(), val running: Boolean = false,
     val permissions: Boolean = false, val queued: Int = 0, val message: String = "", val busy: Boolean = false,
-    val pairingCode: String = "", val lastSync: Long = 0, val pausedApps: Set<String> = emptySet(),
+    val pairingCode: String = "", val lastSync: Long = 0,
+    /** Running collection sessions by app id (ADR-020). */
+    val sessions: Map<String, Session> = emptyMap(),
     // Sharing control room (#622), history (#621) and activity log (#624).
     val now: Long = System.currentTimeMillis(), val events: List<ShareEvent> = emptyList(),
     val pendingByApp: Map<String, Int> = emptyMap(), val lastUploadByApp: Map<String, Long> = emptyMap(),
     val lastSyncAttempt: Long = 0, val lastSyncError: String = "", val online: Boolean = true,
-    /** `denied`, `approximate`, `whenInUse` or `always` (LocationService.permissionState). */
+    /** `denied`, `approximate` or `whenInUse` (LocationService.permissionState). */
     val permission: String = "", val locationOn: Boolean = true, val powerSave: Boolean = false, val batteryOptimized: Boolean = false,
     val lastFix: LiveFix? = null, val version: String = "",
     /** The device connection expired or was revoked (#652); [expiresInDays] is set only in its last 7 days. */
@@ -72,6 +73,10 @@ class MainActivity : ComponentActivity() {
     private var error by mutableStateOf("")
     private var working by mutableStateOf(false)
     private var permissionExplanation by mutableStateOf(false)
+    /** The app whose Start waits for the location permission flow. */
+    private var pendingStart: String? = null
+    /** A `proappstore://native/apps/<appId>` link's app, until the screen has shown it (ADR-020 §2). */
+    private var link by mutableStateOf<String?>(null)
     private var refreshJob: Job? = null
     /** The "Choose sensor" dialog is open (#634). It survives the permission prompt's onPause (#673). */
     private var choosing by mutableStateOf(false)
@@ -89,12 +94,18 @@ class MainActivity : ComponentActivity() {
         // Android refuses more than 5 scan starts in 30 s; without this the dialog says "Looking" forever.
         override fun onScanFailed(errorCode: Int) { error = "Could not search for sensors. Try again."; stopScanning() }
     }
-    private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh(); maybeStart() }
+    private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        refresh()
+        val app = pendingStart?.let { id -> state.apps.find { it.id == id } }
+        pendingStart = null
+        if (app != null && LocationService.allowed(this)) start(app) else maybeStart()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
         // Upgrade path: sessions for grants held before the history existed start at their consent time.
         if (graph.repository.token() != null) runCatching { graph.local.seedIfEmpty() }
         refresh()
+        link = SharingSessions.linkedApp(intent?.dataString)
         // Sharing when any app has a grant or the connection expired, otherwise the Store.
         val initialTab = if (state.expired || state.apps.any { it.grantId != null }) Tab.SHARING else Tab.STORE
         setContent {
@@ -103,16 +114,16 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = colors) {
                 PasScreen(state.copy(busy = working, message = error.ifBlank { state.message }),
                     connect = { act { open(graph.repository.startSignIn()) } },
-                    enable = { app -> act { graph.repository.enable(app); refresh(); if (LocationService.allowed(this@MainActivity)) maybeStart() else permissionExplanation = true } },
+                    // Enabling grants; Start on the row begins sharing (ADR-020 §2).
+                    enable = { app -> act { graph.repository.enable(app); refresh(); if (!LocationService.allowed(this@MainActivity)) permissionExplanation = true } },
                     disable = { app -> act { graph.repository.disable(app) } },
-                    // Local writes, not `act`: pausing works offline and instantly.
-                    pauseApp = { app -> graph.local.pause(app.id); reconcile(); refresh() },
-                    resumeApp = { app -> graph.local.resume(app.id); refresh(); reconcile() },
-                    pause = { graph.local.paused = true; stopService(Intent(this, LocationService::class.java)); refresh() },
-                    resume = { graph.local.paused = false; refresh(); if (LocationService.allowed(this)) maybeStart() else permissionExplanation = true },
+                    // Local writes, not `act`: Start and Stop work offline and instantly.
+                    startApp = { app -> start(app) },
+                    stopApp = { app -> runCatching { graph.local.endSession(app.id, "user") }; reconcile(); refresh() },
+                    stopAll = { runCatching { graph.local.endAllSessions("all") }; stopService(Intent(this, LocationService::class.java)); refresh() },
                     permissions = { permissionExplanation = true },
                     sync = { act { graph.repository.sync() } },
-                    disconnect = { act { graph.local.paused = true; stopService(Intent(this@MainActivity, LocationService::class.java)); graph.repository.disconnect() } },
+                    disconnect = { act { graph.local.endAllSessions("grant"); stopService(Intent(this@MainActivity, LocationService::class.java)); graph.repository.disconnect() } },
                     privacy = { open("https://docs.proappstore.online/native-companion-users/") },
                     account = { open("https://dashboard.proappstore.online") },
                     // #628: the host shows an Install button on ?install=1. Built from the id; a renamed app redirects with the query.
@@ -123,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     loadTracks = { ids, range -> withContext(Dispatchers.IO) { ids.associateWith { graph.local.track(it, range.first, range.last) } } },
                     // Pairs again keeping the history (#652): after an expiry, or early from the expiry note.
                     reconnect = { act { graph.repository.renew(); stopService(Intent(this@MainActivity, LocationService::class.java)); open(graph.repository.startSignIn()) } },
+                    link = link, linkShown = { link = null },
                     heartRate = HeartRateHooks(
                         enable = { entry -> act { graph.repository.enable(entry); refresh(); reconcile() } },
                         // Local block first (offline-safe, idempotent), so the service drops heart rate now; then the server revoke.
@@ -140,11 +152,11 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     confirmButton = { TextButton(onClick = { closeSensors() }) { Text("Cancel") } })
-                if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false },
-                    title = { Text("Allow background location") },
-                    text = { Text("ProAppStore collects precise location to automatically record routes for apps you enable, even when ProAppStore and those apps are closed. Updates go to PAS and only your enabled apps. Choose Precise location, then Allow all the time on the next settings screen. You can pause or revoke access here.") },
+                if (permissionExplanation) AlertDialog(onDismissRequest = { permissionExplanation = false; pendingStart = null },
+                    title = { Text("Allow precise location") },
+                    text = { Text("ProAppStore collects precise location while you share with an app you started, including with your phone locked and that app closed. Updates go to PAS and only the apps you share with. Choose Precise location on the next screen. You can stop sharing or revoke access here.") },
                     confirmButton = { TextButton(onClick = { permissionExplanation = false; requestLocation() }) { Text("Continue") } },
-                    dismissButton = { TextButton(onClick = { permissionExplanation = false }) { Text("Not now") } })
+                    dismissButton = { TextButton(onClick = { permissionExplanation = false; pendingStart = null }) { Text("Not now") } })
             }
         }
     }
@@ -188,7 +200,8 @@ class MainActivity : ComponentActivity() {
     private fun reconcile() {
         if (LocationService.wanted(this, graph.repository)) maybeStart() else stopService(Intent(this, LocationService::class.java))
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) /* Links only bring settings forward. No automatic permission changes. */ }
+    /** A link only selects an app: it never grants, changes a permission or starts a session (ADR-020 §2). */
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); link = SharingSessions.linkedApp(intent.dataString) }
     private fun refreshCatalogue() { lifecycleScope.launch { graph.catalogue.refresh() } }
     private fun refresh() {
         val local = graph.local
@@ -198,8 +211,8 @@ class MainActivity : ComponentActivity() {
         val power = getSystemService(PowerManager::class.java)
         val signedIn = graph.repository.token() != null
         state = CompanionState(signedIn, local.userName, apps, local.blocked(),
-            local.paused, LocationService.running, LocationService.allowed(this), local.count(), local.message,
-            pairingCode = graph.repository.pairingCode(), lastSync = local.lastSync, pausedApps = local.pausedApps(),
+            LocationService.running, LocationService.allowed(this), local.count(), local.message,
+            pairingCode = graph.repository.pairingCode(), lastSync = local.lastSync, sessions = local.sessions().associateBy { it.appId },
             now = System.currentTimeMillis(), events = runCatching { local.events() }.getOrDefault(emptyList()),
             pendingByApp = apps.associate { it.id to local.pendingCount(it.id) },
             lastUploadByApp = apps.mapNotNull { app -> local.lastUpload(app.id)?.let { app.id to it } }.toMap(),
@@ -230,7 +243,29 @@ class MainActivity : ComponentActivity() {
             finally { working = false; refresh() }
         }
     }
+    /**
+     * Start on an app's row or in a link's prompt (ADR-020 §2): needs a current grant, precise permission (the disclosure
+     * and permission flow first, then this again) and location turned on.
+     */
+    private fun start(app: ConnectedApp) {
+        val local = graph.local
+        if (local.expired || app.grantId == null || app.id in local.blocked()) return
+        if (!LocationService.allowed(this)) { pendingStart = app.id; permissionExplanation = true; return }
+        if (!getSystemService(LocationManager::class.java).isLocationEnabled) { error = "Turn on location in Android settings, then tap Start."; return }
+        try { local.startSession(app.id) } catch (_: Exception) { error = "Could not start sharing on this phone."; return }
+        refresh(); maybeStart()
+    }
+    /**
+     * Starts the collector only for sessions that already exist; it never creates one (ADR-020 §7). After the OS stopped
+     * it, sessions past 12 hours end and the rest resume with the stationary clock restarted. Precise permission withdrawn
+     * ends them.
+     */
     private fun maybeStart() {
+        val local = graph.local
+        runCatching {
+            if (!LocationService.active) local.resumeSessions()
+            if (!LocationService.allowed(this)) local.endAllSessions("permission")
+        }
         if (!LocationService.wanted(this, graph.repository)) return
         val prompt = getSharedPreferences("native-permission-prompts", MODE_PRIVATE)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prompt.getBoolean("notifications", false)) {
@@ -241,13 +276,16 @@ class MainActivity : ComponentActivity() {
     }
     private fun requestLocation() {
         when {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ->
+            // Foreground and precise only: no background step (ADR-020 §8).
+            !LocationService.allowed(this) ->
                 permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-            Build.VERSION.SDK_INT == 29 && !LocationService.allowed(this) -> permissionRequest.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
-            !LocationService.allowed(this) -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED ->
                 permissionRequest.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
-            else -> maybeStart()
+            else -> {
+                val app = pendingStart?.let { id -> state.apps.find { it.id == id } }
+                pendingStart = null
+                if (app != null) start(app) else maybeStart()
+            }
         }
     }
     private fun open(url: String) {
@@ -270,8 +308,8 @@ private sealed class SharingPage {
 @Composable
 internal fun PasScreen(
     state: CompanionState, connect: () -> Unit, enable: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit,
-    pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit,
-    pause: () -> Unit, resume: () -> Unit, permissions: () -> Unit, sync: () -> Unit, disconnect: () -> Unit,
+    startApp: (ConnectedApp) -> Unit, stopApp: (ConnectedApp) -> Unit,
+    stopAll: () -> Unit, permissions: () -> Unit, sync: () -> Unit, disconnect: () -> Unit,
     privacy: () -> Unit, account: () -> Unit,
     openApp: (ConnectedApp) -> Unit = {},
     initialTab: Tab = Tab.SHARING,
@@ -279,6 +317,8 @@ internal fun PasScreen(
     clearHistory: () -> Unit = {},
     loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>> = { _, _ -> emptyMap() },
     reconnect: () -> Unit = {},
+    /** A `proappstore://native/apps/<appId>` link's app; [linkShown] clears it once shown. */
+    link: String? = null, linkShown: () -> Unit = {},
     heartRate: HeartRateHooks = HeartRateHooks(),
 ) {
     var tab by remember { mutableStateOf(initialTab) }
@@ -286,7 +326,21 @@ internal fun PasScreen(
     var storeApp by remember { mutableStateOf<CatalogueApp?>(null) }
     var consent by remember { mutableStateOf<ConnectedApp?>(null) }
     var entryConsent by remember { mutableStateOf<NativeEntry?>(null) }
+    var startPrompt by remember { mutableStateOf<ConnectedApp?>(null) }
     val hooks = heartRate.copy(askConsent = { entryConsent = it })
+    // ADR-020 §2: a link brings an app forward and never starts anything. Not granted: its consent. Granted: the Start
+    // prompt. Sharing: its page. Unknown: the dashboard.
+    LaunchedEffect(link) {
+        val id = link ?: return@LaunchedEffect
+        linkShown()
+        tab = Tab.SHARING; sharingPage = SharingPage.Dashboard
+        val app = state.apps.find { it.id == id }?.takeIf { state.signedIn && !state.expired } ?: return@LaunchedEffect
+        when {
+            !state.enabled(app) -> consent = app
+            app.id in state.sessions -> sharingPage = SharingPage.App(app.id)
+            else -> startPrompt = app
+        }
+    }
     BackHandler(enabled = (tab == Tab.SHARING && sharingPage != SharingPage.Dashboard) || (tab == Tab.STORE && storeApp != null)) {
         if (tab == Tab.STORE) storeApp = null
         else sharingPage = (sharingPage as? SharingPage.Activity)?.from ?: SharingPage.Dashboard
@@ -307,7 +361,7 @@ internal fun PasScreen(
                     SharingPage.Dashboard -> {
                         val granted = state.apps.filter { it.grantId != null }
                         val tracks = rememberTracks(granted, state, SharingTimeline.today(state.now), loadTracks)
-                        SharingDashboard(state, tracks, connect, { consent = it }, disable, pauseApp, resumeApp, pause, resume, permissions, sync, openApp,
+                        SharingDashboard(state, tracks, connect, { consent = it }, disable, startApp, stopApp, stopAll, permissions, sync, openApp,
                             showApp = { sharingPage = SharingPage.App(it.id) }, showActivity = { sharingPage = SharingPage.Activity(null, page) },
                             showMap = { sharingPage = SharingPage.Map }, reconnect = reconnect, heartRate = hooks)
                     }
@@ -319,7 +373,7 @@ internal fun PasScreen(
                             modifier = Modifier.fillMaxSize().padding(bottom = 8.dp))
                     }
                     is SharingPage.App -> state.apps.find { it.id == page.id }?.let { app ->
-                        AppSharingScreen(state, app, loadTracks, pauseApp, resumeApp, disable, openApp,
+                        AppSharingScreen(state, app, loadTracks, startApp, stopApp, disable, openApp,
                             showActivity = { sharingPage = SharingPage.Activity(app.id, page) }, back = { sharingPage = SharingPage.Dashboard },
                             loadHeartRate = heartRate.load)
                     } ?: LaunchedEffect(page) { sharingPage = SharingPage.Dashboard } // the app left /native/me
@@ -334,6 +388,11 @@ internal fun PasScreen(
         text = { Text(app.disclosure) },
         confirmButton = { TextButton(onClick = { consent = null; enable(app) }) { Text("Enable for ${app.name}") } },
         dismissButton = { TextButton(onClick = { consent = null }) { Text("Cancel") } }) }
+    startPrompt?.let { app -> AlertDialog(onDismissRequest = { startPrompt = null },
+        title = { Text("Start sharing with ${app.name}?") },
+        text = { Text("ProAppStore will share your location with ${app.name} while you record, including with your phone locked. It stops when you tap Stop, after 30 minutes without moving, or after 12 hours.") },
+        confirmButton = { TextButton(onClick = { startPrompt = null; startApp(app) }) { Text("Start") } },
+        dismissButton = { TextButton(onClick = { startPrompt = null }) { Text("Not now") } }) }
     entryConsent?.let { entry -> AlertDialog(onDismissRequest = { entryConsent = null },
         title = { Text("Enable ${entry.name.lowercase()} for ${entry.appName}?") },
         text = { Text(entry.disclosure) },
@@ -377,8 +436,8 @@ private fun SettingsScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Labeled("Location permission", Format.permission[state.permission] ?: state.permission)
-                    if (state.permission != "always") TextButton(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
-                    else Text("Precise location is allowed all the time.", style = MaterialTheme.typography.bodySmall)
+                    if (state.permission != "whenInUse") TextButton(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
+                    else Text("Precise location is allowed. Sharing runs only while you have started it for an app.", style = MaterialTheme.typography.bodySmall)
                 }
             }
             TextButton(onClick = account) { Text("Manage account") }

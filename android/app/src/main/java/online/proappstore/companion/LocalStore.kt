@@ -9,12 +9,12 @@ import org.json.JSONObject
 
 /**
  * Private queue and settings. Version 2 adds the on-device sharing history (#621, ported from iOS LocalStore.swift):
- * `share_events` (when sharing was enabled, paused or turned off, and the activity log's problems) and `share_points`
+ * `share_events` (when sharing was enabled, started, stopped or turned off, and the activity log's problems) and `share_points`
  * (a 30-day copy of what was shared with each app). Both are in the same backup-excluded database as the queue and
  * never leave the phone. Version 3 adds Run's strap heart rate (#634): its queue `hr` and its 30-day history `share_hr`.
  */
 class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", null, 3) {
-    private val prefs = context.getSharedPreferences("native-settings", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("native-settings", Context.MODE_PRIVATE).also(SharingSessions::migrate)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE points(id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX points_at ON points(at)")
@@ -37,17 +37,43 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         db.execSQL("CREATE INDEX IF NOT EXISTS share_points_app_at ON share_points(app_id, at)")
     }
 
-    /** Pause all. A change is recorded as `paused_all` / `resumed_all`; a forced stop goes through [stop]. */
-    var paused: Boolean
-        get() = prefs.getBoolean("paused", true)
-        @Synchronized set(value) {
-            if (value != paused) record(if (value) ShareEvent.Kind.PAUSED_ALL else ShareEvent.Kind.RESUMED_ALL)
-            check(prefs.edit().putBoolean("paused", value).commit())
-        }
-    /** Pause all forced by the system, recorded as `stopped` with `reason` (unlock_failed, signed_out, storage_failed). */
+    // Collection sessions (ADR-020), replacing Pause all and per-app pause (#626). Local to the phone, never reported.
+
+    /** The running sessions, at most one per app. */
+    @Synchronized fun sessions(): List<Session> = SharingSessions.decode(prefs.getString("sessions", null))
+    @Synchronized fun sessionIds(): Set<String> = sessions().mapTo(mutableSetOf()) { it.appId }
+    private fun saveSessions(sessions: List<Session>) { check(prefs.edit().putString("sessions", SharingSessions.encode(sessions)).commit()) }
+    /** Only from a tap in the companion (ADR-020 §2). A running session is left as it is. */
+    @Synchronized fun startSession(appId: String, now: Long = System.currentTimeMillis()) {
+        if (appId in sessionIds()) return
+        transaction { record(ShareEvent.Kind.SESSION_STARTED, appId, at = now); saveSessions(sessions() + Session(appId, now, now)) }
+    }
+    /** Ends `appId`'s session, recorded as `session_ended` with `detail`. Never touches its grant, consent or queue. */
+    @Synchronized fun endSession(appId: String, detail: String, now: Long = System.currentTimeMillis()) {
+        val sessions = sessions()
+        if (sessions.none { it.appId == appId }) return
+        transaction { record(ShareEvent.Kind.SESSION_ENDED, appId, detail, now); saveSessions(sessions.filter { it.appId != appId }) }
+    }
+    @Synchronized fun endAllSessions(detail: String, now: Long = System.currentTimeMillis()) { sessionIds().forEach { endSession(it, detail, now) } }
+    /** Movement at `now` restarts every session's stationary clock. Written at most once a minute: the clock's unit is 30 minutes. */
+    @Synchronized fun moved(now: Long) {
+        val sessions = sessions()
+        if (sessions.none { now - it.lastMovedAt >= 60_000 }) return
+        saveSessions(sessions.map { it.copy(lastMovedAt = maxOf(it.lastMovedAt, now)) })
+    }
+    /**
+     * Opening the companion after the OS stopped the collector (ADR-020 §7): sessions past [LocationPolicy.MAX_SESSION_MS] end,
+     * the rest resume with their stationary clock restarted.
+     */
+    @Synchronized fun resumeSessions(now: Long = System.currentTimeMillis()) {
+        sessions().filter { SharingSessions.endReason(it.copy(lastMovedAt = now), now) == EndReason.MAX_LENGTH }.forEach { endSession(it.appId, EndReason.MAX_LENGTH.detail, now) }
+        val left = sessions()
+        if (left.isNotEmpty()) saveSessions(left.map { it.copy(lastMovedAt = now) })
+    }
+    /** A forced stop, recorded as `stopped` with `reason` (unlock_failed, storage_failed): every session ends. */
     @Synchronized fun stop(reason: String) {
-        if (!paused) record(ShareEvent.Kind.STOPPED, detail = reason)
-        check(prefs.edit().putBoolean("paused", true).commit())
+        if (sessions().isEmpty()) return
+        transaction { record(ShareEvent.Kind.STOPPED, detail = reason); saveSessions(emptyList()) }
     }
     var lastSync: Long
         get() = prefs.getLong("lastSync", 0)
@@ -79,21 +105,29 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
      */
     val expiredUser: String? get() = prefs.getString("expiredUser", null)
     val expired: Boolean get() = expiredUser != null
-    /** Records `expired` once and remembers `userId`, so pairing that account again keeps the history. */
+    /** Records `expired` once and remembers `userId`, so pairing that account again keeps the history. Every session ends. */
     @Synchronized fun markExpired(userId: String, detail: String = "") {
+        endAllSessions("grant")
         if (!expired) record(ShareEvent.Kind.EXPIRED, detail = detail)
         check(prefs.edit().putString("expiredUser", userId).commit())
     }
     /** Disabled on this phone, keyed by [NativeEntry.key]: a bare app id is location, `app/capability` another one. */
     @Synchronized fun blocked(): Set<String> = prefs.getStringSet("blocked", emptySet())!!.toSet()
-    /** `key` is a [NativeEntry.key]. Disabling one capability never touches another's grant, queue or pause. */
+    /**
+     * `key` is a [NativeEntry.key]. Disabling one capability never touches another's grant or queue. The app's session ends
+     * only when it has no enabled capability left (#668, the twin of iOS #677): turning off Run's location leaves a running
+     * session's heart rate alone, and never starts or resumes heart rate for a stopped Run.
+     */
     @Synchronized fun block(key: String) {
+        blockCapability(key)
+        val appId = key.substringBefore('/')
+        if (!SharingSessions.keepsSession(appId, apps(), entries(), blocked())) endSession(appId, "grant")
+    }
+    private fun blockCapability(key: String) {
         if ('/' in key) return blockEntry(key)
         val appId = key
         val wasBlocked = appId in blocked()
-        val next = blocked() + appId
-        // A disabled app is not "paused": re-enabling it starts sharing.
-        check(prefs.edit().putStringSet("blocked", next).putStringSet("pausedApps", pausedApps() - appId).commit())
+        check(prefs.edit().putStringSet("blocked", blocked() + appId).commit())
         val revoked = apps().find { it.id == appId }?.grantId
         transaction { db ->
             if (!wasBlocked) record(ShareEvent.Kind.DISABLED, appId)
@@ -108,7 +142,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
             }
         }
     }
-    /** A non-location capability: drops its grant from the heart-rate queue. Location's sessions record nothing here. */
+    /** A non-location capability: drops its grant from the heart-rate queue. The sharing timeline records nothing here. */
     private fun blockEntry(key: String) {
         val entry = entries().find { it.key == key }
         val wasBlocked = key in blocked()
@@ -127,25 +161,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
         }
     }
     @Synchronized fun unblock(key: String) { check(prefs.edit().putStringSet("blocked", blocked() - key).commit()) }
-    /** Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform copy are untouched, and resuming needs no new disclosure. */
-    @Synchronized fun pausedApps(): Set<String> = prefs.getStringSet("pausedApps", emptySet())!!.toSet()
-    /** Never rewrites the queue: points recorded before the pause were authorized when taken and still upload. */
-    @Synchronized fun pause(appId: String) {
-        if (appId in pausedApps()) return
-        record(ShareEvent.Kind.PAUSED, appId)
-        check(prefs.edit().putStringSet("pausedApps", pausedApps() + appId).commit())
-    }
-    @Synchronized fun resume(appId: String) {
-        if (appId !in pausedApps()) return
-        record(ShareEvent.Kind.RESUMED, appId)
-        check(prefs.edit().putStringSet("pausedApps", pausedApps() - appId).commit())
-    }
-    /** Apps that must not receive new fixes: revoked, or paused by the user. */
-    @Synchronized fun excluded(): Set<String> = blocked() + pausedApps()
     @Synchronized fun apps(): List<ConnectedApp> = parseApps(JSONArray(prefs.getString("apps", "[]")))
     /**
      * The `apps` array of `GET /native/me`, stored as received. A held grant that the server dropped or replaced
-     * (publisher change, disclosure revision, app-account deletion) is recorded as `grant_lost`.
+     * (publisher change, disclosure revision, app-account deletion) is recorded as `grant_lost`, and ends its session.
      */
     @Synchronized fun saveApps(apps: JSONArray) {
         val incoming = parseApps(apps)
@@ -155,7 +174,9 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
             for (old in previous) {
                 if (old.grantId == null || old.id in blocked) continue
                 val grant = incoming.find { it.id == old.id }?.grantId
-                if (grant != old.grantId) record(ShareEvent.Kind.GRANT_LOST, old.id, if (grant == null) "revoked" else "replaced")
+                if (grant == old.grantId) continue
+                record(ShareEvent.Kind.GRANT_LOST, old.id, if (grant == null) "revoked" else "replaced")
+                endSession(old.id, "grant")
             }
             // A grant back after `grant_lost`, for example after re-consent on another path.
             for (new in incoming) {
@@ -190,12 +211,12 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
 
     // Heart-rate queue (#634)
 
-    /** Re-filters recipients against current consent, Pause all and per-app pause before insert. */
+    /** Re-filters recipients against current consent and sessions before insert. */
     @Synchronized fun enqueueHeartRate(sample: HeartRateSample) {
         val entries = entries()
-        val allowed = HeartRatePolicy.recipients(entries, blocked(), pausedApps(), sample.at).toSet()
+        val allowed = HeartRatePolicy.recipients(entries, blocked(), sessionIds(), sample.at).toSet()
         val retained = sample.copy(grants = sample.grants.filter { it in allowed })
-        if (paused || expired || retained.grants.isEmpty()) return
+        if (expired || retained.grants.isEmpty()) return
         if (heartRateCount() >= HeartRatePolicy.MAX_QUEUE) {
             runCatching { record(ShareEvent.Kind.HEART_RATE_PROBLEM, detail = "queue_full") }
             throw HeartRateQueueFull()
@@ -235,9 +256,9 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
 
     @Synchronized fun enqueue(point: TrackPoint) {
         val apps = apps()
-        val allowed = LocationPolicy.recipients(apps, excluded(), point.at).toSet()
+        val allowed = LocationPolicy.recipients(apps, blocked(), sessionIds(), point.at).toSet()
         val retained = point.copy(grants = point.grants.filter { it in allowed })
-        if (paused || expired || retained.grants.isEmpty()) return
+        if (expired || retained.grants.isEmpty()) return
         if (count() >= LocationPolicy.MAX_QUEUE) {
             runCatching { record(ShareEvent.Kind.QUEUE_FULL) }
             error("Device storage queue is full. Connect to upload before resuming.")
@@ -357,11 +378,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "pas-native.db", 
     }
     private fun seed(now: Long, consentTime: Boolean, detail: String) {
         if (expired) return // the expired device's grants share nothing
-        val blocked = blocked(); val paused = pausedApps()
+        val blocked = blocked(); val sessions = sessionIds()
         val granted = apps().filter { it.grantId != null && it.id !in blocked }
         granted.forEach { record(ShareEvent.Kind.ENABLED, it.id, detail, if (consentTime) minOf(it.consentAt, now) else now) }
-        granted.filter { it.id in paused }.forEach { record(ShareEvent.Kind.PAUSED, it.id, detail, now) }
-        if (this.paused) record(ShareEvent.Kind.PAUSED_ALL, detail = detail, at = now)
+        granted.filter { it.id in sessions }.forEach { record(ShareEvent.Kind.SESSION_STARTED, it.id, detail, now) }
     }
     private fun <T> transaction(body: (SQLiteDatabase) -> T): T {
         val db = writableDatabase

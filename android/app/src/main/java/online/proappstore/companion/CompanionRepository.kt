@@ -16,14 +16,14 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     fun token(): String? = try { secure.read().optString("token").takeIf { it.isNotBlank() } } catch (_: Exception) {
         local.stop("unlock_failed"); local.message = "The device connection could not be unlocked. Reconnect your account."; null
     }
-    /** Grants that may receive a fix taken now: held, consented, and neither revoked nor paused on this phone. */
-    fun recipients(): List<String> = LocationPolicy.recipients(local.apps(), local.excluded(), System.currentTimeMillis())
-    /** Whether collection should run, permissions aside: connected, not paused, and some app would receive a fix. */
-    fun collecting(): Boolean = token() != null && !local.paused && recipients().isNotEmpty()
-    /** Heart-rate grants that may receive a reading taken now (#634). */
-    fun heartRateRecipients(): List<String> = HeartRatePolicy.recipients(local.entries(), local.blocked(), local.pausedApps(), System.currentTimeMillis())
-    /** Whether the strap should be connected, permissions aside: connected account, not paused, a sensor, a grant, queue room. */
-    fun collectingHeartRate(): Boolean = token() != null && !local.paused && local.heartRateSensor != null &&
+    /** Grants that may receive a fix taken now: held, consented, not disabled on this phone, and with a session (ADR-020). */
+    fun recipients(): List<String> = LocationPolicy.recipients(local.apps(), local.blocked(), local.sessionIds(), System.currentTimeMillis())
+    /** Whether location collection should run, permissions aside: connected, and some app with a session would receive a fix. */
+    fun collecting(): Boolean = token() != null && recipients().isNotEmpty()
+    /** Heart-rate grants that may receive a reading taken now (#634): only apps with a session. */
+    fun heartRateRecipients(): List<String> = HeartRatePolicy.recipients(local.entries(), local.blocked(), local.sessionIds(), System.currentTimeMillis())
+    /** Whether the strap should be connected, permissions aside: connected account, a sensor, a grant with a session, queue room. */
+    fun collectingHeartRate(): Boolean = token() != null && local.heartRateSensor != null &&
         heartRateRecipients().isNotEmpty() && local.heartRateCount() < HeartRatePolicy.MAX_QUEUE
     fun pairingCode(): String = try { secure.read().optString("pairId").take(8).uppercase() } catch (_: Exception) { "" }
     suspend fun startSignIn(): String = withContext(Dispatchers.IO) { operations.withLock {
@@ -69,8 +69,8 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         if (app.id in local.blocked()) device("DELETE", "/native/apps/${app.id}/location", credential)
         device("PUT", "/native/apps/${app.id}/location", credential, JSONObject().put("version", app.version).put("enabled", true))
         updateMe(device("GET", "/native/me", credential))
-        local.unblock(app.id); local.record(ShareEvent.Kind.ENABLED, app.id)
-        local.resume(app.id); local.paused = false; local.message = ""
+        // Enabling grants; it never starts a session (ADR-020 §2). Start on the row does.
+        local.unblock(app.id); local.record(ShareEvent.Kind.ENABLED, app.id); local.message = ""
     } }
     suspend fun disable(app: ConnectedApp) = withContext(Dispatchers.IO) {
         local.block(app.id) // Immediate, durable local stop even without network; recipient removed from the queue.
@@ -90,7 +90,7 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
         sync()
     }
     suspend fun disconnect() = withContext(Dispatchers.IO) { operations.withLock {
-        local.paused = true
+        local.endAllSessions("grant")
         token()?.let { credential ->
             try { api.request("DELETE", "/native/device", credential) } catch (e: ApiFailure) { if (e.status != 401) throw e }
         }

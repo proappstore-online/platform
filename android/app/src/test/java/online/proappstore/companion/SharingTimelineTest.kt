@@ -12,7 +12,7 @@ class SharingTimelineTest {
 
     @Test fun pauseAndResumeInsideAClosedSession() {
         val t = 10 * 60 * min
-        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, t), e(PAUSED, t + 20 * min), e(RESUMED, t + 30 * min), e(DISABLED, t + 60 * min)), "run")
+        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, t), e(SESSION_STARTED, t), e(PAUSED, t + 20 * min), e(RESUMED, t + 30 * min), e(DISABLED, t + 60 * min)), "run")
         assertEquals(1, sessions.size)
         assertEquals(t + 60 * min, sessions[0].end)
         assertEquals(DISABLED, sessions[0].endKind)
@@ -22,14 +22,14 @@ class SharingTimelineTest {
 
     @Test fun pauseAllOverlappingAnAppPauseIsNotDoubleSubtracted() {
         val sessions = SharingTimeline.sessions(listOf(
-            e(ENABLED, 0), e(PAUSED, 10 * min), e(PAUSED_ALL, 15 * min, null), e(RESUMED, 20 * min), e(RESUMED_ALL, 30 * min, null), e(DISABLED, 60 * min)), "run")
+            e(ENABLED, 0), e(SESSION_STARTED, 0), e(PAUSED, 10 * min), e(PAUSED_ALL, 15 * min, null), e(RESUMED, 20 * min), e(RESUMED_ALL, 30 * min, null), e(DISABLED, 60 * min)), "run")
         assertEquals(listOf(InactiveCause.You, InactiveCause.All), sessions[0].inactive.map { it.cause })
         assertEquals(40 * min, sessions[0].sharedMs(0..100 * min))
     }
 
     @Test fun aSessionAcrossMidnightCountsOnlyTodaysPart() {
         val midnight = 24 * 60 * min
-        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, midnight - 30 * min)), "run")
+        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, midnight - 30 * min), e(SESSION_STARTED, midnight - 30 * min)), "run")
         assertNull(sessions[0].end)
         assertEquals(45 * min, sessions[0].sharedMs(midnight..midnight + 45 * min))
         assertEquals(30 * min - 1, sessions[0].sharedMs(midnight - 60 * min..midnight - 1))
@@ -44,14 +44,14 @@ class SharingTimelineTest {
 
     @Test fun appResumeUnderPauseAllStaysInactiveUntilResumeAll() {
         val sessions = SharingTimeline.sessions(listOf(
-            e(ENABLED, 0), e(PAUSED, 10 * min), e(PAUSED_ALL, 20 * min, null), e(RESUMED, 30 * min), e(RESUMED_ALL, 40 * min, null)), "run")
+            e(ENABLED, 0), e(SESSION_STARTED, 0), e(PAUSED, 10 * min), e(PAUSED_ALL, 20 * min, null), e(RESUMED, 30 * min), e(RESUMED_ALL, 40 * min, null)), "run")
         assertEquals(listOf(InactiveInterval(10 * min, 20 * min, InactiveCause.You), InactiveInterval(20 * min, 40 * min, InactiveCause.All)), sessions[0].inactive)
         assertEquals(20 * min, sessions[0].sharedMs(0..50 * min))
     }
 
     @Test fun forcedStopAndOtherAppsEventsAndHistoryCleared() {
         val sessions = SharingTimeline.sessions(listOf(
-            e(ENABLED, 0), e(PAUSED, 5 * min, "ski"), e(STOPPED, 10 * min, null, "signed_out"), e(RESUMED_ALL, 20 * min, null), e(HISTORY_CLEARED, 30 * min, null)), "run")
+            e(ENABLED, 0), e(SESSION_STARTED, 0), e(PAUSED, 5 * min, "ski"), e(STOPPED, 10 * min, null, "signed_out"), e(RESUMED_ALL, 20 * min, null), e(HISTORY_CLEARED, 30 * min, null)), "run")
         assertEquals(listOf(InactiveInterval(10 * min, 20 * min, InactiveCause.System("signed_out"))), sessions[0].inactive)
         assertEquals(HISTORY_CLEARED, sessions[0].endKind)
     }
@@ -72,9 +72,35 @@ class SharingTimelineTest {
     }
 
     @Test fun periodsCutASessionIntoSharedAndInactiveStretches() {
-        val session = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(PAUSED, 10 * min), e(RESUMED, 20 * min)), "run")[0]
+        val session = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(SESSION_STARTED, 0), e(PAUSED, 10 * min), e(RESUMED, 20 * min)), "run")[0]
         assertEquals(listOf(SharingPeriod(0, 10 * min, null), SharingPeriod(10 * min, 20 * min, InactiveCause.You), SharingPeriod(20 * min, 30 * min, null)),
             session.periods(30 * min))
+    }
+
+    /** ADR-020: an enabled app shares only inside a collection session; each gap says why. */
+    @Test fun sharingIsInactiveOutsideCollectionSessions() {
+        val sessions = SharingTimeline.sessions(listOf(
+            e(ENABLED, 0), e(SESSION_STARTED, 10 * min), e(SESSION_ENDED, 40 * min, detail = "stationary"), e(SESSION_STARTED, 50 * min)), "run")
+        assertEquals(listOf(InactiveInterval(0, 10 * min, InactiveCause.Stopped("")), InactiveInterval(40 * min, 50 * min, InactiveCause.Stopped("stationary"))),
+            sessions[0].inactive)
+        assertEquals(40 * min, sessions[0].sharedMs(0..60 * min))
+        assertEquals("enabled, never started", 0L, SharingTimeline.sessions(listOf(e(ENABLED, 0)), "run")[0].sharedMs(0..60 * min))
+    }
+
+    /** A Pause all left open by older history (the pref defaulted to paused) ends at the first session start. */
+    @Test fun aSessionStartEndsALegacyPauseAll() {
+        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(PAUSED_ALL, 5 * min, null), e(SESSION_STARTED, 10 * min)), "run")
+        assertEquals(listOf(InactiveCause.Stopped(""), InactiveCause.All), sessions[0].inactive.map { it.cause })
+        assertEquals(10 * min, sessions[0].sharedMs(0..20 * min))
+    }
+
+    /** Location turned off mid-session ends the consent period; the session's end is recorded after it and changes nothing. */
+    @Test fun disablingDuringASessionEndsTheConsentPeriodOnce() {
+        val sessions = SharingTimeline.sessions(listOf(e(ENABLED, 0), e(SESSION_STARTED, 0), e(DISABLED, 20 * min), e(SESSION_ENDED, 20 * min, detail = "grant"),
+            e(ENABLED, 30 * min)), "run")
+        assertEquals(listOf(20 * min, null), sessions.map { it.end })
+        assertEquals(20 * min, sessions[0].sharedMs(0..60 * min))
+        assertEquals("re-enabling does not start sharing", listOf(InactiveCause.Stopped("")), sessions[1].inactive.map { it.cause })
     }
 
     @Test fun todayRunsFromLocalMidnight() {

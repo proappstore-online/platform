@@ -11,6 +11,8 @@ sealed class InactiveCause {
     data object All : InactiveCause()
     /** A forced stop: `stopped` detail (unlock_failed, signed_out, storage_failed). */
     data class System(val detail: String) : InactiveCause()
+    /** No collection session (ADR-020): `session_ended` detail, or "" before the first Start. */
+    data class Stopped(val detail: String) : InactiveCause()
 }
 
 data class InactiveInterval(val start: Long, val end: Long?, val cause: InactiveCause)
@@ -20,7 +22,7 @@ data class SharingPeriod(val start: Long, val end: Long, val cause: InactiveCaus
 
 /**
  * One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost`, `history_cleared` or `expired`
- * (open if none). This is *intended* sharing: permission loss or Android stopping the service can still leave gaps in
+ * (open if none). Outside a collection session (ADR-020: `session_started` to `session_ended`) it is inactive. This is *intended* sharing: permission loss or Android stopping the service can still leave gaps in
  * the points, and the track shows those (ADR-015: a gap must remain a gap). Ported from iOS SharingTimeline.swift.
  */
 data class SharingSession(val start: Long, val end: Long?, val endKind: ShareEvent.Kind?, val inactive: List<InactiveInterval>) {
@@ -50,10 +52,12 @@ object SharingTimeline {
     /** Sessions for `appId`, oldest first, from events in `(at, id)` order. */
     fun sessions(events: List<ShareEvent>, appId: String): List<SharingSession> {
         val sessions = mutableListOf<SharingSession>()
-        var appPaused = false
-        var global: InactiveCause? = null // Pause all or a forced stop, until `resumed_all`
+        var appPaused = false // the retired per-app pause, in older history
+        var global: InactiveCause? = null // Pause all or a forced stop, until `resumed_all` or a session start
+        var live = false // a collection session is running
+        var stopped: String? = null // why there is no session; null in one
 
-        fun cause(): InactiveCause? = global ?: if (appPaused) InactiveCause.You else null
+        fun cause(): InactiveCause? = global ?: stopped?.let { InactiveCause.Stopped(it) } ?: if (appPaused) InactiveCause.You else null
         /** Closes the open session's open interval at `at`, dropping it if it is empty. */
         fun closeInterval(session: SharingSession, at: Long): SharingSession {
             val last = session.inactive.lastOrNull()
@@ -84,7 +88,8 @@ object SharingTimeline {
                     // A start inside an open session (a grant restored by re-enabling) continues it.
                     if (sessions.lastOrNull()?.end == null && sessions.isNotEmpty()) continue
                     appPaused = false
-                    sessions += SharingSession(event.at, null, null, global?.let { listOf(InactiveInterval(event.at, null, it)) } ?: emptyList())
+                    stopped = if (live) null else ""
+                    sessions += SharingSession(event.at, null, null, cause()?.let { listOf(InactiveInterval(event.at, null, it)) } ?: emptyList())
                 }
                 ShareEvent.Kind.DISABLED, ShareEvent.Kind.GRANT_LOST -> if (mine) { end(event.at, event.kind); appPaused = false }
                 ShareEvent.Kind.HISTORY_CLEARED, ShareEvent.Kind.EXPIRED -> if (device) end(event.at, event.kind)
@@ -93,6 +98,9 @@ object SharingTimeline {
                 ShareEvent.Kind.PAUSED_ALL -> if (device) { if (global == null) global = InactiveCause.All; transition(event.at, old) }
                 ShareEvent.Kind.STOPPED -> if (device) { global = InactiveCause.System(event.detail); transition(event.at, old) }
                 ShareEvent.Kind.RESUMED_ALL -> if (device) { global = null; transition(event.at, old) }
+                // A session start also ends a Pause all or forced stop left open by older history: sessions replaced both.
+                ShareEvent.Kind.SESSION_STARTED -> if (mine) { live = true; stopped = null; global = null; appPaused = false; transition(event.at, old) }
+                ShareEvent.Kind.SESSION_ENDED -> if (mine) { live = false; stopped = event.detail; transition(event.at, old) }
                 else -> Unit
             }
         }

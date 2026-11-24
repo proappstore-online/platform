@@ -5,17 +5,19 @@ import org.junit.Test
 
 class LocationPolicyTest {
     private val app = ConnectedApp("ski", "Ski", "Routes", "Disclosure", "1", "grant-one", 1000)
+    private val both = setOf("ski", "run")
     @Test fun recipientsRequireConsentAndRespectLocalRevocation() {
-        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app), emptySet(), 999))
-        assertEquals(listOf("grant-one"), LocationPolicy.recipients(listOf(app), emptySet(), 1000))
-        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app), setOf("ski"), 1001))
-        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app.copy(grantId = null)), emptySet(), 1001))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app), emptySet(), both, 999))
+        assertEquals(listOf("grant-one"), LocationPolicy.recipients(listOf(app), emptySet(), both, 1000))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app), setOf("ski"), both, 1001))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app.copy(grantId = null)), emptySet(), both, 1001))
     }
-    /** #626: with every granted app paused or revoked there is no recipient, which is the condition LocationService stops on. */
+    /** With every granted app revoked or without a session there is no recipient, which is the condition LocationService stops on. */
     @Test fun noRecipientsWhenEveryGrantedAppIsExcluded() {
         val run = ConnectedApp("run", "Run", "Routes", "Disclosure", "1", "grant-two", 1000)
-        assertEquals(listOf("grant-two"), LocationPolicy.recipients(listOf(app, run), setOf("ski"), 2000))
-        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app, run), setOf("ski", "run"), 2000))
+        assertEquals(listOf("grant-two"), LocationPolicy.recipients(listOf(app, run), setOf("ski"), both, 2000))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app, run), setOf("ski", "run"), both, 2000))
+        assertEquals(emptyList<String>(), LocationPolicy.recipients(listOf(app, run), setOf("ski"), setOf("ski"), 2000))
     }
     @Test fun gpsMustBeFreshAccurateAndHaveRecipients() {
         val p = TrackPoint("point", 20_000, -36.4, 148.4, 5f, listOf("grant-one"))

@@ -62,7 +62,7 @@ These are feasibility precedents, not transferable approvals. Neither establishe
 - Finish Google Play declarations, privacy policy, Data Safety, app signing, account-deletion requirements and target-API checks.
 - No developer console, arbitrary code loading, covert tracking, advertising use of location or blanket grants to future apps.
 
-No policy found requires opening PAS daily or manually starting every ride. That does not waive background review or permit collection beyond the explicitly enabled automatic feature.
+Collection now runs only in sessions the user starts in the companion, which end on Stop, after 30 minutes without movement or after 12 hours ([ADR-020](./adr/020-native-collection-sessions.md)). That meets Play's rule that a location foreground service continue a user action and stop when the use is complete, and removes `ACCESS_BACKGROUND_LOCATION` from the Android app.
 
 ## Runtime acceptance is separate
 

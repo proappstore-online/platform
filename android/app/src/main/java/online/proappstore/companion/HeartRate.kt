@@ -61,9 +61,9 @@ class HeartRatePolicy {
         /** On-device history cap (#621's rule for points). */
         const val HISTORY_MAX_SAMPLES = 200_000
 
-        /** The heart-rate grants current at `at`: neither the entry is disabled nor its app paused (#626). */
-        fun recipients(entries: List<NativeEntry>, blocked: Set<String>, pausedApps: Set<String>, at: Long): List<String> = entries
-            .filter { it.capability == HeartRate.CAPABILITY && it.key !in blocked && it.appId !in pausedApps && at >= it.consentAt }
+        /** The heart-rate grants current at `at`: the entry is not disabled and its app has a session (ADR-020). No session, no reads. */
+        fun recipients(entries: List<NativeEntry>, blocked: Set<String>, sessions: Set<String>, at: Long): List<String> = entries
+            .filter { it.capability == HeartRate.CAPABILITY && it.key !in blocked && it.appId in sessions && at >= it.consentAt }
             .mapNotNull { it.grantId }
     }
 }
@@ -107,15 +107,11 @@ data class CollectorTypes(val location: Boolean, val connectedDevice: Boolean) {
         fun select(locationPermitted: Boolean, locationActive: Boolean, bluetoothPermitted: Boolean, heartRateActive: Boolean) =
             CollectorTypes(locationPermitted && locationActive, bluetoothPermitted && heartRateActive)
 
-        /** "Sharing location and heart rate with Run", from the apps each active type shares with. */
-        fun notificationText(locationApps: List<String>, heartRateApps: List<String>): String {
-            val loc = locationApps.distinct(); val hr = heartRateApps.distinct()
-            return when {
-                loc.isNotEmpty() && hr.isNotEmpty() && loc.toSet() == hr.toSet() -> "Sharing location and heart rate with ${loc.joinToString()}"
-                loc.isNotEmpty() && hr.isNotEmpty() -> "Sharing location with ${loc.joinToString()} and heart rate with ${hr.joinToString()}"
-                hr.isNotEmpty() -> "Sharing heart rate with ${hr.joinToString()}"
-                else -> "Sharing location with ${loc.joinToString()}"
-            }
+        /** The ongoing notification's title (ADR-020 §5): what is shared. Its text names the apps ([SharingSessions.summary]). */
+        fun notificationTitle(t: CollectorTypes): String = when {
+            t.location && t.connectedDevice -> "ProAppStore is sharing your location and heart rate"
+            t.connectedDevice -> "ProAppStore is sharing your heart rate"
+            else -> "ProAppStore is sharing your location"
         }
     }
 }

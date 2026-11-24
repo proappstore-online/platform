@@ -26,17 +26,16 @@ import java.util.Locale
 
 /** One app row's state chip. Pure, so every combination is table-tested. Ported from iOS SharingDashboardView.swift. */
 enum class SharingState(val label: String) {
-    SHARING("Sharing"), PAUSED("Paused"), PAUSED_ALL("Paused (all)"), OFF("Off"), TURNING_OFF("Turning off…"), NOT_RECORDING("Not recording"),
+    SHARING("Sharing"), STOPPED("Stopped"), OFF("Off"), TURNING_OFF("Turning off…"), NOT_RECORDING("Not recording"),
     /** The device connection expired (#652); set by [CompanionState.stateOf], not [of]. */
     EXPIRED("Connection expired");
 
     companion object {
-        /** `blocked` with a grant still held means the server `DELETE` has not gone through yet. */
-        fun of(granted: Boolean, blocked: Boolean, appPaused: Boolean, pausedAll: Boolean, running: Boolean): SharingState = when {
+        /** `blocked` with a grant still held means the server `DELETE` has not gone through yet. `session`: ADR-020's, started by the user. */
+        fun of(granted: Boolean, blocked: Boolean, session: Boolean, running: Boolean): SharingState = when {
             blocked -> if (granted) TURNING_OFF else OFF
             !granted -> OFF
-            pausedAll -> PAUSED_ALL
-            appPaused -> PAUSED
+            !session -> STOPPED
             running -> SHARING
             else -> NOT_RECORDING
         }
@@ -46,16 +45,16 @@ enum class SharingState(val label: String) {
 internal val Orange = Color(0xFFEA580C)
 @Composable internal fun SharingState.color(): Color = when (this) {
     SharingState.SHARING -> Color(0xFF16A34A)
-    SharingState.PAUSED, SharingState.PAUSED_ALL, SharingState.TURNING_OFF -> Orange
-    SharingState.OFF, SharingState.EXPIRED -> MaterialTheme.colorScheme.onSurfaceVariant
+    SharingState.TURNING_OFF -> Orange
+    SharingState.STOPPED, SharingState.OFF, SharingState.EXPIRED -> MaterialTheme.colorScheme.onSurfaceVariant
     SharingState.NOT_RECORDING -> MaterialTheme.colorScheme.error
 }
 
 /** An expired connection's grants are gone on the server: nothing is enabled until the user re-enables it. */
 internal fun CompanionState.enabled(app: ConnectedApp) = !expired && app.grantId != null && app.id !in blocked
-internal fun CompanionState.sharing(app: ConnectedApp) = enabled(app) && app.id !in pausedApps && !paused
+internal fun CompanionState.sharing(app: ConnectedApp) = enabled(app) && app.id in sessions
 internal fun CompanionState.stateOf(app: ConnectedApp) = if (expired) SharingState.EXPIRED
-    else SharingState.of(app.grantId != null, app.id in blocked, app.id in pausedApps, paused, running)
+    else SharingState.of(app.grantId != null, app.id in blocked, app.id in sessions, running)
 internal fun CompanionState.sharedToday(appId: String): Long {
     val today = SharingTimeline.today(now)
     return SharingTimeline.sessions(events, appId).sumOf { it.sharedMs(today) }
@@ -77,6 +76,14 @@ internal object Format {
         null -> "shared"
         InactiveCause.You -> "paused by you"
         InactiveCause.All -> "Pause all"
+        is InactiveCause.Stopped -> when (cause.detail) {
+            "" -> "not started"
+            "user", "all", "notification" -> "stopped by you"
+            "stationary" -> "stopped: no movement"
+            "max" -> "stopped: 12 hours"
+            "permission" -> "stopped: permission"
+            else -> "stopped"
+        }
         is InactiveCause.System -> "stopped: " + (mapOf("signed_out" to "signed out", "storage_failed" to "storage", "unlock_failed" to "unlock")[cause.detail] ?: cause.detail)
     }
     fun end(kind: ShareEvent.Kind): String = when (kind) {
@@ -86,7 +93,7 @@ internal object Format {
         ShareEvent.Kind.EXPIRED -> "connection expired"
         else -> kind.raw
     }
-    val permission = mapOf("" to "Not set", "denied" to "Not allowed", "approximate" to "Approximate only", "whenInUse" to "While using the app", "always" to "All the time")
+    val permission = mapOf("" to "Not set", "denied" to "Not allowed", "approximate" to "Approximate only", "whenInUse" to "Precise")
 }
 
 @Composable
@@ -109,7 +116,7 @@ private fun Chip(state: SharingState) {
 @Composable
 internal fun SharingDashboard(
     state: CompanionState, tracks: List<MapTrack>, connect: () -> Unit, askConsent: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit,
-    pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit, pause: () -> Unit, resume: () -> Unit,
+    startApp: (ConnectedApp) -> Unit, stopApp: (ConnectedApp) -> Unit, stopAll: () -> Unit,
     permissions: () -> Unit, sync: () -> Unit, openApp: (ConnectedApp) -> Unit,
     showApp: (ConnectedApp) -> Unit, showActivity: () -> Unit, showMap: () -> Unit, reconnect: () -> Unit = {},
     heartRate: HeartRateHooks = HeartRateHooks(),
@@ -131,9 +138,9 @@ internal fun SharingDashboard(
             val granted = state.apps.filter { it.grantId != null }
             val available = state.apps.filter { it.grantId == null && it.id !in state.blocked && !state.expired }
             if (granted.isNotEmpty()) Overview(state, granted, tracks, showMap)
-            if (!state.expired) Header(state, pause, resume, permissions, sync)
+            if (!state.expired) Header(state, stopAll, permissions, sync)
             if (state.apps.isEmpty() && !state.expired) Text("No supported native features are available for your apps yet.")
-            granted.forEach { AppRow(state, it, disable, pauseApp, resumeApp, openApp, showApp, heartRate) }
+            granted.forEach { AppRow(state, it, disable, startApp, stopApp, openApp, showApp, heartRate) }
             if (available.isNotEmpty()) {
                 Text("Available", style = MaterialTheme.typography.titleLarge)
                 available.forEach { app ->
@@ -145,7 +152,7 @@ internal fun SharingDashboard(
                                 TextButton(onClick = { askConsent(app) }, enabled = !state.busy) { Text("Enable") }
                                 TextButton(onClick = { openApp(app) }) { Text("Open ${app.name}") }
                             }
-                            HeartRateLines(state, app, heartRate)
+                            HeartRateLines(state, app, heartRate, stopApp)
                         }
                     }
                 }
@@ -186,20 +193,20 @@ private fun Overview(state: CompanionState, granted: List<ConnectedApp>, tracks:
 }
 
 @Composable
-private fun Header(state: CompanionState, pause: () -> Unit, resume: () -> Unit, permissions: () -> Unit, sync: () -> Unit) {
+private fun Header(state: CompanionState, stopAll: () -> Unit, permissions: () -> Unit, sync: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val enabledApps = state.apps.filter { state.enabled(it) }
             Text(when {
-                state.paused -> "Location paused"
-                enabledApps.isNotEmpty() && enabledApps.all { it.id in state.pausedApps } -> "All apps paused"
+                state.sessions.isEmpty() -> "Not sharing location"
                 !state.permissions -> "Location permission needed"
                 state.running -> "Location sharing is on"
                 else -> "Location is not running"
             }, style = MaterialTheme.typography.titleLarge)
+            // ADR-020: sharing runs only in sessions started with Start on an app; Stop all ends every one.
+            if (state.sessions.isEmpty()) Text("Tap Start on an app to share while you record. Sharing stops when you tap Stop, after 30 minutes without moving, or after 12 hours.",
+                style = MaterialTheme.typography.bodySmall)
             if (!state.permissions) Button(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
-            else if (state.paused) Button(onClick = resume, enabled = !state.busy && enabledApps.isNotEmpty()) { Text("Resume all") }
-            else OutlinedButton(onClick = pause) { Text("Pause all") }
+            if (state.sessions.isNotEmpty()) OutlinedButton(onClick = stopAll) { Text("Stop all") }
             Text("${state.queued} updates waiting to sync", style = MaterialTheme.typography.bodyMedium)
             // The most severe state that applies. Retries happen with the recorder's 30 s loop, the 15 min upload job and on opening the app.
             val health = when {
@@ -217,8 +224,8 @@ private fun Header(state: CompanionState, pause: () -> Unit, resume: () -> Unit,
 
 @Composable
 private fun AppRow(
-    state: CompanionState, app: ConnectedApp, disable: (ConnectedApp) -> Unit, pauseApp: (ConnectedApp) -> Unit,
-    resumeApp: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit, showApp: (ConnectedApp) -> Unit, heartRate: HeartRateHooks,
+    state: CompanionState, app: ConnectedApp, disable: (ConnectedApp) -> Unit, startApp: (ConnectedApp) -> Unit,
+    stopApp: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit, showApp: (ConnectedApp) -> Unit, heartRate: HeartRateHooks,
 ) {
     val chip = state.stateOf(app)
     Card(Modifier.fillMaxWidth()) {
@@ -234,30 +241,37 @@ private fun AppRow(
             Labeled("Shared today", Format.duration(state.sharedToday(app.id)))
             Labeled("Last upload", state.lastUploadByApp[app.id]?.let { Format.relative(it, state.now) } ?: "None yet")
             Labeled("Waiting to upload", "${state.pendingByApp[app.id] ?: 0}")
+            state.sessions[app.id]?.let { Labeled("Sharing for", Format.duration(state.now - it.startedAt)) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (state.enabled(app)) {
-                    if (app.id in state.pausedApps) Button(onClick = { resumeApp(app) }, enabled = !state.paused) { Text("Resume") }
-                    else OutlinedButton(onClick = { pauseApp(app) }) { Text("Pause") }
-                }
+                if (state.enabled(app)) StartStop(state, app, startApp, stopApp)
                 TextButton(onClick = { openApp(app) }) { Text("Open ${app.name}") }
                 Spacer(Modifier.weight(1f))
-                // Not a one-tap button beside Pause: turning off deletes the app's platform copy.
+                // Not a one-tap button beside Stop: turning off deletes the app's platform copy.
                 if (state.enabled(app)) TurnOffMenu(app, state.busy, disable)
             }
-            if (state.paused && state.enabled(app) && app.id in state.pausedApps) Text("All sharing is paused. Resume all to continue.", style = MaterialTheme.typography.bodySmall)
-            HeartRateLines(state, app, heartRate)
+            HeartRateLines(state, app, heartRate, stopApp)
         }
     }
+}
+
+/** ADR-020: Start, or Stop while the app has a session. Stop never touches the grant; Start needs no new disclosure. */
+@Composable
+private fun StartStop(state: CompanionState, app: ConnectedApp, startApp: (ConnectedApp) -> Unit, stopApp: (ConnectedApp) -> Unit) {
+    if (app.id in state.sessions) OutlinedButton(onClick = { stopApp(app) }) { Text("Stop") }
+    else Button(onClick = { startApp(app) }, enabled = !state.busy) { Text("Start") }
 }
 
 /** A non-location entry is on: granted, not disabled, connection not expired. */
 internal fun CompanionState.enabled(entry: NativeEntry) = !expired && entry.grantId != null && entry.key !in blocked
 
-/** The heart-rate line's state text (#634). Pure, so it is table-tested; the same wording as iOS. */
+/** The app's location is on, which heart rate needs: a session starts only with location (ADR-020 decision 11). */
+internal fun CompanionState.locationEnabled(appId: String) = apps.any { it.id == appId && enabled(it) }
+
+/** The heart-rate line's state text (#634). Pure, so it is table-tested. */
 internal fun CompanionState.heartRateState(entry: NativeEntry): String = when {
     entry.key in blocked -> if (entry.grantId != null) "Turning off…" else "Off"
-    !enabled(entry) -> "Off"
-    paused || entry.appId in pausedApps -> "Paused"
+    !enabled(entry) -> if (locationEnabled(entry.appId)) "Off" else "Off · turn on location for ${entry.appName} first"
+    entry.appId !in sessions -> if (locationEnabled(entry.appId)) "Not sharing · tap Start" else "Not sharing · turn on location for ${entry.appName} to start"
     !heartRateSensor -> "No sensor chosen"
     bluetooth == "unauthorized" -> "Bluetooth permission needed"
     bluetooth == "off" -> "Bluetooth is off"
@@ -266,16 +280,23 @@ internal fun CompanionState.heartRateState(entry: NativeEntry): String = when {
         heartRateLastUpload.takeIf { it > 0 }?.let { "uploaded ${Format.relative(it, now)}" }).joinToString(" · ")
 }
 
-/** Run's heart rate under its row: Enable, Choose sensor, state, the control room's figures, Forget sensor, Turn off. */
+/**
+ * Run's heart rate under its row: Enable, Choose sensor, state, the control room's figures, Forget sensor, Turn off. Enable
+ * is offered only once the app's location is on: heart rate is shared during a session, and a session needs location.
+ */
 @Composable
-private fun HeartRateLines(state: CompanionState, app: ConnectedApp, hooks: HeartRateHooks) {
+private fun HeartRateLines(state: CompanionState, app: ConnectedApp, hooks: HeartRateHooks, stopApp: (ConnectedApp) -> Unit) {
     state.entries.filter { it.appId == app.id && it.capability == HeartRate.CAPABILITY }.forEach { entry ->
         HorizontalDivider()
         Labeled("Heart rate", state.heartRateState(entry))
         if (!state.enabled(entry)) {
-            if (entry.key !in state.blocked || entry.grantId == null) TextButton(onClick = { hooks.askConsent(entry) }, enabled = !state.busy && !state.expired) { Text("Enable heart rate") }
+            if ((entry.key !in state.blocked || entry.grantId == null) && state.locationEnabled(app.id)) {
+                TextButton(onClick = { hooks.askConsent(entry) }, enabled = !state.busy && !state.expired) { Text("Enable heart rate") }
+            }
             return@forEach
         }
+        // Location turned off during a session leaves heart rate running (#668): its Stop must stay reachable here.
+        if (app.id in state.sessions && !state.enabled(app)) OutlinedButton(onClick = { stopApp(app) }) { Text("Stop") }
         Labeled("Heart rate waiting to upload", "${state.heartRateQueued}")
         Labeled("Heart rate last upload", state.heartRateLastUpload.takeIf { it > 0 }?.let { Format.relative(it, state.now) } ?: "None yet")
         Labeled("Last reading", state.lastHeartRateByApp[entry.appId]?.let { "${it.bpm} bpm, ${Format.relative(it.at, state.now)}" } ?: "None yet")
@@ -343,8 +364,8 @@ private fun DeviceCard(state: CompanionState, permissions: () -> Unit) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Labeled("Location permission", Format.permission[state.permission] ?: state.permission)
             if (state.permission == "approximate") Text("Approximate location never records routes. Choose Precise location.", style = MaterialTheme.typography.bodySmall, color = Orange)
-            if (state.permission != "always") {
-                Text("Recording with the screen off needs precise location, allowed all the time.", style = MaterialTheme.typography.bodySmall)
+            if (state.permission != "whenInUse") {
+                Text("Sharing needs precise location.", style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = permissions, enabled = !state.busy) { Text("Set up location") }
             }
             Labeled("Location services", if (state.locationOn) "On" else "Off")
@@ -352,8 +373,6 @@ private fun DeviceCard(state: CompanionState, permissions: () -> Unit) {
             Labeled("Battery Saver", if (state.powerSave) "On" else "Off")
             if (state.powerSave) Text("Android may deliver fewer location updates.", style = MaterialTheme.typography.bodySmall, color = Orange)
             Labeled("Battery use", if (state.batteryOptimized) "Optimized" else "Unrestricted")
-            // Only matters for recording in the background, which needs "All the time".
-            if (state.batteryOptimized && state.permission == "always") Text("Android may stop recording in the background. Set ProAppStore's battery use to Unrestricted in Android settings.", style = MaterialTheme.typography.bodySmall, color = Orange)
             val fix = state.lastFix
             Labeled("Recorder", when {
                 state.running && fix != null -> "Recording. Last fix ${maxOf(0, (state.now - fix.at) / 1000)} s ago"
@@ -368,7 +387,7 @@ private fun DeviceCard(state: CompanionState, permissions: () -> Unit) {
 @Composable
 internal fun AppSharingScreen(
     state: CompanionState, app: ConnectedApp, loadTracks: suspend (List<String>, LongRange) -> Map<String, List<TrackSample>>,
-    pauseApp: (ConnectedApp) -> Unit, resumeApp: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit,
+    startApp: (ConnectedApp) -> Unit, stopApp: (ConnectedApp) -> Unit, disable: (ConnectedApp) -> Unit, openApp: (ConnectedApp) -> Unit,
     showActivity: () -> Unit, back: () -> Unit,
     loadHeartRate: suspend (String, LongRange) -> List<HeartRatePoint> = { _, _ -> emptyList() },
 ) {
@@ -410,8 +429,7 @@ internal fun AppSharingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(chip.label, style = MaterialTheme.typography.titleMedium, color = chip.color(), modifier = Modifier.weight(1f))
                     if (state.enabled(app)) {
-                        if (app.id in state.pausedApps) Button(onClick = { resumeApp(app) }, enabled = !state.paused) { Text("Resume") }
-                        else OutlinedButton(onClick = { pauseApp(app) }) { Text("Pause") }
+                        StartStop(state, app, startApp, stopApp)
                         TurnOffMenu(app, state.busy, disable)
                     }
                 }

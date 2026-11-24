@@ -1,6 +1,9 @@
 package online.proappstore.companion
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
@@ -15,7 +18,7 @@ class CompanionTest {
     @get:Rule val compose = createComposeRule()
     private val ski = ConnectedApp("ski", "Ski", "Record routes", "Ski receives precise location even when closed. You can revoke access.", "1", null)
     private fun screen(state: CompanionState, enable: (ConnectedApp) -> Unit = {}) {
-        compose.setContent { MaterialTheme { PasScreen(state, {}, enable, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}) } }
+        compose.setContent { MaterialTheme { PasScreen(state, {}, enable, {}, {}, {}, {}, {}, {}, {}, {}, {}) } }
     }
     @Test fun consumerLandingHasSignInWithoutDeveloperTools() {
         screen(CompanionState())
@@ -35,9 +38,9 @@ class CompanionTest {
         compose.onNodeWithText("Enable for Ski").performClick()
         assertEquals(1, granted)
     }
-    @Test fun offlineRevocationAndPausedStateAreVisible() {
-        screen(CompanionState(signedIn = true, apps = listOf(ski.copy(grantId = "old")), blocked = setOf("ski"), paused = true))
-        compose.onNodeWithText("Location paused").assertIsDisplayed()
+    @Test fun offlineRevocationAndNoSessionAreVisible() {
+        screen(CompanionState(signedIn = true, apps = listOf(ski.copy(grantId = "old")), blocked = setOf("ski")))
+        compose.onNodeWithText("Not sharing location").assertIsDisplayed()
         compose.onNodeWithText("Disabled on this phone. Server revocation will finish when connected.").performScrollTo().assertIsDisplayed()
         // #622: a grant still held while the server revocation is pending reads "Turning off…", as on iOS.
         compose.onNodeWithText("Turning off…", useUnmergedTree = true).assertExists()
@@ -49,7 +52,7 @@ class CompanionTest {
         fun app(id: String, grant: String) = JSONObject().put("id", id).put("name", id).put("purpose", "Routes").put("disclosure", "Disclosure").put("version", "1")
             .put("grant", JSONObject().put("id", grant).put("consent_at", 1))
         local.saveApps(JSONArray().put(app("ski", "ski-old")).put(app("rideshare", "ride-grant")))
-        local.paused = false
+        local.startSession("ski"); local.startSession("rideshare")
         local.enqueue(TrackPoint("point", 10, 1.0, 2.0, 5f, listOf("ski-old", "ride-grant")))
         local.close()
         val reopened = LocalStore(context)
@@ -65,7 +68,8 @@ class CompanionTest {
         assertEquals(0, reopened.count())
         reopened.clear(); reopened.close()
     }
-    // Per-app pause (#626, ported from #620)
+    // Collection sessions (ADR-020), which replaced per-app pause (#626) and Pause all
+    /** Ski and Run granted, each with a session, and an empty history. */
     private fun store(): LocalStore {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val local = LocalStore(context)
@@ -73,45 +77,76 @@ class CompanionTest {
         fun app(id: String, grant: String) = JSONObject().put("id", id).put("name", id).put("purpose", "Routes").put("disclosure", "Disclosure").put("version", "1")
             .put("grant", JSONObject().put("id", grant).put("consent_at", 1))
         local.saveApps(JSONArray().put(app("ski", "ski-g")).put(app("run", "run-g")))
-        local.paused = false
+        local.startSession("ski"); local.startSession("run")
         local.writableDatabase.delete("share_events", null, null) // start each history test from an empty record
         return local
     }
-    @Test fun pauseFiltersNewPointsToTheOtherRecipient() {
+    @Test fun stopFiltersNewPointsToTheOtherRecipient() {
         val local = store()
-        local.pause("ski")
+        local.endSession("ski", "user")
         local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
         assertEquals(listOf("run-g"), local.pending().single().grants)
-        local.pause("run")
+        local.endSession("run", "user")
         local.enqueue(TrackPoint("q", 11, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
         assertEquals(1, local.count())
+        assertEquals(listOf("session_ended:ski:user", "session_ended:run:user"), local.events().map { "${it.kind.raw}:${it.appId}:${it.detail}" })
         local.clear(); local.close()
     }
-    @Test fun pauseLeavesQueuedPointsUntouched() {
+    @Test fun stopLeavesQueuedPointsUntouched() {
         val local = store()
         local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
-        local.pause("ski")
+        local.endSession("ski", "user")
         assertEquals(listOf("ski-g", "run-g"), local.pending().single().grants)
         local.clear(); local.close()
     }
-    @Test fun resumeRestoresTaggingAndBlockClearsThePause() {
+    @Test fun startRestoresTaggingAndBlockEndsALocationOnlySession() {
         val local = store()
-        local.pause("ski"); local.resume("ski")
+        local.endSession("ski", "user"); local.startSession("ski"); local.startSession("ski")
+        assertEquals(listOf("session_ended", "session_started"), local.events().map { it.kind.raw })
         local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("ski-g", "run-g")))
         assertEquals(listOf("ski-g", "run-g"), local.pending().single().grants)
-        local.pause("ski"); local.block("ski")
-        assertEquals(emptySet<String>(), local.pausedApps())
-        assertEquals(setOf("ski"), local.excluded())
+        local.block("ski")
+        assertEquals(setOf("run"), local.sessionIds())
+        assertEquals("grant", local.events().last { it.kind == ShareEvent.Kind.SESSION_ENDED }.detail)
         local.clear(); local.close()
     }
-    @Test fun pausesSurviveReopenAndClearEmptiesThem() {
+    @Test fun sessionsSurviveReopenAndClearEmptiesThem() {
         val local = store()
-        local.pause("ski"); local.close()
+        local.endSession("ski", "user"); local.close()
         val reopened = LocalStore(ApplicationProvider.getApplicationContext())
-        assertEquals(setOf("ski"), reopened.pausedApps())
+        assertEquals(setOf("run"), reopened.sessionIds())
         reopened.clear()
-        assertEquals(emptySet<String>(), reopened.pausedApps())
+        assertEquals(emptySet<String>(), reopened.sessionIds())
         reopened.close()
+    }
+    /** First run after #668: Pause all and per-app pause are dropped, and no session is created. */
+    @Test fun theMigrationDropsThePausePrefs() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        LocalStore(context).apply { clear(); close() }
+        context.getSharedPreferences("native-settings", Context.MODE_PRIVATE).edit().putBoolean("paused", false).putStringSet("pausedApps", setOf("run")).commit()
+        val local = LocalStore(context)
+        val prefs = context.getSharedPreferences("native-settings", Context.MODE_PRIVATE)
+        assertFalse(prefs.contains("paused")); assertFalse(prefs.contains("pausedApps"))
+        assertEquals(emptyList<Session>(), local.sessions())
+        local.clear(); local.close()
+    }
+    /** ADR-020 §7: after the OS stopped the collector, an unexpired session resumes with a fresh stationary clock; one past 12 h ends. */
+    @Test fun resumingEndsSessionsPastTwelveHoursAndRestartsTheClock() {
+        val local = store()
+        local.endAllSessions("all")
+        val now = 100 * LocationPolicy.MAX_SESSION_MS
+        local.startSession("ski", now - LocationPolicy.MAX_SESSION_MS); local.startSession("run", now - 60 * 60_000)
+        local.resumeSessions(now)
+        assertEquals(listOf(Session("run", now - 60 * 60_000, now)), local.sessions())
+        assertEquals("max", local.events().last().detail)
+        local.clear(); local.close()
+    }
+    @Test fun aGrantLostOnTheServerEndsItsSession() {
+        val local = store()
+        local.saveApps(JSONArray().put(JSONObject().put("id", "run").put("name", "run").put("purpose", "Routes").put("disclosure", "D").put("version", "1")
+            .put("grant", JSONObject().put("id", "run-g").put("consent_at", 1))))
+        assertEquals(setOf("run"), local.sessionIds())
+        local.clear(); local.close()
     }
     @Test fun credentialRoundTripUsesKeystoreAndCanBeCleared() {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -128,10 +163,10 @@ class CompanionTest {
         var reconnects = 0
         val events = listOf(ShareEvent(1, 1, "ski", ShareEvent.Kind.ENABLED, ""), ShareEvent(2, 2, null, ShareEvent.Kind.EXPIRED, ""))
         compose.setContent { MaterialTheme { PasScreen(CompanionState(expired = true, apps = listOf(ski.copy(grantId = "old")), events = events),
-            {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, reconnect = { reconnects++ }) } }
+            {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, reconnect = { reconnects++ }) } }
         compose.onAllNodesWithText("Connection expired").onFirst().assertIsDisplayed()
         compose.onNodeWithText("Sign in to ProAppStore").assertDoesNotExist()
-        compose.onNodeWithText("Pause all").assertDoesNotExist()
+        compose.onNodeWithText("Stop all").assertDoesNotExist()
         compose.onAllNodesWithText("Connection expired", useUnmergedTree = true).assertCountEquals(2) // the card and Ski's chip
         compose.onNodeWithText("Reconnect").performClick()
         assertEquals(1, reconnects)
@@ -140,7 +175,7 @@ class CompanionTest {
     }
     @Test fun theExpiryNoteShowsInSettingsOnlyWhenSet() {
         var reconnects = 0
-        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, expiresInDays = 1), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, expiresInDays = 1), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
             initialTab = Tab.SETTINGS, reconnect = { reconnects++ }) } }
         compose.onNodeWithText("Connection renews when you reconnect — expires in 1 day").assertIsDisplayed()
         compose.onNodeWithText("Reconnect").performClick()
@@ -191,7 +226,8 @@ class CompanionTest {
             assertNull(repository.token())
             assertFalse("collection stops", repository.collecting())
             assertEquals("", local.message)
-            assertEquals(listOf(ShareEvent.Kind.EXPIRED), local.kinds())
+            assertEquals("an expiry ends every session", listOf(ShareEvent.Kind.SESSION_ENDED, ShareEvent.Kind.EXPIRED), local.kinds())
+            assertEquals(emptyList<Session>(), local.sessions())
             local.enqueue(TrackPoint("late", System.currentTimeMillis(), 1.0, 2.0, 5f, listOf("ski-g")))
             assertEquals(1, local.count())
             local.clear(); local.close()
@@ -234,7 +270,7 @@ class CompanionTest {
         assertFalse(local.expired)
         assertEquals(0, local.count())
         assertNull("the old device's grant is gone", local.apps().single().grantId)
-        assertEquals("no grant_lost noise", listOf(ShareEvent.Kind.ENABLED, ShareEvent.Kind.EXPIRED), local.kinds())
+        assertEquals("no grant_lost noise", listOf(ShareEvent.Kind.ENABLED, ShareEvent.Kind.SESSION_ENDED, ShareEvent.Kind.EXPIRED), local.kinds())
         assertEquals("the shared point stays, the unsent one goes", 1, local.track("ski", 0, Long.MAX_VALUE).size)
         assertEquals(123L, local.deviceExpiresAt)
         local.clear(); local.close(); SecureStore(context).clear()
@@ -323,7 +359,7 @@ class CompanionTest {
         local.block("ski")
         assertEquals(listOf(10L), local.track("ski", 0, 100).map { it.at })
         assertEquals(listOf(10L, 11L), local.track("run", 0, 100).map { it.at })
-        assertEquals(listOf(ShareEvent.Kind.DISABLED), local.events().map { it.kind })
+        assertEquals(listOf(ShareEvent.Kind.DISABLED, ShareEvent.Kind.SESSION_ENDED), local.events().map { it.kind })
         local.clear(); local.close()
     }
     @Test fun expireKeepsThirtyDaysAndTheLastStateBeforeTheWindow() {
@@ -345,12 +381,12 @@ class CompanionTest {
     }
     @Test fun clearHistoryKeepsTheQueueAndReseeds() {
         val local = store()
-        local.pause("ski")
+        local.endSession("ski", "user")
         local.enqueue(TrackPoint("p", 10, 1.0, 2.0, 5f, listOf("run-g")))
         local.clearHistory(now = 1_000)
         assertEquals(1, local.count())
         assertEquals(emptyList<TrackSample>(), local.track("run", 0, 100))
-        assertEquals(listOf("history_cleared", "enabled:ski", "enabled:run", "paused:ski"),
+        assertEquals(listOf("history_cleared", "enabled:ski", "enabled:run", "session_started:run"),
             local.events().map { e -> e.kind.raw + (e.appId?.let { ":$it" } ?: "") })
         local.clear()
         assertEquals(emptyList<ShareEvent>(), local.events())
@@ -359,19 +395,18 @@ class CompanionTest {
     @Test fun seedingAnEmptyHistoryStartsAtConsent() {
         val local = store()
         local.seedIfEmpty(now = 5_000)
-        assertEquals(listOf(1L, 1L), local.events().map { it.at })
+        assertEquals("enabled at consent, running sessions now", listOf(1L, 1L, 5_000L, 5_000L), local.events().map { it.at })
         assertEquals("seeded", local.events().first().detail)
         local.seedIfEmpty(now = 6_000)
-        assertEquals(2, local.events().size)
+        assertEquals(4, local.events().size)
         local.clear(); local.close()
     }
-    @Test fun pauseAllAndAForcedStopAreRecordedOnce() {
+    @Test fun aForcedStopIsRecordedOnceAndEndsEverySession() {
         val local = store()
-        local.paused = true; local.paused = true; local.paused = false
-        local.stop("signed_out"); local.stop("signed_out")
-        assertEquals(listOf("paused_all", "resumed_all", "stopped"), local.events().map { it.kind.raw })
-        assertEquals("signed_out", local.events().last().detail)
-        assertTrue(local.paused)
+        local.stop("storage_failed"); local.stop("storage_failed")
+        assertEquals(listOf("stopped"), local.events().map { it.kind.raw })
+        assertEquals("storage_failed", local.events().last().detail)
+        assertEquals(emptyList<Session>(), local.sessions())
         local.clear(); local.close()
     }
     @Test fun grantChangesFromTheServerAreLogged() {
@@ -379,7 +414,8 @@ class CompanionTest {
         fun app(id: String, grant: String?) = JSONObject().put("id", id).put("name", id).put("purpose", "Routes").put("disclosure", "Disclosure").put("version", "1")
             .put("grant", grant?.let { JSONObject().put("id", it).put("consent_at", 1) } ?: JSONObject.NULL)
         local.saveApps(JSONArray().put(app("ski", null)).put(app("run", "run-new")))
-        assertEquals(listOf("grant_lost:ski:revoked", "grant_lost:run:replaced"), local.events().map { "${it.kind.raw}:${it.appId}:${it.detail}" })
+        assertEquals(listOf("grant_lost:ski:revoked", "session_ended:ski:grant", "grant_lost:run:replaced", "session_ended:run:grant"),
+            local.events().map { "${it.kind.raw}:${it.appId}:${it.detail}" })
         local.saveApps(JSONArray().put(app("ski", "ski-back")).put(app("run", "run-new")))
         assertEquals(ShareEvent.Kind.GRANT_RESTORED, local.events().last().kind)
         local.clear(); local.close()
@@ -397,19 +433,69 @@ class CompanionTest {
         local.clear(); local.close()
     }
 
+    // Start, Stop and the link prompt (ADR-020)
+    @Test fun startAndStopOnTheRow() {
+        var started = 0
+        val granted = ski.copy(grantId = "g")
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(granted), permissions = true), {}, {}, {}, { started++ }, {}, {},
+            {}, {}, {}, {}, {}) } }
+        compose.onNodeWithText("Stop all").assertDoesNotExist()
+        compose.onNodeWithText("Start").performScrollTo().performClick()
+        assertEquals(1, started)
+    }
+    @Test fun aRunningSessionShowsStopAndStopAll() {
+        var stopped = 0; var all = 0
+        val granted = ski.copy(grantId = "g")
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(granted), permissions = true, running = true,
+            sessions = mapOf("ski" to Session("ski", 0, 0)), now = 42 * 60_000), {}, {}, {}, {}, { stopped++ }, { all++ }, {}, {}, {}, {}, {}) } }
+        compose.onNodeWithText("Sharing for", substring = true, useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("Stop all").performClick()
+        compose.onNodeWithText("Stop").performScrollTo().performClick()
+        assertEquals(1, all); assertEquals(1, stopped)
+    }
+    @Test fun aLinkToAGrantedAppAsksBeforeStartingAndNotNowStartsNothing() {
+        var started = 0
+        var link by mutableStateOf<String?>("ski")
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski.copy(grantId = "g"))), {}, {}, {}, { started++ }, {}, {},
+            {}, {}, {}, {}, {}, link = link, linkShown = { link = null }) } }
+        compose.onNodeWithText("Start sharing with Ski?").assertIsDisplayed()
+        compose.onNodeWithText("Not now").performClick()
+        assertEquals(0, started)
+        link = "ski"
+        compose.onNode(hasText("Start") and hasAnyAncestor(isDialog())).performClick()
+        assertEquals(1, started)
+    }
+    @Test fun aLinkToAnUngrantedAppOpensItsConsentAndAnUnknownOneNothing() {
+        var link by mutableStateOf<String?>("ski")
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski)), {}, {}, {}, {}, {}, {},
+            {}, {}, {}, {}, {}, link = link, linkShown = { link = null }) } }
+        compose.onNodeWithText(ski.disclosure).assertIsDisplayed()
+        compose.onNodeWithText("Cancel").performClick()
+        link = "nope"
+        compose.onNodeWithText("Start sharing", substring = true).assertDoesNotExist()
+        compose.onNodeWithText(ski.disclosure).assertDoesNotExist()
+    }
+    /** ADR-020 decision 11: heart rate is offered only once the app's location is on. */
+    @Test fun enableHeartRateWaitsForLocation() {
+        val hr = NativeEntry("ski", "Ski", HeartRate.CAPABILITY, "Heart rate", "p", "d", "1", null)
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski), entries = listOf(hr)), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}) } }
+        compose.onNodeWithText("Enable heart rate").assertDoesNotExist()
+        compose.onNodeWithText("Off · turn on location for Ski first", useUnmergedTree = true).assertExists()
+    }
+
     // Store tab (#627) and Open (#628).
     private val catalogue = Catalogue.parse("""{"apps":[
         {"id":"ski","name":"Ski","category":"sports","icon":"&#127935;","description":"Ski routes","appUrl":"https://ski.proappstore.online"},
         {"id":"meet","name":"Meet","category":"social","icon":"&#128222;","description":"Video calls","about":"Zero-install calling.","appUrl":"https://meet.proappstore.online"}]}""")!!
     @Test fun openOnAnAppCardUsesTheInstallHint() {
         var opened: ConnectedApp? = null
-        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski.copy(grantId = "g"))), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, openApp = { opened = it }) } }
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski.copy(grantId = "g"))), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, openApp = { opened = it }) } }
         compose.onNodeWithText("Open Ski").performScrollTo().performClick()
         assertEquals("ski", opened?.id)
     }
     @Test fun storeBrowsesSearchesAndOpensWithTheHint() {
         var opened: CatalogueApp? = null
-        compose.setContent { MaterialTheme { PasScreen(CompanionState(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, initialTab = Tab.STORE,
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, initialTab = Tab.STORE,
             store = StoreHooks(CatalogueStore.State(catalogue), open = { opened = it })) } }
         compose.onAllNodes(hasScrollToNodeAction()).onFirst().performScrollToNode(hasText("All apps"))
         compose.onNodeWithText("All apps").assertIsDisplayed()
@@ -420,7 +506,7 @@ class CompanionTest {
     }
     @Test fun storeOfflineWithoutACacheOffersRetry() {
         var retried = 0
-        compose.setContent { MaterialTheme { PasScreen(CompanionState(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, initialTab = Tab.STORE,
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, initialTab = Tab.STORE,
             store = StoreHooks(refresh = { retried++ })) } }
         compose.onNodeWithText("Connect to the internet to load the store").assertIsDisplayed()
         compose.onNodeWithText("Retry").performClick()
@@ -428,7 +514,7 @@ class CompanionTest {
     }
     @Test fun companionToggleOnlyOpensTheDisclosure() {
         var granted = 0
-        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski)), {}, { granted++ }, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+        compose.setContent { MaterialTheme { PasScreen(CompanionState(signedIn = true, apps = listOf(ski)), {}, { granted++ }, {}, {}, {}, {}, {}, {}, {}, {}, {},
             initialTab = Tab.STORE, store = StoreHooks(CatalogueStore.State(catalogue))) } }
         compose.onNodeWithText("Apps, categories and features").performTextInput("Ski routes")
         compose.onNodeWithText("Sports").performClick()
@@ -456,27 +542,37 @@ class CompanionTest {
         local.enqueueHeartRate(sample("h1"))
         local.block("run/heart_rate.ble")
         assertEquals(0, local.heartRateCount())
-        assertEquals(listOf("ski-g", "run-g"), LocationPolicy.recipients(local.apps(), local.excluded(), 20))
+        assertEquals(listOf("ski-g", "run-g"), LocationPolicy.recipients(local.apps(), local.blocked(), local.sessionIds(), 20))
         local.enqueue(TrackPoint("p", 20, 1.0, 2.0, 5f, listOf("run-g")))
         assertEquals(1, local.count())
         assertEquals(listOf("heart_rate:disabled"), local.events().filter { it.appId == "run" }.map { "${it.kind.raw}:${it.detail}" })
         local.clear(); local.close()
     }
 
+    /** #668 finding 1 (iOS #677's twin): turning off Run's location keeps Run's session, so its heart rate carries on. */
     @Test fun blockingRunLocationLeavesRunHeartRateIntact() {
         val local = heartRateStore()
         local.enqueueHeartRate(sample("h1", 10))
         local.block("run")
-        assertEquals(listOf("run-hr"), HeartRatePolicy.recipients(local.entries(), local.blocked(), local.pausedApps(), 20))
+        assertEquals(setOf("ski", "run"), local.sessionIds())
+        assertEquals(listOf("run-hr"), HeartRatePolicy.recipients(local.entries(), local.blocked(), local.sessionIds(), 20))
         local.enqueueHeartRate(sample("h2", 20))
         assertEquals(listOf("h1", "h2"), local.pendingHeartRate().map { it.id })
+        // Heart rate off too: nothing is left, so the session ends.
+        local.block("run/heart_rate.ble")
+        assertEquals(setOf("ski"), local.sessionIds())
         local.clear(); local.close()
     }
 
-    @Test fun heartRateFollowsPauseAllAndRunsPause() {
+    /** Stopping Run stops its heart rate; turning off its location afterwards never resumes it (the live bug #668 fixes). */
+    @Test fun heartRateFollowsRunsSessionAndAStoppedRunStaysStopped() {
         val local = heartRateStore()
-        local.pause("run"); local.enqueueHeartRate(sample("paused"))
-        local.resume("run"); local.paused = true; local.enqueueHeartRate(sample("all"))
+        local.endSession("run", "user"); local.enqueueHeartRate(sample("stopped"))
+        local.block("run"); local.enqueueHeartRate(sample("after-location-off"))
+        assertEquals(0, local.heartRateCount())
+        assertEquals(emptyList<String>(), HeartRatePolicy.recipients(local.entries(), local.blocked(), local.sessionIds(), System.currentTimeMillis()))
+        assertEquals(setOf("ski"), local.sessionIds())
+        local.endAllSessions("all"); local.enqueueHeartRate(sample("all"))
         assertEquals(0, local.heartRateCount())
         local.clear(); local.close()
     }

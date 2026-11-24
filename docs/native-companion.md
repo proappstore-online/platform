@@ -6,13 +6,13 @@ description: "Architecture, Android implementation, security boundaries and deli
 
 The native ProAppStore app serves **people using PAS apps**. It supplies native device capabilities while the apps remain websites/PWAs. It is not the creator console, a web-app container, an alternative app marketplace, or an arbitrary-code runtime.
 
-Decision: [ADR-015](./adr/015-native-companion.md). User guide: [using the companion](./native-companion-users.md). Policy research: [store review](./native-companion-review.md).
+Decisions: [ADR-015](./adr/015-native-companion.md), and [ADR-020](./adr/020-native-collection-sessions.md) for collection sessions. User guide: [using the companion](./native-companion-users.md). Policy research: [store review](./native-companion-review.md).
 
 ## Intended experience
 
-Install PAS and connect the same PAS account once. When Ski needs location, its permission action should open PAS directly to Ski's disclosure. The user enables automatic location for Ski and grants the Android permissions. PAS can then collect and upload while Ski is closed. Rideshare may independently receive the same observations when separately authorized. Their server-side processing produces app-specific routes and trip state.
+Install PAS and connect the same PAS account once. When Ski needs location, its permission action should open PAS directly to Ski's disclosure. The user enables location for Ski once and grants precise location. Each time they go out, they tap **Start** on Ski's row (or in the prompt Ski's `proappstore://native/apps/ski` link brings forward). PAS then collects and uploads while Ski is closed and the phone is locked, until the user taps **Stop**, the phone has not moved for 30 minutes, or 12 hours have passed ([ADR-020](./adr/020-native-collection-sessions.md)). Rideshare may independently receive the same observations when separately authorized and started. Their server-side processing produces app-specific routes and trip state.
 
-The user does not need to open PAS for each ride. The native app remains available to see connected apps, pause collection, revoke access, inspect synchronization status and disconnect the phone. System permission prompts name **ProAppStore**; the per-app consent screen names **Ski**, **Rideshare**, etc.
+The native app is where the user starts and stops sharing, sees connected apps, revokes access, inspects synchronization status and disconnects the phone. System permission prompts name **ProAppStore**; the per-app consent screen names **Ski**, **Rideshare**, etc.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ The Android implementation uses Kotlin, Compose/Material 3, Android LocationMana
 | iOS UI | Same consumer screens in SwiftUI; While Using is enough for a session started in the app, Always is an optional restart upgrade. |
 | Identity | Existing PAS Google/GitHub identity through the system browser; explicit device connection approval; proof-bound single-use exchange. |
 | Credentials | Random device credential, hashed server-side, AES-GCM protected by Android Keystore on device; 90-day expiry; no general PAS session given to Android. |
-| Location | Explicitly enabled automatic collection, foreground service notification and Pause all action; precise and background permission checks. |
+| Location | Collection only in user-started sessions (ADR-020): Start and Stop per app, Stop all, a 30-minute stationary end and a 12-hour cap, each automatic end announced by a notification. Foreground service notification with a single Stop action; precise permission only, no background location. |
 | Offline | Durable SQLite queue; recipient grant snapshot per observation; only exact acknowledgements remove queued batches. |
 | Platform | Per-device/app grants, validated idempotent upload, app/user-isolated read, disconnect and seven-day raw buffer retention. |
 | Recipient apps | Ski (first integration), Run (runs and walks while locked) and Rideshare (`rideshare`, drivers' live position for dispatch and the rider). Each has its own reviewed disclosure in the platform catalog. |
@@ -90,7 +90,8 @@ A reading app can only catch up when its page is open. Rideshare needs a locked 
 - Consent says **automatic background route recording**, not just a generic location toggle. It covers collection while both apps are closed.
 - Grants default off. Enabling another app or changing its disclosure does not extend an existing consent.
 - Native disable immediately blocks that recipient and removes it from queued observations. If offline, server revocation is pending until synchronization; the UI says so. Online delivery already in flight cannot be recalled.
-- Pause all stops new samples. Pausing one app stops tagging new samples for that recipient only; its grant, consent and platform copy are unchanged, and it resumes without a new disclosure. Previously authorized queued samples can still upload in both cases. Pause is local to the phone and is not reported to the app.
+- Collection runs in sessions ([ADR-020](./adr/020-native-collection-sessions.md)). A session starts only when the user taps Start in the companion; a link only brings the Start prompt forward. It ends on Stop (the app's row, Stop all, or the notification), after 30 minutes without movement, after 12 hours, or when its grant ends or precise permission is withdrawn. Stopping an app stops tagging new samples for that recipient only; its grant, consent and platform copy are unchanged, and Start needs no new disclosure. Previously authorized queued samples can still upload. Sessions are local to the phone and are not reported to the app. Per-app Pause (#626) and Pause all were replaced by Stop and Stop all.
+- An app's other capabilities, such as Run's heart rate, are collected only during that app's session, and are offered only once its location is enabled. Turning off one capability ends the session only when the app has none left (ADR-020 decision 11).
 - A queue reaching 60,000 pending observations stops collection visibly rather than silently dropping recent samples. Local observations expire after seven days during synchronization; platform reads exclude older points immediately and the maintenance tick deletes them.
 - iOS and Android keep a 30-day on-device history (`share_events`, `share_points`) in the protected queue database for the user's own map, timeline and activity log. It is never uploaded and is cleared on disconnect. Android draws the track on a plain Compose canvas with no map tiles.
 - The platform's raw buffer is not the app's permanent ride database. Saved/derived rides require app-owned retention and deletion, disclosed separately.
@@ -100,11 +101,11 @@ A reading app can only catch up when its page is open. Rideshare needs a locked 
 
 ## Android execution limits
 
-The collector is an Android location foreground service with an ongoing notification. The user can pause it. Foreground and background location are requested incrementally, with an explanation before the system flow. Denied precise/background permission prevents collection. Approximate-only permission cannot silently become precise route tracking.
+The collector is an Android location foreground service with an ongoing notification ("ProAppStore is sharing your location · With Run · 42 min") and a single Stop action. It starts only from a session the user started with the app visible, so it keeps while-in-use location access with the screen locked: the app requests precise foreground location only, after an explanation, and does not declare `ACCESS_BACKGROUND_LOCATION`. Denied precise permission prevents collection. Approximate-only permission cannot silently become precise route tracking.
 
-The service can continue with the screen locked after it starts. OS force-stop, permission changes, battery restrictions and GPS loss can interrupt collection. `START_STICKY` is not a guarantee, and v1 has no boot receiver. Returning to the app can restart an enabled collector after prerequisites are satisfied. No fake audio, accessibility service, battery-policy bypass or downloaded native code is used.
+The service continues with the screen locked until the session ends. A 30 s check ends sessions that are due and posts the end notification on its own channel (`pas-sharing-ended`). OS force-stop, permission changes, battery restrictions and GPS loss can interrupt collection. `START_STICKY` is not a guarantee: Android refuses a foreground start from the background, and v1 has no boot receiver. Opening the companion resumes an interrupted session under 12 hours, with its stationary clock restarted; nothing restarts it in the background. No fake audio, accessibility service, battery-policy bypass or downloaded native code is used.
 
-An Android intent can bring PAS forward but cannot grant access. The initial custom URI carries no credentials. Verified App Links require a release signing certificate and Digital Asset Links deployment before public distribution.
+An Android intent can bring PAS forward but cannot grant access or start a session: `proappstore://native/apps/<appId>` opens the app's consent when it is not enabled, a Start prompt when it is, and its page while it is sharing. The initial custom URI carries no credentials. Verified App Links require a release signing certificate and Digital Asset Links deployment before public distribution.
 
 ## Next delivery milestones
 
@@ -113,7 +114,7 @@ An Android intent can bring PAS forward but cannot grant access. The initial cus
 3. Add an app-worker native capability declaration, authenticated native event/RPC delivery, revocation-aware retries, quotas and downstream deletion. Reuse ADR-009; never permit an arbitrary app worker to enumerate users or read another app's stream. The catalog-bound [live relay](#live-relay) into one app action (#654) is the first such delivery. A general worker RPC remains open.
 4. Review and register additional recipient apps (Run and Rideshare registered 2026-11) with real disclosures and lifecycle tests.
 5. Add lock-screen activity summaries/timers once app-specific session state is available. A native location service alone cannot infer a ski ride's timer semantics.
-6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
+6. Complete privacy policy, Data Safety declaration, Play background-location/FGS demonstration, store assets and a closed testing release. Collection in sessions (ADR-020) removed the background-location declaration and its video; the foreground-service declaration and the in-app disclosure remain. Signed release automation is documented in the [Android release runbook](./native-android-release.md). No Play submission or approval has occurred.
 
 ## Further native capabilities
 

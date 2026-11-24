@@ -21,8 +21,15 @@ data class TrackSample(val at: Long, val lat: Double, val lng: Double, val accur
 /** One row of the on-device sharing record (#621). `appId` null = device-wide. `detail` is a short code, never coordinates or response bodies. */
 data class ShareEvent(val id: Long, val at: Long, val appId: String?, val kind: Kind, val detail: String) {
     enum class Kind(val raw: String) {
-        ENABLED("enabled"), DISABLED("disabled"), PAUSED("paused"), RESUMED("resumed"),
-        PAUSED_ALL("paused_all"), RESUMED_ALL("resumed_all"), STOPPED("stopped"),
+        ENABLED("enabled"), DISABLED("disabled"),
+        /** Pause (#626) and Pause all, retired by ADR-020: still decoded, so older history stays readable. */
+        PAUSED("paused"), RESUMED("resumed"), PAUSED_ALL("paused_all"), RESUMED_ALL("resumed_all"),
+        STOPPED("stopped"),
+        /**
+         * A collection session (ADR-020). `SESSION_ENDED` detail: user, all, notification (the user's three Stops), stationary,
+         * max (the automatic ends), grant (turned off, revoked, replaced, expired or disconnected) or permission.
+         */
+        SESSION_STARTED("session_started"), SESSION_ENDED("session_ended"),
         GRANT_LOST("grant_lost"), HISTORY_CLEARED("history_cleared"),
         // Activity log only (#624).
         SYNC_FAILED("sync_failed"), SYNC_RECOVERED("sync_recovered"), UPLOAD_REJECTED("upload_rejected"), QUOTA("quota"),
@@ -61,8 +68,14 @@ object LocationPolicy {
     fun valid(point: TrackPoint, now: Long): Boolean = point.at in (now - 15_000)..(now + 2_000) &&
         point.lat.isFinite() && point.lat in -90.0..90.0 && point.lng.isFinite() && point.lng in -180.0..180.0 &&
         point.accuracy.isFinite() && point.accuracy in 0f..100f && point.grants.isNotEmpty()
-    fun recipients(apps: List<ConnectedApp>, blocked: Set<String>, at: Long): List<String> = apps
-        .filter { it.id !in blocked && it.grantId != null && at >= it.consentAt }.mapNotNull { it.grantId }
+    /** The location grants current at `at`: held, consented, not disabled on this phone, and with a session (ADR-020). */
+    fun recipients(apps: List<ConnectedApp>, blocked: Set<String>, sessions: Set<String>, at: Long): List<String> = apps
+        .filter { it.id !in blocked && it.id in sessions && it.grantId != null && at >= it.consentAt }.mapNotNull { it.grantId }
+
+    /** ADR-020: a session ends after this long without movement ([SharingSessions.moved]), or no fix at all. */
+    const val STATIONARY_TIMEOUT_MS = 30L * 60 * 1000
+    /** ADR-020: and at the latest this long after it started. */
+    const val MAX_SESSION_MS = 12L * 60 * 60 * 1000
 
     // #639: indoor GPS jitter must not become a track. 16 minutes at home once uploaded 39 points and a 366 m scribble.
     const val EMIT_MIN_METERS = 10.0
@@ -81,8 +94,10 @@ object LocationPolicy {
     fun shouldEmit(last: TrackPoint?, fix: TrackPoint, speed: Float?): Boolean {
         if (last == null || fix.at - last.at >= HEARTBEAT_MS) return true
         if (speed != null && speed < STATIONARY_SPEED) return false
-        return distanceMeters(last.lat, last.lng, fix.lat, fix.lng) >= maxOf(EMIT_MIN_METERS, last.accuracy.toDouble(), fix.accuracy.toDouble())
+        return distanceMeters(last.lat, last.lng, fix.lat, fix.lng) >= emitThreshold(last, fix)
     }
+    /** The distance a fix must be from the last emitted point: jitter inside either accuracy circle is not movement. */
+    fun emitThreshold(last: TrackPoint, fix: TrackPoint): Double = maxOf(EMIT_MIN_METERS, last.accuracy.toDouble(), fix.accuracy.toDouble())
 
     /** Great-circle distance (haversine, mean Earth radius). */
     fun distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {

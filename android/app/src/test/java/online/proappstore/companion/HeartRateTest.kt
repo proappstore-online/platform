@@ -53,14 +53,15 @@ class HeartRateTest {
     private fun entry(app: String, capability: String, grant: String?, consentAt: Long = 1) =
         NativeEntry(app, app, capability, "n", "p", "d", "v", grant, consentAt)
 
-    @Test fun recipientsAreHeartRateGrantsNotDisabledPausedOrBeforeConsent() {
+    @Test fun recipientsAreHeartRateGrantsNotDisabledWithASessionAndAfterConsent() {
         val entries = listOf(entry("run", "heart_rate.ble", "hr"), entry("run", "location.background", "loc"),
             entry("other", "heart_rate.ble", null), entry("late", "heart_rate.ble", "late", 50))
-        assertEquals(listOf("hr"), HeartRatePolicy.recipients(entries, emptySet(), emptySet(), 10))
-        assertEquals(listOf("hr", "late"), HeartRatePolicy.recipients(entries, emptySet(), emptySet(), 50))
-        assertEquals("location's key leaves heart rate", listOf("hr"), HeartRatePolicy.recipients(entries, setOf("run"), emptySet(), 10))
-        assertEquals(emptyList<String>(), HeartRatePolicy.recipients(entries, setOf("run/heart_rate.ble"), emptySet(), 10))
-        assertEquals("pausing Run pauses its heart rate (#626)", emptyList<String>(), HeartRatePolicy.recipients(entries, emptySet(), setOf("run"), 10))
+        val sessions = setOf("run", "other", "late")
+        assertEquals(listOf("hr"), HeartRatePolicy.recipients(entries, emptySet(), sessions, 10))
+        assertEquals(listOf("hr", "late"), HeartRatePolicy.recipients(entries, emptySet(), sessions, 50))
+        assertEquals("location's key leaves heart rate", listOf("hr"), HeartRatePolicy.recipients(entries, setOf("run"), sessions, 10))
+        assertEquals(emptyList<String>(), HeartRatePolicy.recipients(entries, setOf("run/heart_rate.ble"), sessions, 10))
+        assertEquals("heart rate follows Run's session (ADR-020)", listOf("late"), HeartRatePolicy.recipients(entries, emptySet(), setOf("late"), 50))
     }
 
     @Test fun entryKeysAndGrantPathsStayUnderNative() {
@@ -111,10 +112,11 @@ class HeartRateTest {
         assertEquals(ShareEvent.Kind.HEART_RATE_PROBLEM, ShareEvent.Kind.of("heart_rate_problem"))
     }
 
-    /** Heart-rate events never open, end or pause a location session. */
+    /** Heart-rate events never open, end or stop a location consent period. */
     @Test fun heartRateEventsLeaveLocationSessionsAlone() {
-        val events = listOf(ShareEvent(1, 10, "run", ShareEvent.Kind.ENABLED, ""), ShareEvent(2, 20, "run", ShareEvent.Kind.HEART_RATE, "disabled"),
-            ShareEvent(3, 30, null, ShareEvent.Kind.BLUETOOTH, "off"), ShareEvent(4, 40, "run", ShareEvent.Kind.HEART_RATE, "enabled"))
+        val events = listOf(ShareEvent(1, 10, "run", ShareEvent.Kind.ENABLED, ""), ShareEvent(2, 10, "run", ShareEvent.Kind.SESSION_STARTED, ""),
+            ShareEvent(3, 20, "run", ShareEvent.Kind.HEART_RATE, "disabled"),
+            ShareEvent(4, 30, null, ShareEvent.Kind.BLUETOOTH, "off"), ShareEvent(5, 40, "run", ShareEvent.Kind.HEART_RATE, "enabled"))
         val sessions = SharingTimeline.sessions(events, "run")
         assertEquals(1, sessions.size)
         assertEquals(10L, sessions[0].start); assertNull(sessions[0].end); assertTrue(sessions[0].inactive.isEmpty())
@@ -167,19 +169,16 @@ class HeartRateTest {
         assertEquals(HeartRateLink.KEEP, HeartRateLink.next(wanted = false, bluetoothOn = true, open = false, sameAddress = false))
     }
 
-    @Test fun theNotificationSaysWhatIsShared() {
-        assertEquals("Sharing location and heart rate with Run", CollectorTypes.notificationText(listOf("Run"), listOf("Run")))
-        assertEquals("Sharing location with Ski, Run and heart rate with Run", CollectorTypes.notificationText(listOf("Ski", "Run"), listOf("Run")))
-        assertEquals("Sharing heart rate with Run", CollectorTypes.notificationText(emptyList(), listOf("Run")))
-        assertEquals("Sharing location with Ski", CollectorTypes.notificationText(listOf("Ski"), emptyList()))
-    }
-
     @Test fun heartRateLineState() {
         val hr = entry("run", "heart_rate.ble", "hr")
-        val on = CompanionState(signedIn = true, entries = listOf(hr), paused = false, heartRateSensor = true, heartRateConnected = true, heartRateBpm = 142, now = 10)
+        val run = ConnectedApp("run", "Run", "Runs", "D", "1", "loc")
+        val on = CompanionState(signedIn = true, apps = listOf(run), entries = listOf(hr), sessions = mapOf("run" to Session("run", 0, 0)),
+            heartRateSensor = true, heartRateConnected = true, heartRateBpm = 142, now = 10)
         assertEquals("Connected · 142 bpm", on.heartRateState(hr))
-        assertEquals("Paused", on.copy(pausedApps = setOf("run")).heartRateState(hr))
-        assertEquals("Paused", on.copy(paused = true).heartRateState(hr))
+        assertEquals("Not sharing · tap Start", on.copy(sessions = emptyMap()).heartRateState(hr))
+        assertEquals("Not sharing · turn on location for run to start", on.copy(sessions = emptyMap(), blocked = setOf("run")).heartRateState(hr))
+        // ADR-020 decision 11: heart rate needs the app's location, and the line says so.
+        assertEquals("Off · turn on location for run first", on.copy(apps = listOf(run.copy(grantId = null))).heartRateState(entry("run", "heart_rate.ble", null)))
         assertEquals("No sensor chosen", on.copy(heartRateSensor = false).heartRateState(hr))
         assertEquals("Bluetooth permission needed", on.copy(bluetooth = "unauthorized").heartRateState(hr))
         assertEquals("Not connected", on.copy(heartRateConnected = false).heartRateState(hr))
