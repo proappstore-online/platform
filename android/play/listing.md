@@ -9,7 +9,7 @@ ProAppStore web apps, never called an app store, with user-started sessions (#66
 | Category | Health & Fitness (matches the background-location feature declaration and the Health apps answer, #662) |
 | App icon | `icon-512.png`: 512×512, 32-bit PNG with alpha |
 | Feature graphic | `feature-graphic.png`: 1024×500, 24-bit PNG |
-| Phone screenshots | `screenshots/`, from the fixture-state instrumented test (#665 item 4, not yet added) |
+| Phone screenshots | `screenshots/1-store.png` … `6-settings.png`: six 1080×2400 24-bit PNGs rendered from fixture state by `PlayScreenshots` (#665 item 4); no real place, name or email |
 
 ## Short description (78 of 80 characters)
 
