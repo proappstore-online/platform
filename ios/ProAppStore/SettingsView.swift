@@ -56,6 +56,7 @@ struct SettingsView: View {
         Button("Manage account") { open("https://dashboard.proappstore.online") }
         Button("Clear sharing history") { clearHistoryPrompt = true }
         Button("Disconnect this phone") { disconnectPrompt = true }.disabled(model.busy)
+        Button("Delete account") { open(Self.deleteAccountURL) }
     }
 
     @ViewBuilder private var about: some View {
@@ -72,7 +73,13 @@ struct SettingsView: View {
         }
         Button("How your data is used") { open("https://docs.proappstore.online/native-companion-users/") }
         Button("Privacy policy") { open("https://proappstore.online/privacy") }
+        // Signed out, Delete account is still reachable here (App Review 5.1.1(v)); signed in, it sits in the account block.
+        if !(model.signedIn || model.expired) { Button("Delete account") { open(Self.deleteAccountURL) } }
     }
+
+    /// App Review 5.1.1(v) / #685: account deletion starts in the app. There is no platform account-deletion API yet,
+    /// so this opens the web deletion steps, the same page Android (#663) and Play Console link to.
+    static let deleteAccountURL = "https://proappstore.online/privacy#data-deletion"
 
     private func open(_ link: String) { if let url = URL(string: link) { openURL(url) } }
 }
