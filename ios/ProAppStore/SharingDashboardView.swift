@@ -287,6 +287,8 @@ struct SharingDashboardView: View {
         ForEach(model.otherEntries(app.id).filter { $0.capability == HeartRate.CAPABILITY }) { entry in
             Divider()
             HeartRateLine(entry: entry, model: model, heartRate: model.heartRate)
+            // With location off the row has no Pause/Resume, and a kept pause (#677) must still be liftable.
+            if !model.enabled(app) && model.enabled(entry) { PauseResumeButton(app: app, model: model) }
         }
     }
 

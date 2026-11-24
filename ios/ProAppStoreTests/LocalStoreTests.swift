@@ -412,6 +412,34 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try local.pendingHeartRate().map(\.id), ["h1", "h2"])
     }
 
+    /// #677: turning off a paused Run's location keeps Run paused, because its heart rate is still on.
+    func testTurningOffAPausedRunsLocationKeepsItsHeartRatePaused() throws {
+        let local = try runStore()
+        try local.pause("run")
+        try local.block("run")
+        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), pausedApps: local.pausedApps(), at: 20), [])
+        XCTAssertTrue(local.pausedApps().contains("run"))
+        try local.enqueueHeartRate(sample("h", at: 20))
+        XCTAssertEqual(try local.heartRateCount(), 0)
+    }
+
+    /// #677 keeps #620 for a location-only app: a disabled app is not paused.
+    func testTurningOffAPausedLocationOnlyAppClearsItsPause() throws {
+        let local = try runStore()
+        try local.pause("ski")
+        try local.block("ski")
+        XCTAssertFalse(local.pausedApps().contains("ski"))
+    }
+
+    /// #677: with Run's heart rate already off, nothing of Run is left on, so turning off location clears the pause.
+    func testTurningOffRunsLastCapabilityClearsItsPause() throws {
+        let local = try runStore()
+        try local.pause("run")
+        try local.block("run/heart_rate.ble")
+        try local.block("run")
+        XCTAssertFalse(local.pausedApps().contains("run"))
+    }
+
     func testHeartRateFollowsPauseAllAndRunsPause() throws {
         let local = try runStore()
         try local.pause("run")

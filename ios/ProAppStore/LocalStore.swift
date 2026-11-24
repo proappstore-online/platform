@@ -139,8 +139,10 @@ final class LocalStore: @unchecked Sendable {
         try transaction {
             if !blocked().contains(appId) { try record(.disabled, appId: appId) }
             try saveIds("blocked", blocked().union([appId]))
-            // A disabled app is not "paused": re-enabling it starts sharing.
-            try saveIds("pausedApps", pausedApps().subtracting([appId]))
+            // A disabled app is not "paused": re-enabling it starts sharing. Unless another of its capabilities is still on
+            // (#677): the pause is per app, and turning off location must not resume its heart rate.
+            let stillOn = entries().contains { $0.appId == appId && $0.capability != NativeEntry.LOCATION && $0.grantId != nil && !blocked().contains($0.key) }
+            if !stillOn { try saveIds("pausedApps", pausedApps().subtracting([appId])) }
             // Never shared, and now never will be.
             try exec("DELETE FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId])
             // Discard only this recipient. Other enabled apps retain their own queued copy.
