@@ -486,6 +486,25 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try local.events().map(\.kind).filter { $0 != .resumedAll }, [.heartRateProblem])
     }
 
+    /// #679: the insert that fills the queue reports it, once, because the collector stops before the next one.
+    func testTheSampleThatFillsTheHeartRateQueueReportsIt() throws {
+        let local = try runStore()
+        let full = { try local.events().filter { $0.kind == .heartRateProblem }.map(\.detail) }
+        XCTAssertFalse(try local.enqueueHeartRate(sample("below", at: 1)))
+        XCTAssertEqual(try full(), [])
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, """
+            WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < \(HeartRatePolicy.MAX_QUEUE - 1))
+            INSERT INTO hr(id, at, payload) SELECT 'h' || i, i, '{}' FROM n
+            """, nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(try local.heartRateCount(), HeartRatePolicy.MAX_QUEUE - 1)
+        XCTAssertTrue(try local.enqueueHeartRate(sample("last", at: 10)))
+        XCTAssertEqual(try local.heartRateCount(), HeartRatePolicy.MAX_QUEUE)
+        XCTAssertEqual(try full(), ["queue_full"])
+        XCTAssertThrowsError(try local.enqueueHeartRate(sample("over", at: 11))) { XCTAssertTrue($0 is HeartRateQueueFullError) }
+    }
+
     func testTheSensorIdentifierStaysInSettingsUntilForgotten() throws {
         let local = try runStore()
         let id = UUID()

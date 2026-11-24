@@ -65,6 +65,7 @@ struct HeartRateLine: View {
         guard model.enabled(entry) else { return "Off" }
         if model.paused || model.pausedApps.contains(entry.appId) { return "Paused" }
         if model.repository.local.heartRateSensor == nil { return "No sensor chosen" }
+        if model.queuedHeartRate >= HeartRatePolicy.MAX_QUEUE { return "Stopped: upload queue full" }
         switch heartRate.bluetooth {
         case .poweredOff: return "Bluetooth is off"
         case .unauthorized: return "Bluetooth permission needed"

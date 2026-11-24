@@ -319,13 +319,18 @@ final class LocalStore: @unchecked Sendable {
 
     // MARK: Heart-rate queue (#631)
 
-    /// Re-filters recipients against current consent, Pause all and per-app pause before insert.
-    func enqueueHeartRate(_ sample: HeartRateSample) throws {
+    /// Re-filters recipients against current consent, Pause all and per-app pause before insert. Returns true when this
+    /// insert filled the queue (#679), recording `queue_full` with it: the collector stops at the cap before the throw
+    /// below could report it, so the insert that fills the queue is where it is reported.
+    @discardableResult
+    func enqueueHeartRate(_ sample: HeartRateSample) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         let allowed = Set(HeartRatePolicy.recipients(entries(), blocked: blocked(), pausedApps: pausedApps(), at: sample.at))
         let retained = sample.with(grants: sample.grants.filter { allowed.contains($0) })
-        if paused || retained.grants.isEmpty { return }
-        guard try heartRateCount() < HeartRatePolicy.MAX_QUEUE else {
+        if paused || retained.grants.isEmpty { return false }
+        let count = try heartRateCount()
+        let full = count + 1 >= HeartRatePolicy.MAX_QUEUE
+        guard count < HeartRatePolicy.MAX_QUEUE else {
             try? record(.heartRateProblem, detail: "queue_full")
             throw HeartRateQueueFullError()
         }
@@ -336,7 +341,9 @@ final class LocalStore: @unchecked Sendable {
                 try exec("INSERT OR IGNORE INTO share_hr(app_id, sample_id, at, bpm) VALUES (?, ?, ?, ?)",
                          [entry.appId, retained.id, retained.at, Int64(retained.bpm)])
             }
+            if full { try record(.heartRateProblem, detail: "queue_full") }
         }
+        return full
     }
 
     func pendingHeartRate(limit: Int = 300) throws -> [HeartRateSample] {

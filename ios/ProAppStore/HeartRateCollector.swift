@@ -175,7 +175,11 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
         guard let reading = HeartRateMeasurement.parse(data), policy.accept(contact: reading.contact, at: now) else { return }
         lastBpm = reading.bpm; lastReadingAt = Date()
         do {
-            try local.enqueueHeartRate(HeartRateSample(id: UUID().uuidString, at: now, bpm: reading.bpm, grants: recipients(at: now)))
+            if try local.enqueueHeartRate(HeartRateSample(id: UUID().uuidString, at: now, bpm: reading.bpm, grants: recipients(at: now))) {
+                // This sample filled the queue (#679): say why, then let go (shouldCollect is false at the cap).
+                local.message = HeartRateQueueFullError().localizedDescription
+                return evaluate()
+            }
         } catch {
             // Stops visibly: shouldCollect is false at the cap, and the message says why.
             local.message = error is HeartRateQueueFullError ? error.localizedDescription : "Could not save heart rate on this phone."
