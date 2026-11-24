@@ -40,7 +40,7 @@ Rechecked 2026-11-24 against the policies linked at the end of this section. Rea
 | Device or other IDs | yes | no | no | App functionality, Fraud prevention and security | The installation credential (random, hashed on the server), the pairing id, and the device label (maker and model). |
 | Health and fitness: fitness info | yes, with #634 / #635 | no | yes | App functionality | Heart rate (bpm and time); workout summaries. |
 | App info and performance: diagnostics | yes, with #660 | no | yes (off switch; recheck whether a default-on toggle counts as "optional") | App functionality, Analytics | #660's report. |
-| App activity: app interactions | yes, with #660 | no | yes | App functionality, Analytics | The activity log inside #660's report records when the user enabled, paused and resumed sharing. #660 lists only Diagnostics; declare this too. |
+| App activity: app interactions | yes, with #660 | no | yes | App functionality, Analytics | The activity log inside #660's report records when the user enabled, started and stopped sharing. Declared alongside Diagnostics. |
 
 Not declared because it stays on the phone (Play exempts on-device-only data): the 30-day sharing history, strap names, and Store searches. Not collected: financial info, messages, photos, audio, files, calendar, contacts, browsing history, installed apps (the release manifest has no `QUERY_ALL_PACKAGES`).
 
@@ -73,6 +73,12 @@ Source: [App Review Guidelines](https://developer.apple.com/app-store/review/gui
 - *Foreground-service declaration, `connectedDevice`:* "ProAppStore keeps a connection to a Bluetooth heart-rate strap the user chose, while they exercise, so the readings reach the fitness app they enabled (Run) with the screen off. The ongoing notification names what is shared and offers Stop; turning heart rate off or forgetting the sensor ends the connection."
 - *Data Safety:* **Health and fitness → Fitness info**: collected, shared with the enabled PAS app for the user's account, not used for advertising, encrypted in transit, deletable (turn off, disconnect, or delete the app account); not processed ephemerally; required only for the heart-rate feature, which is optional.
 - Bluetooth permissions: `BLUETOOTH_SCAN` with `neverForLocation` and `BLUETOOTH_CONNECT` on API 31+, the legacy `BLUETOOTH`/`BLUETOOTH_ADMIN` up to API 30. On Android 10 and 11 the platform requires fine location for any BLE scan, so Choose sensor asks for it there; the scan still lists heart-rate sensors only.
+
+## Diagnostics and owner access (#660)
+
+- **App Store privacy label:** add *Diagnostics → Other Diagnostic Data*, linked to the user, not used for tracking, purpose App Functionality. The report contains no location; *Location → Precise Location* stays declared for the capability itself.
+- **Play Data Safety:** add *App info and performance → Diagnostics*, collected, not shared, processed for App functionality. It is on by default with an in-app off switch. Recheck at submission whether Play treats an opt-out as "optional". Transfers to an assistant the user connects are user-initiated, which Play's definition of "sharing" excludes. That is our reading, not confirmed by Google: recheck at submission. The *App activity → App interactions* row in the draft table above covers the activity log inside the report.
+- Diagnostics are not a native capability (ADR-019), so they need no per-app consent. They never contain location or health data, so 5.1.3 does not apply to them.
 
 ## Relevant precedents
 
