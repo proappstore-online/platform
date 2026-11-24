@@ -15,6 +15,15 @@ final class PrivacyTests: XCTestCase {
         XCTAssertEqual(defaults?["NSPrivacyAccessedAPITypeReasons"] as? [String], ["CA92.1"])
     }
 
+    /// ADR-020 §8 (#687): no Always purpose string, so iOS never offers Always; the session's background modes stay.
+    func testTheBundleAsksForWhileUsingOnlyAndKeepsItsBackgroundModes() {
+        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "NSLocationAlwaysAndWhenInUseUsageDescription"))
+        XCTAssertNotNil(Bundle.main.object(forInfoDictionaryKey: "NSLocationWhenInUseUsageDescription"))
+        let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+        XCTAssertTrue(modes.contains("location"), "\(modes)")
+        XCTAssertTrue(modes.contains("bluetooth-central"), "\(modes)")
+    }
+
     /// The deletion page the app, Android (#663) and the store consoles all link to; the anchor must not drift.
     func testDeleteAccountOpensTheDeletionSection() {
         XCTAssertEqual(SettingsView.deleteAccountURL, "https://proappstore.online/privacy#data-deletion")

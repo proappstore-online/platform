@@ -1,4 +1,3 @@
-import SQLite3
 import SwiftUI
 import XCTest
 @testable import ProAppStore
@@ -35,16 +34,15 @@ final class ScreenshotTests: XCTestCase {
         let local = try LocalStore(directory: directory)
         try local.saveApps(try JSONSerialization.data(withJSONObject: apps))
         try local.seedIfEmpty(now: consent) // before anything else is recorded, as on an upgrade
-        try local.setPaused(false)
-        try backdate(.resumedAll, to: consent, in: local) // a fresh store starts paused; resume at consent
-        // A walk: both apps for the first part, then Run paused.
-        let pauseAt = now - 20 * 60_000
+        // A walk (ADR-020 sessions): Ski and Run started at consent, then Run stopped, so the rows show Stop and Start.
+        try local.startSession("ski", now: consent)
+        try local.startSession("run", now: consent)
+        let stopAt = now - 20 * 60_000
         for (i, t) in stride(from: consent, to: now - 60_000, by: 60_000).enumerated() {
-            let grants = t < pauseAt ? ["g-ski", "g-run"] : ["g-ski"]
+            let grants = t < stopAt ? ["g-ski", "g-run"] : ["g-ski"]
             try local.enqueue(TrackPoint(id: "p\(i)", at: t, lat: 37.3349 + Double(i) * 0.00005, lng: -122.009 + Double(i) * 0.00004, accuracy: 5, grants: grants))
         }
-        try local.pause("run")
-        try backdate(.paused, to: pauseAt, in: local)
+        try local.endSession("run", detail: "user", now: stopAt)
         // #624: a recovered offline stretch and a permission change for the activity log.
         try local.syncFailed("0 The Internet connection appears to be offline.")
         try local.syncFailed("0 The Internet connection appears to be offline.")
@@ -164,14 +162,6 @@ final class ScreenshotTests: XCTestCase {
         let run = try XCTUnwrap(apps.first { $0.id == "run" })
         let scratch = InstallGuide(defaults: try XCTUnwrap(UserDefaults(suiteName: "online.proappstore.companion.screenshots")))
         try await shot("install-guide", wait: 3, InstallGuideSheet(app: run, guide: scratch, open: {}, cancel: {}))
-    }
-
-    /// pause() records at the real clock; the walk needs the pause in the past.
-    private func backdate(_ kind: ShareEvent.Kind, to at: Int64, in local: LocalStore) throws {
-        var db: OpaquePointer?
-        XCTAssertEqual(sqlite3_open(local.fileURL.path, &db), SQLITE_OK)
-        defer { sqlite3_close(db) }
-        XCTAssertEqual(sqlite3_exec(db, "UPDATE share_events SET at = \(at) WHERE kind = '\(kind.rawValue)'", nil, nil, nil), SQLITE_OK)
     }
 
     /// drawHierarchy intermittently returns a blank frame on the simulator; retry until the image has content.

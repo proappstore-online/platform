@@ -92,7 +92,7 @@ struct PermissionControls: View {
     var body: some View {
         switch collector.authorization {
         case .notDetermined:
-            Text("ProAppStore records your route for the apps you enable, including while your phone is locked. Choose Allow While Using App with Precise Location on.").font(.footnote)
+            Text("ProAppStore records your route while you share with an app, including while your phone is locked. Choose Allow While Using App with Precise Location on.").font(.footnote)
             Button("Set up location") { collector.requestWhenInUse() }
         case .denied, .restricted:
             Text("Location access is off for ProAppStore.").font(.footnote)
@@ -102,8 +102,6 @@ struct PermissionControls: View {
                 Text("Turn on Precise Location in Settings. Approximate location is never used to record routes.").font(.footnote)
                 Button("Use precise location") { collector.requestFullAccuracy() }
                 Button("Open Settings") { openSettings() }
-            } else if collector.authorization == .authorizedWhenInUse {
-                Button("Keep recording after restarts") { collector.requestAlways() }
             }
         }
     }

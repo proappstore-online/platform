@@ -4,18 +4,15 @@ App Store Connect app **6838534784**, bundle `online.proappstore.companion`, ver
 Proposed in #685 item 6. Reuses the Play listing text (#665) where it is true on iOS.
 
 **Wording rules (#661 decision 2):** the app is a companion for ProAppStore web apps. Never call it an "app store",
-in any field. **Describe this build only:** today's iOS build collects while an app is turned on and not paused
-(Pause, Pause all), not in user-started sessions. If #685 item 4 moves iOS to ADR-020 sessions, replace the second
-paragraph and the third bullet with the Play text in `android/play/listing.md` (Start, Stop, 30 minutes, 12 hours)
-in the same release.
+in any field. Describes the sessions build (ADR-020).
 
 Already set in App Information (not repeated here): name **ProAppStore**, subtitle **Phone companion for PAS apps**,
 category Health & Fitness / Utilities, age rating 18+.
 
-## Promotional text (148 / 170 characters)
+## Promotional text (147 / 170 characters)
 
 ```
-Record runs, ski days and drives for your ProAppStore apps, even with your phone locked. You choose each app, and you can pause sharing at any time.
+Record runs, ski days and drives for your ProAppStore apps, even with your phone locked. You choose each app, and you can stop sharing at any time.
 ```
 
 ## Description
@@ -23,11 +20,11 @@ Record runs, ski days and drives for your ProAppStore apps, even with your phone
 ```
 ProAppStore keeps your ProAppStore web apps working while your phone is locked.
 
-Turn on Run, Ski or Rideshare in ProAppStore, then put your phone away. While an app is on, ProAppStore records your location with the screen locked and sends it only to the apps you chose, so your route is complete when you open the app again. Run can also receive your heart rate from a Bluetooth heart-rate strap you choose.
+Tap Start for Run, Ski or Rideshare in ProAppStore, then put your phone away. While you share, ProAppStore records your location with the screen locked and sends it only to the apps you chose, so your route is complete when you open the app again. Run can also receive your heart rate from a Bluetooth heart-rate strap you choose.
 
 • You choose each app. Each one explains what it receives before you turn it on.
 • See what each app received today, what is waiting to upload, and a 30-day history that stays on your phone.
-• Pause one app or all of them at any time, or turn an app off.
+• Stop sharing at any time in ProAppStore. Sharing also stops by itself after 30 minutes without moving, or after 12 hours.
 • Disconnect your phone to delete its data from ProAppStore. Settings → Delete account explains how to delete your account.
 • Browse ProAppStore apps and open them in your browser.
 
@@ -60,7 +57,7 @@ Regenerate (the permission grant and a fixed simulated position make the dashboa
 instead of "Location permission needed"; the position is the fixture walk's start, not anyone's location):
 
 ```sh
-xcrun simctl privacy <udid> grant location-always online.proappstore.companion
+xcrun simctl privacy <udid> grant location online.proappstore.companion
 xcrun simctl location <udid> set 37.3349,-122.009
 TEST_RUNNER_PAS_SCREENSHOTS=/tmp/shots xcodebuild -project ios/ProAppStore.xcodeproj -scheme ProAppStore \
   -destination 'platform=iOS Simulator,name=iPhone 16 Pro Max' test CODE_SIGN_IDENTITY=- \

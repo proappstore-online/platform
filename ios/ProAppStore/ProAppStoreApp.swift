@@ -15,10 +15,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     let model = CompanionModel()
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        // A relaunch after iOS terminated the app arrives with launchOptions[.location] (significant-change
-        // delivery, Always only). The collector exists from here on and resumes only if a credential exists,
-        // collection is not paused and an app still has a grant.
-        model.collector.evaluate()
+        // ADR-020 §7: nothing restarts in the background. iOS can relaunch the app for its CLBackgroundActivitySession or
+        // for Core Bluetooth restoration; the model's `live` gate is off until the companion is opened, so such a launch
+        // rejoins no session, starts no updates and lets go of the strap. Persisted sessions resume on the next open.
+        model.evaluate()
         return true
     }
 }

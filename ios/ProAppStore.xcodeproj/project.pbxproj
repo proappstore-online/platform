@@ -18,6 +18,7 @@
 		4BB86174E9F9566B63E42E77 /* AppInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A292A82436A16B586312173C /* AppInfoTests.swift */; };
 		53643E7099CACCC616082AB3 /* PasApiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA60EDE242BA2081BE3BE9D /* PasApiTests.swift */; };
 		56BAE49C302244A943968E3D /* CatalogueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF7D868A1FC701C1B55D4807 /* CatalogueTests.swift */; };
+		5DA9277E0E345043D4346F60 /* SharingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */; };
 		65D44EA4EA3245A7B7FDC942 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 02F34D17F2EA035907DCD336 /* Assets.xcassets */; };
 		662900A1953BF8361746C05B /* CatalogueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AB569974F332D24F5C7B43 /* CatalogueStore.swift */; };
 		66AB4AC8D7DE99540749A4C2 /* Catalogue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12290EBE98D87AC41E272DF6 /* Catalogue.swift */; };
@@ -46,6 +47,7 @@
 		E875352AD58CFF068A53A49B /* CatalogueStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F921F2D2AE2A2C9DBAD439 /* CatalogueStoreTests.swift */; };
 		EA2D96BF4307505FC00F3781 /* SecureStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB575299865B2E756E74140 /* SecureStoreTests.swift */; };
 		EAD0340D0E6707CBEB96DDC3 /* AppDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4FD26B3FE33D81057F8B6A /* AppDetailView.swift */; };
+		EB08D843EDCF4D39ADEF14DF /* SharingSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BCB8DA994D2C69B65E7A6E /* SharingSessionTests.swift */; };
 		EDE2973889F0FC802ED8F1FD /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DB4C07B7D7FC1CA5235B188 /* LocalStore.swift */; };
 		EE6714B5C4DA8A74E5424EF1 /* PrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */; };
 		F09F7FD6D8E2693E98D984EB /* SharingStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7022FD1C081ABF740353BD85 /* SharingStateTests.swift */; };
@@ -71,6 +73,7 @@
 		12290EBE98D87AC41E272DF6 /* Catalogue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalogue.swift; sourceTree = "<group>"; };
 		1554730AEDB44B9903BFD1F4 /* CompanionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionRepository.swift; sourceTree = "<group>"; };
 		198026FF9DE4924087A189D6 /* ActivityText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityText.swift; sourceTree = "<group>"; };
+		27BCB8DA994D2C69B65E7A6E /* SharingSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingSessionTests.swift; sourceTree = "<group>"; };
 		2DB2642186745D2F314A032D /* LocationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPolicyTests.swift; sourceTree = "<group>"; };
 		31A80FA71297ADD68900688E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3D2965C38D0CF17C74C2A9A3 /* HeartRateViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateViews.swift; sourceTree = "<group>"; };
@@ -94,6 +97,7 @@
 		8211AE4AF61B5A945D034DF3 /* InstallGuideSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuideSheet.swift; sourceTree = "<group>"; };
 		9FA00B727D9608AC11E007B2 /* HeartRateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateTests.swift; sourceTree = "<group>"; };
 		A292A82436A16B586312173C /* AppInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfoTests.swift; sourceTree = "<group>"; };
+		A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharingSession.swift; sourceTree = "<group>"; };
 		A3649F54A1E2191EC5E2AFDF /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A3AAE89C44E5F82093943F76 /* LocationCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationCollector.swift; sourceTree = "<group>"; };
 		A3ECA823208978BBFB0E10F9 /* InstallGuideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuideTests.swift; sourceTree = "<group>"; };
@@ -147,6 +151,7 @@
 				A3649F54A1E2191EC5E2AFDF /* SettingsView.swift */,
 				5EF913A8258103BE26D6CBFD /* SharingDashboardView.swift */,
 				0DBDAE8FB24F25D71C27BEB2 /* SharingMapView.swift */,
+				A2E83B4C330AD2737BB2EFAC /* SharingSession.swift */,
 				764CE9E2B5B0964CBF3C9DFD /* SharingTimeline.swift */,
 				D92609594B1A9DA482B821EC /* StorefrontView.swift */,
 				B5B0B730CA674900317BE194 /* TrackShape.swift */,
@@ -187,6 +192,7 @@
 				C7D7AC954313060DF6E0C0F3 /* PrivacyTests.swift */,
 				7B6DEF5945A8E6C5C8377316 /* ScreenshotTests.swift */,
 				ABB575299865B2E756E74140 /* SecureStoreTests.swift */,
+				27BCB8DA994D2C69B65E7A6E /* SharingSessionTests.swift */,
 				7022FD1C081ABF740353BD85 /* SharingStateTests.swift */,
 				D9716F47DA58833A53137DBF /* SharingTimelineTests.swift */,
 				4CF558398A2545BE22E81FB3 /* TrackShapeTests.swift */,
@@ -321,6 +327,7 @@
 				341E9F482A30C12B43D813C6 /* SettingsView.swift in Sources */,
 				0E70BA3692621D5C761A7CE8 /* SharingDashboardView.swift in Sources */,
 				87A7CEFE9D0C37FEDE398236 /* SharingMapView.swift in Sources */,
+				5DA9277E0E345043D4346F60 /* SharingSession.swift in Sources */,
 				75823E5936D4B8B7348DB8AB /* SharingTimeline.swift in Sources */,
 				7A35EE7A8EDF59AF6533F23B /* StorefrontView.swift in Sources */,
 				0CD8C70D084E8DE0147AE467 /* TrackShape.swift in Sources */,
@@ -344,6 +351,7 @@
 				EE6714B5C4DA8A74E5424EF1 /* PrivacyTests.swift in Sources */,
 				45981C916F97CCF35F6C413A /* ScreenshotTests.swift in Sources */,
 				EA2D96BF4307505FC00F3781 /* SecureStoreTests.swift in Sources */,
+				EB08D843EDCF4D39ADEF14DF /* SharingSessionTests.swift in Sources */,
 				F09F7FD6D8E2693E98D984EB /* SharingStateTests.swift in Sources */,
 				785950B0825B2C3A06F84982 /* SharingTimelineTests.swift in Sources */,
 				8E55D7C213C4FBAF2748BAA3 /* TrackShapeTests.swift in Sources */,

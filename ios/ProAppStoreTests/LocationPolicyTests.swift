@@ -7,11 +7,11 @@ final class LocationPolicyTests: XCTestCase {
     private let app = ConnectedApp(id: "ski", name: "Ski", purpose: "Routes", disclosure: "Disclosure", version: "1", grantId: "grant-one", consentAt: 1000)
 
     func testRecipientsRequireConsentAndRespectLocalRevocation() {
-        XCTAssertEqual(LocationPolicy.recipients([app], blocked: [], at: 999), [])
-        XCTAssertEqual(LocationPolicy.recipients([app], blocked: [], at: 1000), ["grant-one"])
-        XCTAssertEqual(LocationPolicy.recipients([app], blocked: ["ski"], at: 1001), [])
+        XCTAssertEqual(LocationPolicy.recipients([app], blocked: [], sessions: ["ski"], at: 999), [])
+        XCTAssertEqual(LocationPolicy.recipients([app], blocked: [], sessions: ["ski"], at: 1000), ["grant-one"])
+        XCTAssertEqual(LocationPolicy.recipients([app], blocked: ["ski"], sessions: ["ski"], at: 1001), [])
         let ungranted = ConnectedApp(id: "ski", name: "Ski", purpose: "Routes", disclosure: "Disclosure", version: "1", grantId: nil, consentAt: 1000)
-        XCTAssertEqual(LocationPolicy.recipients([ungranted], blocked: [], at: 1001), [])
+        XCTAssertEqual(LocationPolicy.recipients([ungranted], blocked: [], sessions: ["ski"], at: 1001), [])
     }
 
     func testGpsMustBeFreshAccurateAndHaveRecipients() {
@@ -46,12 +46,13 @@ final class LocationPolicyTests: XCTestCase {
         XCTAssertFalse(LocationPolicy.valid(batch[3], now: now, lastFixAt: lastFixAt)) // same timestamp
     }
 
-    /// #620: with every granted app paused or revoked there is no recipient, which is the condition
+    /// With every granted app stopped or revoked there is no recipient, which is the condition
     /// LocationCollector.evaluate() stops collection on.
     func testNoRecipientsWhenEveryGrantedAppIsExcluded() {
         let run = ConnectedApp(id: "run", name: "Run", purpose: "Routes", disclosure: "Disclosure", version: "1", grantId: "grant-two", consentAt: 1000)
-        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski"], at: 2000), ["grant-two"])
-        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski", "run"], at: 2000), [])
+        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski"], sessions: ["ski", "run"], at: 2000), ["grant-two"])
+        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: ["ski", "run"], sessions: ["ski", "run"], at: 2000), [])
+        XCTAssertEqual(LocationPolicy.recipients([app, run], blocked: [], sessions: [], at: 2000), [], "no session (ADR-020)")
     }
 }
 

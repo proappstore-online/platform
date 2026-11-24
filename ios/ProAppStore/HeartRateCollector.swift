@@ -2,8 +2,8 @@ import CoreBluetooth
 import UIKit
 
 /// Run's strap heart rate (#631), the Core Bluetooth counterpart of LocationCollector. Collects only while a credential
-/// exists, a sensor is chosen, a heart-rate grant is current (not disabled, its app not paused, Pause all off) and the
-/// queue has room. The chosen sensor is kept as a pending connection, which iOS holds across backgrounding and
+/// exists, a sensor is chosen, a heart-rate grant is current (not disabled, its app in a live session, ADR-020) and the
+/// queue has room. A Core Bluetooth restoration launch has no live session, so it drops the strap (ADR-020 §7). The chosen sensor is kept as a pending connection, which iOS holds across backgrounding and
 /// locking (`bluetooth-central`); scanning happens only from the foreground "Choose sensor" sheet.
 @MainActor
 final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -40,13 +40,16 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
         central = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionRestoreIdentifierKey: "online.proappstore.heart-rate"])
     }
 
+    /// The apps whose sessions may collect now, set by `CompanionModel` (its `live` gate, as for location).
+    var sessions: () -> Set<String> = { [] }
+
     /// Current heart-rate grants for new readings.
-    private func recipients(at: Int64) -> [String] {
-        HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), pausedApps: local.pausedApps(), at: at)
+    func recipients(at: Int64) -> [String] {
+        HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), sessions: sessions(), at: at)
     }
 
     var shouldCollect: Bool {
-        repository.token() != nil && !local.paused && local.heartRateSensor != nil && !recipients(at: CompanionRepository.now()).isEmpty
+        repository.token() != nil && local.heartRateSensor != nil && !recipients(at: CompanionRepository.now()).isEmpty
             && ((try? local.heartRateCount()) ?? HeartRatePolicy.MAX_QUEUE) < HeartRatePolicy.MAX_QUEUE
     }
 
@@ -181,8 +184,10 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
     }
 
     private func record(_ data: Data) {
-        guard shouldCollect else { return evaluate() }
         let now = CompanionRepository.now()
+        // A session whose location was turned off (#677) may be woken by Bluetooth alone: its due check runs here too.
+        repository.endDueSessions(now: now)
+        guard shouldCollect else { return evaluate() }
         guard let reading = HeartRateMeasurement.parse(data), policy.accept(contact: reading.contact, at: now) else { return }
         lastBpm = reading.bpm
         do {

@@ -24,7 +24,7 @@ The **Store** tab lists every public PAS app. Search, browse by category, or ope
 
 ## On iPhone
 
-Build and install from Xcode (developer preview; not on the App Store). Choose **Allow While Using App** and keep **Precise Location** on. Start collection in ProAppStore, then lock your phone or switch to your app: the blue location indicator shows ProAppStore is recording. Choose **Change to Always Allow** only if you want ProAppStore to resume after iOS closes it. A free Apple developer team build stops opening after 7 days until it is reinstalled from Xcode.
+Build and install from Xcode (developer preview; not on the App Store). Choose **Allow While Using App** and keep **Precise Location** on. Tap **Start** on an app in ProAppStore, then lock your phone or switch to your app: the blue location indicator shows ProAppStore is sharing. Tap **Stop** when you are done. Sharing also stops by itself after 30 minutes without moving or after 12 hours, and a notification in Notification Center says so. If iOS closes ProAppStore during a session, open it again to continue. A free Apple developer team build stops opening after 7 days until it is reinstalled from Xcode.
 
 ## Browse apps (iPhone)
 

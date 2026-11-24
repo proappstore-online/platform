@@ -64,7 +64,7 @@ Source: [App Review Guidelines](https://developer.apple.com/app-store/review/gui
 
 ### Heart rate from a Bluetooth strap (`heart_rate.ble`, #631, #634)
 
-**iOS `bluetooth-central` background mode.** Justification: *reads a user-chosen fitness sensor during the user's activity*. The companion scans only from a foreground sheet the user opens, for the standard Heart Rate Service (`0x180D`) only, and connects to the one sensor the user picks. Locked-screen delivery uses a pending connection to that identifier plus state restoration; there is no background scan. `NSBluetoothAlwaysUsageDescription`: "ProAppStore reads the heart-rate sensor you choose for the apps you enable, such as Run, including while your phone is locked."
+**iOS `bluetooth-central` background mode.** Justification: *reads a user-chosen fitness sensor during the user's activity*. The companion scans only from a foreground sheet the user opens, for the standard Heart Rate Service (`0x180D`) only, and connects to the one sensor the user picks. Locked-screen delivery uses a pending connection to that identifier plus state restoration; there is no background scan. `NSBluetoothAlwaysUsageDescription`: "ProAppStore reads the heart-rate sensor you choose for an app such as Run while you share with it, including while your phone is locked."
 
 **App Review 5.1.3 (health and fitness data).** The specific data is disclosed before the grant (bpm and time only; the sensor's name and identifier stay on the phone). It is never used for advertising or marketing, never written to iCloud (the queue and history file is excluded from backup), and it is made available only to Run, for that user's own fitness record, with the user's permission. HealthKit is not used.
 

@@ -25,16 +25,14 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>ProAppStore records your route for the apps you enable, such as Run, including while your phone is locked. Location goes only to PAS and the apps you turn on.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Allow ProAppStore to resume recording for the apps you enable after iOS restarts it. You can pause or turn off any app inside ProAppStore.</string>
+	<string>ProAppStore records your route for an app such as Run while you share with it, including while your phone is locked. Sharing starts when you tap Start and stops when you tap Stop, after 30 minutes without moving, or after 12 hours. Location goes only to PAS and the apps you turn on.</string>
 	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
 	<dict>
 		<key>RouteRecording</key>
 		<string>Precise location is needed to record an accurate route for the apps you enable.</string>
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>ProAppStore reads the heart-rate sensor you choose for the apps you enable, such as Run, including while your phone is locked.</string>
+	<string>ProAppStore reads the heart-rate sensor you choose for an app such as Run while you share with it, including while your phone is locked.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

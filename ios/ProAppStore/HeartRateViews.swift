@@ -22,7 +22,9 @@ struct HeartRateDisclosure: View {
     }
 }
 
-/// One heart-rate line under its app's row: Enable, Choose sensor, state, Forget sensor, Turn off.
+/// One heart-rate line under its app's row: Enable, Choose sensor, state, Forget sensor, Turn off. Enable is offered
+/// only once the app's location is on: heart rate is shared during a session, and a session needs location (ADR-020
+/// decision 11).
 struct HeartRateLine: View {
     let entry: NativeEntry
     @ObservedObject var model: CompanionModel
@@ -33,7 +35,7 @@ struct HeartRateLine: View {
         VStack(alignment: .leading, spacing: 6) {
             LabeledContent("Heart rate", value: state)
             if !model.enabled(entry) {
-                if !model.blocked.contains(entry.key) || entry.grantId == nil {
+                if model.offersEnable(entry) {
                     Button("Enable") { model.entryConsent = entry }.disabled(model.busy || model.expired)
                 }
             } else {
@@ -62,9 +64,7 @@ struct HeartRateLine: View {
     }
 
     private var state: String {
-        if model.blocked.contains(entry.key) { return entry.grantId != nil ? "Turning off…" : "Off" }
-        guard model.enabled(entry) else { return "Off" }
-        if model.paused || model.pausedApps.contains(entry.appId) { return "Paused" }
+        if let gate = model.heartRateGate(entry) { return gate }
         if heartRate.sensor == nil { return "No sensor chosen" }
         if model.queuedHeartRate >= HeartRatePolicy.MAX_QUEUE { return "Stopped: upload queue full" }
         switch heartRate.bluetooth {

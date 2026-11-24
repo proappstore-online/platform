@@ -18,10 +18,11 @@ final class LocalStoreTests: XCTestCase {
         ["id": id, "name": id, "purpose": "Routes", "disclosure": "Disclosure", "version": "1", "grant": ["id": grant, "consent_at": 1]]
     }
 
-    private func store(apps: [[String: Any]]) throws -> LocalStore {
+    /// Every app granted and, unless `sessions` is false, sharing in a session started at the real clock.
+    private func store(apps: [[String: Any]], sessions: Bool = true) throws -> LocalStore {
         let local = try LocalStore(directory: directory)
         try local.saveApps(try JSONSerialization.data(withJSONObject: apps))
-        try local.setPaused(false)
+        if sessions { for app in apps { try local.startSession(app["id"] as! String) } }
         return local
     }
 
@@ -76,29 +77,56 @@ final class LocalStoreTests: XCTestCase {
                            "Upload queue is full. Connect to the internet so ProAppStore can send waiting points.")
         }
         XCTAssertEqual(try local.count(), LocationPolicy.MAX_QUEUE)
-        XCTAssertEqual(LocationCollector.saveFailureMessage(CompanionError("SQLite")), "Could not save location on this phone. Collection paused.")
+        XCTAssertEqual(LocationCollector.saveFailureMessage(CompanionError("SQLite")), "Could not save location on this phone. Sharing stopped.")
     }
 
-    func testPausedEnqueueIsANoOp() throws {
-        let local = try store(apps: [app("ski", "g")])
-        try local.setPaused(true)
-        try local.enqueue(point("p", at: 10, grants: ["g"]))
+    /// ADR-020 (replaces "paused enqueue is a no-op"): with no session, neither queue stores anything.
+    func testWithoutASessionNothingIsStored() throws {
+        let local = try runStore(sessions: false)
+        try local.enqueue(point("p", at: 10, grants: ["ski-loc", "run-loc"]))
+        try local.enqueueHeartRate(sample("h", at: 10))
         XCTAssertEqual(try local.count(), 0)
+        XCTAssertEqual(try local.heartRateCount(), 0)
     }
 
-    func testSettingsDefaultToPausedAndClearResets() throws {
+    /// A fresh store has no session (replaces "settings default to paused"); sessions survive a reopen, and clear ends them.
+    func testNoSessionByDefaultSessionsSurviveReopenAndClearResets() throws {
         let local = try LocalStore(directory: directory)
-        XCTAssertTrue(local.paused)
-        try local.setPaused(false)
+        XCTAssertEqual(local.sessions(), [])
+        try local.startSession("run", now: 5)
+        try local.startSession("run", now: 9) // a running session is left as it is
         local.message = "m"; local.userName = "Alex"; local.lastSync = 42
         local.close()
         let reopened = try LocalStore(directory: directory)
-        XCTAssertFalse(reopened.paused)
+        XCTAssertEqual(reopened.sessions(), [Session(appId: "run", startedAt: 5, lastMovedAt: 5)])
         XCTAssertEqual(reopened.userName, "Alex")
         XCTAssertEqual(reopened.lastSync, 42)
         try reopened.clear()
-        XCTAssertTrue(reopened.paused)
+        XCTAssertEqual(reopened.sessions(), [])
         XCTAssertEqual(reopened.message, "")
+    }
+
+    /// ADR-020 §9: the first open drops both pause settings and creates no session, even for an app that was sharing.
+    func testTheFirstOpenDropsThePauseSettingsAndStartsNothing() throws {
+        let local = try store(apps: [app("run", "run-g")], sessions: false)
+        local.close()
+        let db = try XCTUnwrap(sqliteHandle(local.fileURL))
+        XCTAssertEqual(sqlite3_exec(db, #"INSERT INTO settings(key, value) VALUES ('paused', '0'), ('pausedApps', '["ski"]')"#, nil, nil, nil), SQLITE_OK)
+        func keys() -> [String] {
+            var statement: OpaquePointer?
+            XCTAssertEqual(sqlite3_prepare_v2(db, "SELECT key FROM settings ORDER BY key", -1, &statement, nil), SQLITE_OK)
+            defer { sqlite3_finalize(statement) }
+            var rows: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW { rows.append(String(cString: sqlite3_column_text(statement, 0))) }
+            return rows
+        }
+        XCTAssertEqual(keys(), ["apps", "paused", "pausedApps"])
+        let reopened = try LocalStore(directory: directory)
+        XCTAssertEqual(keys(), ["apps"])
+        sqlite3_close(db)
+        XCTAssertEqual(reopened.sessions(), [])
+        try reopened.enqueue(point("p", at: 10, grants: ["run-g"]))
+        XCTAssertEqual(try reopened.count(), 0, "nothing collects until Start")
     }
 
     func testFileIsWritableWhileLockedAndExcludedFromBackup() throws {
@@ -118,45 +146,102 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
     }
 
-    // MARK: Per-app pause (#620)
+    // MARK: Collection sessions (ADR-020), replacing per-app pause (#620)
 
-    func testPauseFiltersNewPointsToTheOtherRecipient() throws {
-        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
-        try local.pause("ski")
+    /// Replaces "pause filters new points to the other recipient".
+    func testStartingRunsSessionTagsOnlyRun() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")], sessions: false)
+        try local.startSession("run")
         try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
         XCTAssertEqual(try local.pending().first?.grants, ["run-g"])
-        try local.pause("run")
+        try local.endSession("run", detail: "user")
         try local.enqueue(point("q", at: 11, grants: ["ski-g", "run-g"]))
         XCTAssertEqual(try local.count(), 1)
     }
 
-    func testPauseLeavesQueuedPointsUntouched() throws {
+    /// #620's guarantee for Stop (replaces "pause leaves queued points untouched"): queued points and their grants stay,
+    /// and still upload; the grant and the app list are untouched.
+    func testEndingASessionLeavesQueuedPointsAndGrantsUnchanged() throws {
         let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
         try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
-        try local.pause("ski")
+        let apps = local.apps()
+        try local.endSession("ski", detail: "user")
         XCTAssertEqual(try local.pending().first?.grants, ["ski-g", "run-g"])
+        XCTAssertEqual(local.apps(), apps)
+        XCTAssertEqual(local.blocked(), [])
+        XCTAssertEqual(local.sessionIds(), ["run"])
+        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" }, ["session_ended:ski:user"])
     }
 
-    func testResumeRestoresTaggingAndBlockClearsThePause() throws {
+    /// Replaces "resume restores tagging and block clears the pause": Start again tags again; turning off ends it.
+    func testStartingAgainRestoresTaggingAndTurningOffEndsTheSession() throws {
         let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
-        try local.pause("ski")
-        try local.resume("ski")
+        try local.endSession("ski", detail: "user")
+        try local.startSession("ski")
         try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
         XCTAssertEqual(try local.pending().first?.grants, ["ski-g", "run-g"])
-        try local.pause("ski")
         try local.block("ski")
-        XCTAssertEqual(local.pausedApps(), [])
-        XCTAssertEqual(local.excluded(), ["ski"])
+        XCTAssertEqual(local.sessionIds(), ["run"])
+        XCTAssertEqual(local.blocked(), ["ski"])
     }
 
-    func testPausesSurviveReopenAndClearEmptiesThem() throws {
-        let local = try store(apps: [app("ski", "ski-g")])
-        try local.pause("ski")
-        local.close()
-        let reopened = try LocalStore(directory: directory)
-        XCTAssertEqual(reopened.pausedApps(), ["ski"])
-        try reopened.clear()
-        XCTAssertEqual(reopened.pausedApps(), [])
+    func testEndAllSessionsAndAForcedStop() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.endAllSessions("all", now: 50)
+        XCTAssertEqual(local.sessions(), [])
+        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" }, ["session_ended:ski:all", "session_ended:run:all"])
+        try local.stop("storage_failed") // nothing running: nothing to record
+        try local.startSession("run")
+        try local.stop("storage_failed")
+        XCTAssertEqual(local.sessions(), [])
+        XCTAssertEqual(try local.events().last.map { "\($0.kind.rawValue):\($0.detail)" }, "stopped:storage_failed")
+    }
+
+    /// ADR-020 §3: movement restarts every stationary clock, written at most once a minute.
+    func testMovementRestartsTheStationaryClockAtMostOnceAMinute() throws {
+        let local = try LocalStore(directory: directory)
+        try local.startSession("run", now: 0)
+        try local.moved(now: 59_999)
+        XCTAssertEqual(local.sessions().first?.lastMovedAt, 0)
+        try local.moved(now: 60_000)
+        XCTAssertEqual(local.sessions().first?.lastMovedAt, 60_000)
+    }
+
+    func testDueSessionsEndAsStationaryOrMax() throws {
+        let local = try LocalStore(directory: directory)
+        let min: Int64 = 60_000
+        try local.startSession("run", now: 0)
+        try local.startSession("ski", now: 0)
+        try local.moved(now: 20 * min)  // both moved at 20 min
+        XCTAssertTrue(try local.endDueSessions(now: 49 * min).isEmpty)
+        try local.startSession("bike", now: 49 * min)
+        let ended = try local.endDueSessions(now: 50 * min)
+        XCTAssertEqual(ended.map { "\($0.appId):\($0.reason.rawValue)" }, ["run:stationary", "ski:stationary"])
+        XCTAssertEqual(local.sessionIds(), ["bike"])
+        XCTAssertEqual(try local.endDueSessions(now: 49 * min + LocationPolicy.MAX_SESSION_MS).map(\.reason), [.maxLength])
+        XCTAssertEqual(try local.events().filter { $0.kind == .sessionEnded }.map(\.detail), ["stationary", "stationary", "max"])
+    }
+
+    /// ADR-020 §7: opening the companion ends sessions past 12 hours as `max` and restarts the others' stationary clock.
+    func testResumeSessionsEndsLongOnesAndRestartsTheOthersClock() throws {
+        let local = try LocalStore(directory: directory)
+        try local.startSession("run", now: 0)
+        try local.startSession("ski", now: 2 * 3_600_000)
+        let now = LocationPolicy.MAX_SESSION_MS + 1
+        try local.resumeSessions(now: now)
+        XCTAssertEqual(local.sessions(), [Session(appId: "ski", startedAt: 2 * 3_600_000, lastMovedAt: now)])
+        XCTAssertEqual(try local.events().filter { $0.kind == .sessionEnded }.map { "\($0.appId!):\($0.detail)" }, ["run:max"])
+    }
+
+    /// #652: an expiry ends every session; reconnecting creates none.
+    func testMarkExpiredEndsAllSessions() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+        try local.markExpired(userId: "u1")
+        XCTAssertEqual(local.sessions(), [])
+        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId ?? "-"):\($0.detail)" },
+                       ["session_ended:ski:grant", "session_ended:run:grant", "expired:-:"])
+        try local.clearForReconnect()
+        XCTAssertEqual(local.sessions(), [])
     }
 
     // MARK: Sharing history (#621)
@@ -172,8 +257,8 @@ final class LocalStoreTests: XCTestCase {
         return rows
     }
 
-    /// Events after setup: `store()`'s own setPaused(false) records a `resumed_all` at the real clock.
-    private func events(_ local: LocalStore) throws -> [ShareEvent] { try local.events().filter { $0.kind != .resumedAll } }
+    /// Events after setup: `store()`'s own sessions record a `session_started` each at the real clock.
+    private func events(_ local: LocalStore) throws -> [ShareEvent] { try local.events().filter { $0.kind != .sessionStarted } }
 
     func testEnqueueWritesHistoryPerAppAndAcknowledgeMarksItSent() throws {
         let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
@@ -191,7 +276,7 @@ final class LocalStoreTests: XCTestCase {
         try local.enqueue(point("queued", at: 30, grants: ["ski-g", "run-g"]))
         try local.block("ski")
         XCTAssertEqual(try history(local), ["run:queued:q", "run:sent:20", "ski:sent:20"])
-        XCTAssertEqual(try events(local).map(\.kind), [.disabled])
+        XCTAssertEqual(try events(local).map(\.kind), [.disabled, .sessionEnded])
     }
 
     func testExpireAppliesHistoryWindowsAndKeepsTheNewestEventPerKind() throws {
@@ -228,13 +313,12 @@ final class LocalStoreTests: XCTestCase {
     func testClearHistoryKeepsTheQueueAndReseedsCurrentState() throws {
         let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
         try local.enqueue(point("p", at: 10, grants: ["ski-g", "run-g"]))
-        try local.pause("run")
-        try local.setPaused(true)
+        try local.endSession("ski", detail: "user")
         try local.clearHistory(now: 99)
         XCTAssertEqual(try local.count(), 1)
         XCTAssertEqual(try history(local), [])
         XCTAssertEqual(try local.events().map { "\($0.kind.rawValue):\($0.appId ?? "-"):\($0.at)" },
-                       ["history_cleared:-:99", "enabled:ski:99", "enabled:run:99", "paused:run:99", "paused_all:-:99"])
+                       ["history_cleared:-:99", "enabled:ski:99", "enabled:run:99", "session_started:run:99"])
         try local.clear()
         XCTAssertEqual(try local.events(), [])
         XCTAssertEqual(try history(local), [])
@@ -243,7 +327,7 @@ final class LocalStoreTests: XCTestCase {
     func testClearEmptiesHistory() throws {
         let local = try store(apps: [app("ski", "g")])
         try local.enqueue(point("p", at: 10, grants: ["g"]))
-        try local.pause("ski")
+        try local.endSession("ski", detail: "user")
         try local.clear()
         XCTAssertEqual(try local.events(), [])
         XCTAssertEqual(try history(local), [])
@@ -258,7 +342,7 @@ final class LocalStoreTests: XCTestCase {
         local.close()
         let reopened = try LocalStore(directory: directory)
         XCTAssertEqual(reopened.expiredUser, "u1")
-        XCTAssertEqual(try reopened.events().map(\.kind), [.resumedAll, .expired])
+        XCTAssertEqual(try reopened.events().map(\.kind), [.sessionStarted, .sessionEnded, .expired])
         try reopened.clearHistory(now: 99)
         XCTAssertEqual(try reopened.events().map(\.kind), [.historyCleared])
     }
@@ -269,34 +353,37 @@ final class LocalStoreTests: XCTestCase {
         try local.enqueue(point("sent", at: 10, grants: ["ski-g"]))
         try local.acknowledge(["sent"], now: 20)
         try local.enqueue(point("queued", at: 30, grants: ["ski-g"]))
-        try local.pause("ski")
+        try local.endSession("ski", detail: "user")
         try local.block("run")
         try local.markExpired(userId: "u1")
         try local.clearForReconnect()
         XCTAssertEqual(try local.count(), 0)
         XCTAssertEqual(try history(local), ["ski:sent:20"])
-        XCTAssertEqual(try local.events().map(\.kind), [.resumedAll, .paused, .disabled, .expired])
+        XCTAssertEqual(try events(local).map(\.kind), [.sessionEnded, .disabled, .sessionEnded, .expired])
         XCTAssertEqual(local.apps(), [])
         XCTAssertEqual(local.blocked(), [])
-        XCTAssertEqual(local.pausedApps(), [])
+        XCTAssertEqual(local.sessions(), [], "reconnecting creates no session")
         XCTAssertFalse(local.expired)
-        XCTAssertTrue(local.paused)
     }
 
+    /// An upgrade seeds the consent periods and no session: there is none to seed.
     func testSeedOnAnEmptyHistoryDatesEnabledAtConsent() throws {
         let local = try LocalStore(directory: directory)
         try local.saveApps(try JSONSerialization.data(withJSONObject: [app("run", "run-g")])) // consent_at 1
         try local.seedIfEmpty(now: 500)
-        XCTAssertEqual(try local.events().map { "\($0.kind.rawValue):\($0.at):\($0.detail)" }, ["enabled:1:seeded", "paused_all:500:seeded"])
+        XCTAssertEqual(try local.events().map { "\($0.kind.rawValue):\($0.at):\($0.detail)" }, ["enabled:1:seeded"])
         try local.seedIfEmpty(now: 600)
-        XCTAssertEqual(try local.events().count, 2) // only once
+        XCTAssertEqual(try local.events().count, 1) // only once
     }
 
-    func testSaveAppsRecordsALostGrant() throws {
-        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g")])
+    /// A lost or replaced grant ends the app's session; an unchanged one keeps it.
+    func testSaveAppsRecordsALostGrantAndEndsItsSession() throws {
+        let local = try store(apps: [app("ski", "ski-g"), app("run", "run-g"), app("bike", "bike-g")])
         var revoked = app("run", "x"); revoked["grant"] = NSNull()
-        try local.saveApps(try JSONSerialization.data(withJSONObject: [app("ski", "ski-new"), revoked]))
-        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" }, ["grant_lost:ski:replaced", "grant_lost:run:revoked"])
+        try local.saveApps(try JSONSerialization.data(withJSONObject: [app("ski", "ski-new"), revoked, app("bike", "bike-g")]))
+        XCTAssertEqual(try events(local).map { "\($0.kind.rawValue):\($0.appId!):\($0.detail)" },
+                       ["grant_lost:ski:replaced", "session_ended:ski:grant", "grant_lost:run:revoked", "session_ended:run:grant"])
+        XCTAssertEqual(local.sessionIds(), ["bike"])
     }
 
     func testPendingCountAndLastUploadArePerApp() throws {
@@ -330,7 +417,7 @@ final class LocalStoreTests: XCTestCase {
         let local = try store(apps: [app("ski", "g")])
         try local.syncFailed("500 " + String(repeating: "x", count: 300))
         try local.enqueue(point("p", at: 10, grants: ["g"]))
-        try local.pause("ski"); try local.block("ski")
+        try local.endSession("ski", detail: "user"); try local.block("ski")
         let details = try local.events().map(\.detail)
         XCTAssertEqual(details.map(\.count).max(), 120)
         let coordinate = try NSRegularExpression(pattern: #"-?\d{1,3}\.\d{4,}"#)
@@ -342,7 +429,8 @@ final class LocalStoreTests: XCTestCase {
         var none = app("ski", "x"); none["grant"] = NSNull()
         try local.saveApps(try JSONSerialization.data(withJSONObject: [none]))
         try local.saveApps(try JSONSerialization.data(withJSONObject: [app("ski", "g2")]))
-        XCTAssertEqual(try events(local).map(\.kind), [.grantLost, .grantRestored])
+        XCTAssertEqual(try events(local).map(\.kind), [.grantLost, .sessionEnded, .grantRestored])
+        XCTAssertEqual(local.sessions(), [], "a restored grant starts nothing")
     }
 
     /// #647: the history queries on hot paths (acknowledge per id, the 2 s per-app refresh, expiry every sync) use
@@ -379,9 +467,10 @@ final class LocalStoreTests: XCTestCase {
          "grant": ["id": grant, "consent_at": 1]]
     }
 
-    /// Run with location grant `run-loc` and heart-rate grant `run-hr`, Ski with location only.
-    private func runStore() throws -> LocalStore {
-        let local = try store(apps: [app("ski", "ski-loc"), app("run", "run-loc")])
+    /// Run with location grant `run-loc` and heart-rate grant `run-hr`, Ski with location only; both sharing unless
+    /// `sessions` is false.
+    private func runStore(sessions: Bool = true) throws -> LocalStore {
+        let local = try store(apps: [app("ski", "ski-loc"), app("run", "run-loc")], sessions: sessions)
         try local.saveEntries(try JSONSerialization.data(withJSONObject: [
             entry("ski", "location.background", "ski-loc"), entry("run", "location.background", "run-loc"), entry("run", "heart_rate.ble", "run-hr")]))
         return local
@@ -394,59 +483,68 @@ final class LocalStoreTests: XCTestCase {
         try local.enqueueHeartRate(sample("h1", at: 10))
         try local.block("run/heart_rate.ble")
         XCTAssertEqual(try local.heartRateCount(), 0, "its queued samples went with it")
-        XCTAssertEqual(LocationPolicy.recipients(local.apps(), blocked: local.excluded(), at: 20), ["ski-loc", "run-loc"])
+        XCTAssertEqual(LocationPolicy.recipients(local.apps(), blocked: local.blocked(), sessions: local.sessionIds(), at: 20), ["ski-loc", "run-loc"])
+        XCTAssertTrue(local.sessionIds().contains("run"), "Run's location keeps the session")
         try local.enqueue(point("p", at: 20, grants: ["run-loc"]))
         XCTAssertEqual(try local.count(), 1)
         try local.enqueueHeartRate(sample("h2", at: 20))
         XCTAssertEqual(try local.heartRateCount(), 0)
-        XCTAssertEqual(try local.events().filter { $0.appId == "run" }.map { "\($0.kind.rawValue):\($0.detail)" }, ["heart_rate:disabled"], "not a location `disabled`")
+        XCTAssertEqual(try events(local).filter { $0.appId == "run" }.map { "\($0.kind.rawValue):\($0.detail)" }, ["heart_rate:disabled"], "not a location `disabled`")
     }
 
+    /// #677: `block(run)` with Run's heart rate on keeps the session and the heart-rate recipients.
     func testBlockingRunLocationLeavesRunHeartRateIntact() throws {
         let local = try runStore()
         try local.enqueueHeartRate(sample("h1", at: 10))
         try local.block("run")
         XCTAssertEqual(try local.heartRateCount(), 1)
-        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), pausedApps: local.pausedApps(), at: 20), ["run-hr"])
+        XCTAssertEqual(local.sessionIds(), ["ski", "run"])
+        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), sessions: local.sessionIds(), at: 20), ["run-hr"])
         try local.enqueueHeartRate(sample("h2", at: 20))
         XCTAssertEqual(try local.pendingHeartRate().map(\.id), ["h1", "h2"])
+        XCTAssertFalse(try local.events().contains { $0.kind == .sessionEnded })
     }
 
-    /// #677: turning off a paused Run's location keeps Run paused, because its heart rate is still on.
-    func testTurningOffAPausedRunsLocationKeepsItsHeartRatePaused() throws {
+    /// #677 (replaces "turning off a paused Run's location keeps it paused"): blocking location never starts heart rate for
+    /// a stopped Run.
+    func testBlockingLocationNeverStartsHeartRateForAStoppedRun() throws {
         let local = try runStore()
-        try local.pause("run")
+        try local.endSession("run", detail: "user")
         try local.block("run")
-        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), pausedApps: local.pausedApps(), at: 20), [])
-        XCTAssertTrue(local.pausedApps().contains("run"))
+        XCTAssertEqual(HeartRatePolicy.recipients(local.entries(), blocked: local.blocked(), sessions: local.sessionIds(), at: 20), [])
+        XCTAssertFalse(local.sessionIds().contains("run"))
         try local.enqueueHeartRate(sample("h", at: 20))
         XCTAssertEqual(try local.heartRateCount(), 0)
     }
 
-    /// #677 keeps #620 for a location-only app: a disabled app is not paused.
-    func testTurningOffAPausedLocationOnlyAppClearsItsPause() throws {
+    /// Replaces "turning off a paused location-only app clears its pause": its last capability ends the session.
+    func testBlockingTheLastCapabilityRecordsSessionEndedGrant() throws {
         let local = try runStore()
-        try local.pause("ski")
         try local.block("ski")
-        XCTAssertFalse(local.pausedApps().contains("ski"))
+        XCTAssertEqual(local.sessionIds(), ["run"])
+        XCTAssertEqual(try events(local).filter { $0.appId == "ski" }.map { "\($0.kind.rawValue):\($0.detail)" }, ["disabled:", "session_ended:grant"])
     }
 
-    /// #677: with Run's heart rate already off, nothing of Run is left on, so turning off location clears the pause.
-    func testTurningOffRunsLastCapabilityClearsItsPause() throws {
+    /// Replaces "turning off Run's last capability clears its pause": heart rate off keeps the session, location off then
+    /// ends it, once.
+    func testTurningOffRunsLastCapabilityEndsItsSession() throws {
         let local = try runStore()
-        try local.pause("run")
         try local.block("run/heart_rate.ble")
+        XCTAssertTrue(local.sessionIds().contains("run"))
         try local.block("run")
-        XCTAssertFalse(local.pausedApps().contains("run"))
+        XCTAssertFalse(local.sessionIds().contains("run"))
+        XCTAssertEqual(try local.events().filter { $0.kind == .sessionEnded && $0.appId == "run" }.map(\.detail), ["grant"])
     }
 
-    func testHeartRateFollowsPauseAllAndRunsPause() throws {
+    /// Replaces "heart rate follows Pause all and Run's pause".
+    func testHeartRateFollowsRunsSession() throws {
         let local = try runStore()
-        try local.pause("run")
-        try local.enqueueHeartRate(sample("paused", at: 10))
-        try local.resume("run"); try local.setPaused(true)
-        try local.enqueueHeartRate(sample("all", at: 11))
+        try local.endSession("run", detail: "user")
+        try local.enqueueHeartRate(sample("stopped", at: 10))
         XCTAssertEqual(try local.heartRateCount(), 0)
+        try local.startSession("run")
+        try local.enqueueHeartRate(sample("started", at: 11))
+        XCTAssertEqual(try local.heartRateCount(), 1)
     }
 
     func testHeartRateHistoryIsKeptAcknowledgedExpiredAndCleared() throws {
@@ -483,7 +581,7 @@ final class LocalStoreTests: XCTestCase {
             """, nil, nil, nil), SQLITE_OK)
         XCTAssertThrowsError(try local.enqueueHeartRate(sample("over", at: 10))) { XCTAssertTrue($0 is HeartRateQueueFullError) }
         XCTAssertEqual(try local.heartRateCount(), HeartRatePolicy.MAX_QUEUE)
-        XCTAssertEqual(try local.events().map(\.kind).filter { $0 != .resumedAll }, [.heartRateProblem])
+        XCTAssertEqual(try events(local).map(\.kind), [.heartRateProblem])
     }
 
     /// #679: the insert that fills the queue reports it, once, because the collector stops before the next one.

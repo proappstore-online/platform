@@ -40,9 +40,10 @@ struct HeartRatePolicy {
         return true
     }
 
-    /// The heart-rate grants current at `at`: neither the entry is disabled nor its app paused (#620).
-    static func recipients(_ entries: [NativeEntry], blocked: Set<String>, pausedApps: Set<String>, at: Int64) -> [String] {
-        entries.filter { $0.capability == HeartRate.CAPABILITY && !blocked.contains($0.key) && !pausedApps.contains($0.appId) && at >= $0.consentAt }
+    /// The heart-rate grants current at `at`: the entry is not disabled and its app has a session (ADR-020). No session,
+    /// no reads.
+    static func recipients(_ entries: [NativeEntry], blocked: Set<String>, sessions: Set<String>, at: Int64) -> [String] {
+        entries.filter { $0.capability == HeartRate.CAPABILITY && !blocked.contains($0.key) && sessions.contains($0.appId) && at >= $0.consentAt }
             .compactMap(\.grantId)
     }
 }

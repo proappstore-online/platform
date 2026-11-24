@@ -6,22 +6,21 @@ import UIKit
 
 /// One app row's state chip. Pure, so every combination is table-tested.
 enum SharingState: Equatable {
-    case sharing, paused, pausedAll, off, turningOff, notRecording, expired
+    case sharing, notSharing, off, turningOff, notRecording, expired
 
-    /// `blocked` with a grant still held means the server `DELETE` has not gone through yet.
-    static func of(granted: Bool, blocked: Bool, appPaused: Bool, pausedAll: Bool, running: Bool) -> SharingState {
+    /// `blocked` with a grant still held means the server `DELETE` has not gone through yet. `session`: the app has a
+    /// collection session (ADR-020).
+    static func of(granted: Bool, blocked: Bool, session: Bool, running: Bool) -> SharingState {
         if blocked { return granted ? .turningOff : .off }
         if !granted { return .off }
-        if pausedAll { return .pausedAll }
-        if appPaused { return .paused }
+        if !session { return .notSharing }
         return running ? .sharing : .notRecording
     }
 
     var label: String {
         switch self {
         case .sharing: "Sharing"
-        case .paused: "Paused"
-        case .pausedAll: "Paused (all)"
+        case .notSharing: "Not sharing"
         case .off: "Off"
         case .turningOff: "Turning off…"
         case .notRecording: "Not recording"
@@ -32,8 +31,8 @@ enum SharingState: Equatable {
     var color: Color {
         switch self {
         case .sharing: .green
-        case .paused, .pausedAll, .turningOff: .orange
-        case .off, .expired: .secondary
+        case .turningOff: .orange
+        case .notSharing, .off, .expired: .secondary
         case .notRecording: .red
         }
     }
@@ -44,7 +43,6 @@ enum SharingState: Equatable {
 final class DeviceStatus: ObservableObject {
     @Published private(set) var online = true
     @Published private(set) var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    @Published private(set) var backgroundRefresh = UIApplication.shared.backgroundRefreshStatus
     private let monitor = NWPathMonitor()
     private var observers: [AnyCancellable] = []
 
@@ -57,24 +55,27 @@ final class DeviceStatus: ObservableObject {
         observers.append(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: RunLoop.main).sink { [weak self] _ in
             self?.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         })
-        observers.append(NotificationCenter.default.publisher(for: UIApplication.backgroundRefreshStatusDidChangeNotification).receive(on: RunLoop.main).sink { [weak self] _ in
-            self?.backgroundRefresh = UIApplication.shared.backgroundRefreshStatus
-        })
     }
 
     deinit { monitor.cancel() }
 }
 
-/// Pause or Resume for one enabled app. Resume waits for Pause all to be off.
-struct PauseResumeButton: View {
+/// ADR-020: Start, or Stop with the elapsed time while the app has a session. Stop never touches the grant; Start needs
+/// no new disclosure. Start is off while location is denied or approximate: PermissionControls shows the fix.
+struct StartStopButton: View {
     let app: ConnectedApp
     @ObservedObject var model: CompanionModel
+    @ObservedObject var collector: LocationCollector
 
     var body: some View {
-        if model.pausedApps.contains(app.id) {
-            Button("Resume") { model.resume(app) }.buttonStyle(.borderedProminent).disabled(model.paused)
+        if let session = model.sessions[app.id] {
+            HStack {
+                Button("Stop") { model.stop(app) }.buttonStyle(.bordered)
+                Text("Sharing · \(AppSharingView.duration(CompanionRepository.now() - session.startedAt))").font(.footnote)
+            }
         } else {
-            Button("Pause") { model.pause(app) }.buttonStyle(.bordered)
+            Button("Start") { model.start(app) }.buttonStyle(.borderedProminent)
+                .disabled(model.busy || !(collector.permitted || collector.authorization == .notDetermined))
         }
     }
 }
@@ -88,8 +89,11 @@ struct SharingDashboardView: View {
     @State private var tracks: [MapTrack] = []
     @State private var fullMap = false
 
+    /// The pushed app pages. A link to an app whose session runs opens its page (ADR-020 §2).
+    @State private var path: [String] = []
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     StatusMessages(model: model)
@@ -108,6 +112,10 @@ struct SharingDashboardView: View {
             .navigationDestination(for: String.self) { id in
                 if let app = model.apps.first(where: { $0.id == id }) { AppSharingView(app: app, model: model, collector: collector) }
             }
+        }
+        .onChange(of: model.openApp, initial: true) { _, id in
+            guard let id else { return }
+            path = [id]; model.openApp = nil
         }
         .task(id: TrackKey(range: SharingTimeline.todayTrack(), queued: model.queued, lastSync: model.lastSync)) {
             tracks = await TrackLoader.load(model.repository.local, apps: granted, all: model.apps, range: SharingTimeline.todayTrack())
@@ -195,11 +203,12 @@ struct SharingDashboardView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 Text(status).font(.title3.bold())
-                if model.paused {
-                    Button("Resume all") { model.setPaused(false) }
-                        .buttonStyle(.borderedProminent).disabled(model.busy || !model.canResumeAll)
+                // ADR-020: sharing runs only in sessions started with Start on an app; Stop all ends every one.
+                if model.sessions.isEmpty {
+                    Text("Tap Start on an app to share while you record. Sharing stops when you tap Stop, after 30 minutes without moving, or after 12 hours.")
+                        .font(.footnote)
                 } else {
-                    Button("Pause all") { model.setPaused(true) }.buttonStyle(.bordered)
+                    Button("Stop all") { model.stopAll() }.buttonStyle(.bordered)
                 }
                 Text("\(model.queued) updates waiting to sync").font(.subheadline)
                 syncHealth.font(.footnote)
@@ -210,9 +219,7 @@ struct SharingDashboardView: View {
     }
 
     private var status: String {
-        if model.paused { return "Sharing paused" }
-        let enabledApps = model.apps.filter(model.enabled)
-        if !enabledApps.isEmpty && enabledApps.allSatisfy({ model.pausedApps.contains($0.id) }) { return "All apps paused" }
+        if model.sessions.isEmpty { return "Not sharing location" }
         if !collector.permitted { return "Location permission needed" }
         return collector.running ? "Location sharing is on" : "Location is not running"
     }
@@ -262,17 +269,14 @@ struct SharingDashboardView: View {
                 LabeledContent("Waiting to upload", value: "\(model.pendingByApp[app.id] ?? 0)")
                 if model.enabled(app) {
                     HStack {
-                        PauseResumeButton(app: app, model: model)
+                        StartStopButton(app: app, model: model, collector: collector)
                         Spacer()
-                        // Not a one-tap button beside Pause: turning off deletes the app's platform copy.
+                        // Not a one-tap button beside Stop: turning off deletes the app's platform copy.
                         Menu {
                             Button("Turn off sharing with \(app.name)", role: .destructive) { model.disable(app) }
                         } label: { Label("More", systemImage: "ellipsis.circle").labelStyle(.iconOnly) }
                             .disabled(model.busy)
                             .accessibilityLabel("More options for \(app.name)")
-                    }
-                    if model.paused && model.pausedApps.contains(app.id) {
-                        Text("All sharing is paused. Resume location to continue.").font(.footnote)
                     }
                 }
                 heartRateLines(app)
@@ -282,13 +286,13 @@ struct SharingDashboardView: View {
         }
     }
 
-    /// #631: the app's heart rate, one line under its row; pausing the app pauses it too.
+    /// #631: the app's heart rate, one line under its row; it follows the app's session.
     @ViewBuilder private func heartRateLines(_ app: ConnectedApp) -> some View {
         ForEach(model.otherEntries(app.id).filter { $0.capability == HeartRate.CAPABILITY }) { entry in
             Divider()
             HeartRateLine(entry: entry, model: model, heartRate: model.heartRate)
-            // With location off the row has no Pause/Resume, and a kept pause (#677) must still be liftable.
-            if !model.enabled(app) && model.enabled(entry) { PauseResumeButton(app: app, model: model) }
+            // Location turned off during a session (#677): the row has no Stop, and the kept session must still end.
+            if !model.enabled(app) && model.sessions[app.id] != nil { StartStopButton(app: app, model: model, collector: collector) }
         }
     }
 
@@ -304,11 +308,6 @@ struct SharingDashboardView: View {
                 if !collector.fullAccuracy { Text("Off stops recording.").font(.footnote).foregroundStyle(.orange) }
                 LabeledContent("Low Power Mode", value: device.lowPower ? "On" : "Off")
                 if device.lowPower { Text("iOS may deliver fewer location updates.").font(.footnote).foregroundStyle(.orange) }
-                LabeledContent("Background App Refresh", value: refreshLabel)
-                // It gates only the significant-change relaunch, which needs Always.
-                if collector.authorization == .authorizedAlways && device.backgroundRefresh != .available {
-                    Text("ProAppStore can't restart recording after iOS closes it.").font(.footnote).foregroundStyle(.orange)
-                }
                 recorder
             }
             .font(.subheadline)
@@ -330,15 +329,6 @@ struct SharingDashboardView: View {
         case .authorizedWhenInUse: "While Using"
         case .authorizedAlways: "Always"
         case .denied: "Denied"
-        case .restricted: "Restricted"
-        @unknown default: "Unknown"
-        }
-    }
-
-    private var refreshLabel: String {
-        switch device.backgroundRefresh {
-        case .available: "On"
-        case .denied: "Off"
         case .restricted: "Restricted"
         @unknown default: "Unknown"
         }

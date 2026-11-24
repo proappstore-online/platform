@@ -27,9 +27,15 @@ enum LocationPolicy {
         stationary ? (kCLLocationAccuracyHundredMeters, kCLDistanceFilterNone) : (kCLLocationAccuracyBest, 5)
     }
 
-    static func recipients(_ apps: [ConnectedApp], blocked: Set<String>, at: Int64) -> [String] {
-        apps.filter { !blocked.contains($0.id) && $0.grantId != nil && at >= $0.consentAt }.compactMap(\.grantId)
+    /// The location grants current at `at`: held, consented, not disabled on this phone, and with a session (ADR-020).
+    static func recipients(_ apps: [ConnectedApp], blocked: Set<String>, sessions: Set<String>, at: Int64) -> [String] {
+        apps.filter { !blocked.contains($0.id) && sessions.contains($0.id) && $0.grantId != nil && at >= $0.consentAt }.compactMap(\.grantId)
     }
+
+    /// ADR-020: a session ends after this long without movement (`SharingSessions.isMovement`), or with no fix at all.
+    static let STATIONARY_TIMEOUT_MS: Int64 = 30 * 60_000
+    /// ADR-020: and at the latest this long after it started.
+    static let MAX_SESSION_MS: Int64 = 12 * 3_600_000
 }
 
 /// Which valid fixes become points (#639). With a bare 5 m distance filter, GPS jitter indoors (accuracy

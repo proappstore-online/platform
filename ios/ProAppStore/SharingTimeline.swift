@@ -2,9 +2,10 @@ import Foundation
 
 /// Why sharing with an app was inactive inside a session.
 enum InactiveCause: Equatable {
-    case you                 // this app paused by the user
-    case all                 // Pause all
+    case you                 // this app paused by the user (retired, in older history)
+    case all                 // Pause all (retired, in older history)
     case system(String)      // a forced stop: `stopped` detail (unlock_failed, signed_out, storage_failed)
+    case stopped(String)     // no collection session (ADR-020): `session_ended` detail, or "" before the first Start
 }
 
 struct InactiveInterval: Equatable {
@@ -14,7 +15,7 @@ struct InactiveInterval: Equatable {
 }
 
 /// One consent period for one app: from `enabled` (or `grant_restored`) to `disabled`, `grant_lost`, `history_cleared` or
-/// `expired` (open if none).
+/// `expired` (open if none). Outside a collection session (ADR-020: `session_started` to `session_ended`) it is inactive.
 /// This is *intended* sharing. Permission loss or iOS ending the app can still leave gaps in the points, and the
 /// track shows those (ADR-015: a gap must remain a gap).
 struct SharingSession: Equatable {
@@ -37,10 +38,12 @@ enum SharingTimeline {
     /// Sessions for `appId`, oldest first, from events in `(at, id)` order.
     static func sessions(_ events: [ShareEvent], appId: String) -> [SharingSession] {
         var sessions: [SharingSession] = []
-        var appPaused = false
-        var global: InactiveCause?   // Pause all or a forced stop, until `resumed_all`
+        var appPaused = false        // the retired per-app pause, in older history
+        var global: InactiveCause?   // Pause all or a forced stop, until `resumed_all` or a session start
+        var live = false             // a collection session is running
+        var stopped: String?         // why there is no session; nil in one
 
-        func cause() -> InactiveCause? { global ?? (appPaused ? .you : nil) }
+        func cause() -> InactiveCause? { global ?? stopped.map(InactiveCause.stopped) ?? (appPaused ? .you : nil) }
         /// Closes the open session's open interval at `at`, dropping it if it is empty.
         func closeInterval(_ session: inout SharingSession, at: Int64) {
             guard let last = session.inactive.last, last.end == nil else { return }
@@ -67,8 +70,9 @@ enum SharingTimeline {
                 // A start inside an open session (a grant restored by re-enabling) continues it.
                 if let last = sessions.last, last.end == nil { break }
                 appPaused = false
+                stopped = live ? nil : ""
                 sessions.append(SharingSession(start: event.at, end: nil, endKind: nil,
-                                               inactive: global.map { [InactiveInterval(start: event.at, end: nil, cause: $0)] } ?? []))
+                                               inactive: cause().map { [InactiveInterval(start: event.at, end: nil, cause: $0)] } ?? []))
             case (.disabled, appId), (.grantLost, appId):
                 end(at: event.at, kind: event.kind); appPaused = false
             case (.historyCleared, nil), (.expired, nil):
@@ -84,6 +88,11 @@ enum SharingTimeline {
                 global = .system(event.detail); transition(at: event.at, from: old)
             case (.resumedAll, nil):
                 global = nil; transition(at: event.at, from: old)
+            // A session start also ends a Pause all or forced stop left open by older history: sessions replaced both.
+            case (.sessionStarted, appId):
+                live = true; stopped = nil; global = nil; appPaused = false; transition(at: event.at, from: old)
+            case (.sessionEnded, appId):
+                live = false; stopped = event.detail; transition(at: event.at, from: old)
             default:
                 break
             }

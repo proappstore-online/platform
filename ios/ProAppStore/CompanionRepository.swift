@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import UserNotifications
 
 /// Pairing, consent and upload, ported from CompanionRepository.kt. Operations run one at a time, across
 /// suspension points, like Android's Mutex (an actor alone would interleave at each `await`).
@@ -26,7 +27,7 @@ actor CompanionRepository {
 
     nonisolated func token() -> String? {
         do { return try secure.read()["token"].flatMap { $0.isEmpty ? nil : $0 } } catch {
-            try? local.setPaused(true, stopped: "unlock_failed")
+            try? local.stop("unlock_failed")
             local.message = "The device connection could not be unlocked. Reconnect your account."
             return nil
         }
@@ -88,7 +89,7 @@ actor CompanionRepository {
             _ = try await device("PUT", "/native/apps/\(app.id)/location", credential, body: json(["version": app.version, "enabled": true]))
             try updateMe(try await device("GET", "/native/me", credential))
             try local.unblock(app.id); try local.record(.enabled, appId: app.id)
-            try local.resume(app.id); try local.setPaused(false); local.message = ""
+            local.message = "" // a grant only: Start on the row begins sharing (ADR-020 §2)
         }
     }
 
@@ -105,9 +106,9 @@ actor CompanionRepository {
             if local.blocked().contains(entry.key) { _ = try await device("DELETE", path, credential) }
             _ = try await device("PUT", path, credential, body: json(["version": entry.version, "enabled": true]))
             try updateMe(try await device("GET", "/native/me", credential))
-            // Ends Pause all like a location enable (#676), but never resumes this app: its pause covers its location too.
+            // A grant only, like location's: heart rate is shared during a session, which only Start creates (ADR-020).
             try local.unblock(entry.key); try local.record(.heartRate, appId: entry.appId, detail: "enabled")
-            try local.setPaused(false); local.message = ""
+            local.message = ""
         }
     }
 
@@ -124,7 +125,7 @@ actor CompanionRepository {
 
     func disconnect() async throws {
         try await exclusive { [self] in
-            try local.setPaused(true)
+            try local.endAllSessions("grant")
             if let credential = token() {
                 do { _ = try await api.request("DELETE", "/native/device", token: credential) } catch let e as ApiFailure where e.status == 401 {}
             }
@@ -217,6 +218,22 @@ actor CompanionRepository {
         guard Self.syncDue(lastAttempt: local.lastSyncAttempt, now: now) else { return }
         local.lastSyncAttempt = now
         Task { try? await sync() }
+    }
+
+    /// Ends the sessions due at `now` (ADR-020 §3). Each automatic end is visible (§4): a quiet notification, the dashboard
+    /// message and its `session_ended` row. Run by both collectors on every fix and sample, and on activation.
+    nonisolated func endDueSessions(now: Int64 = CompanionRepository.now()) {
+        guard let ended = try? local.endDueSessions(now: now), !ended.isEmpty else { return }
+        let apps = local.apps()
+        for end in ended {
+            let text = SharingSessions.endedText(apps.first { $0.id == end.appId }?.name ?? end.appId, end.reason)
+            local.message = text
+            let content = UNMutableNotificationContent()
+            content.title = text
+            content.body = "Open ProAppStore and tap Start to share again."
+            // Tapping opens the companion, which restarts nothing.
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "session-ended-\(end.appId)", content: content, trigger: nil))
+        }
     }
 
     /// Reconnecting before the connection expires (#652): uploads what it can, then takes the same path as an

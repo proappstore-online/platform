@@ -6,7 +6,8 @@ enum ActivityText {
 
     static func category(_ kind: ShareEvent.Kind) -> Category {
         switch kind {
-        case .enabled, .disabled, .paused, .resumed, .pausedAll, .resumedAll, .grantLost, .grantRestored, .historyCleared, .heartRate: .sharing
+        case .enabled, .disabled, .paused, .resumed, .pausedAll, .resumedAll, .grantLost, .grantRestored, .historyCleared, .heartRate,
+             .sessionStarted, .sessionEnded: .sharing
         case .stopped, .syncFailed, .syncRecovered, .uploadRejected, .quota, .permission, .queueFull, .expired, .heartRateProblem, .bluetooth: .problem
         }
     }
@@ -21,6 +22,12 @@ enum ActivityText {
         case .resumed: return "\(app) resumed by you"
         case .pausedAll: return "All sharing paused by you"
         case .resumedAll: return "All sharing resumed"
+        case .sessionStarted: return "Started sharing with \(app)"
+        case .sessionEnded:
+            let why = ["user": "", "all": " (Stop all)", "notification": " from the notification", "stationary": ": no movement for 30 minutes",
+                       "max": ": 12 hours reached", "grant": ": access turned off or ended",
+                       "permission": ": precise location permission withdrawn"][event.detail] ?? ": \(event.detail)"
+            return "Stopped sharing with \(app)\(why)"
         case .stopped:
             let reason = ["signed_out": "this phone was signed out", "storage_failed": "location could not be saved on this phone",
                           "unlock_failed": "the device connection could not be unlocked"][event.detail] ?? event.detail
@@ -90,7 +97,8 @@ enum ActivityText {
         case .disabled: "location.slash"
         case .paused, .pausedAll: "pause.circle"
         case .resumed, .resumedAll: "play.circle"
-        case .stopped: "stop.circle"
+        case .sessionStarted: "play.circle"
+        case .sessionEnded, .stopped: "stop.circle"
         case .grantLost: "xmark.shield"
         case .grantRestored: "checkmark.shield"
         case .historyCleared: "trash"

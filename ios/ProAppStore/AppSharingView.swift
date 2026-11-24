@@ -102,7 +102,7 @@ struct AppSharingView: View {
                 HStack {
                     Text(state.label).font(.headline).foregroundStyle(state.color)
                     Spacer()
-                    if model.enabled(app) { PauseResumeButton(app: app, model: model) }
+                    if model.enabled(app) || model.sessions[app.id] != nil { StartStopButton(app: app, model: model, collector: collector) }
                 }
                 LabeledContent("Shared today", value: Self.duration(sessions.reduce(0) { $0 + $1.sharedMs(within: SharingTimeline.today()) }))
                 if let current, current.end == nil {
@@ -168,6 +168,7 @@ struct AppSharingView: View {
         case .all: "Pause all"
         case .system(let detail):
             "stopped: " + (["signed_out": "signed out", "storage_failed": "storage", "unlock_failed": "unlock"][detail] ?? detail)
+        case .stopped: "not sharing"
         }
     }
 

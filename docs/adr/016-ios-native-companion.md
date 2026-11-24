@@ -6,7 +6,7 @@ description: "iOS client for the PAS native companion: Swift/SwiftUI in ios/, sa
 
 ## Status
 
-Accepted. Extends ADR-015; does not supersede it.
+Accepted. Extends ADR-015; does not supersede it. Decision 4's optional "Always" restart upgrade is superseded by [ADR-020](./020-native-collection-sessions.md) §8: iOS asks for While Using only and collects only in user-started sessions.
 
 ## Date
 

@@ -2,6 +2,7 @@ import AuthenticationServices
 import CoreLocation
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// Screen state and actions, the iOS counterpart of MainActivity.kt.
 @MainActor
@@ -27,8 +28,8 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     /// The newest heart-rate sample per app, from the on-device history.
     @Published private(set) var lastHeartRateByApp: [String: HeartRatePoint] = [:]
     @Published private(set) var blocked: Set<String> = []
-    @Published private(set) var pausedApps: Set<String> = []
-    @Published private(set) var paused = true
+    /// Collection sessions by app id (ADR-020), as stored.
+    @Published private(set) var sessions: [String: Session] = [:]
     @Published private(set) var queued = 0
     @Published private(set) var message = ""
     @Published private(set) var pairingCode = ""
@@ -41,11 +42,22 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     @Published private(set) var busy = false
     @Published var consent: ConnectedApp?
     @Published var entryConsent: NativeEntry?
+    /// A link's "Start sharing with Run?" prompt (ADR-020 §2). Not now writes nothing.
+    @Published var startPrompt: ConnectedApp?
+    /// A link asks for the Sharing tab, and for this app's page when its session runs.
+    @Published var showSharing = false
+    @Published var openApp: String?
     private var error = ""
     private var authSession: ASWebAuthenticationSession?
     private var refreshTask: Task<Void, Never>?
     /// A link that matched nothing before the first sync stored the entries (#682), handled once more after it.
     private var pendingLink: URL?
+    /// The app whose Start waits for the While Using prompt.
+    private var pendingStart: String?
+    /// ADR-020 §7: false at launch, true once the companion is opened in this process or Start is tapped. Both
+    /// collectors collect only for `live ? local.sessionIds() : []`, so a background relaunch (location, Core Bluetooth
+    /// restoration, anything) rejoins nothing. Not persisted.
+    private(set) var live = false
 
     override convenience init() {
         let local: LocalStore
@@ -59,19 +71,35 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         collector = LocationCollector(repository: repository)
         heartRate = HeartRateCollector(repository: repository)
         super.init()
+        let live: () -> Set<String> = { [weak self] in self?.live == true ? repository.local.sessionIds() : [] }
+        collector.sessions = live; heartRate.sessions = live
+        collector.authorizationChanged = { [weak self] in self?.continuePendingStart() }
         if repository.token() != nil { try? local.seedIfEmpty() }
         refresh()
     }
 
     /// An expired connection's grants are gone on the server: nothing is enabled until the user re-enables it.
     func enabled(_ app: ConnectedApp) -> Bool { !expired && app.grantId != nil && !blocked.contains(app.id) }
-    /// Enabled, not paused for this app, and Pause all is off.
-    func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && !pausedApps.contains(app.id) && !paused }
+    /// Enabled, with a session running.
+    func sharing(_ app: ConnectedApp) -> Bool { enabled(app) && sessions[app.id] != nil }
     /// A non-location entry is on: granted, not disabled, connection not expired.
     func enabled(_ entry: NativeEntry) -> Bool { !expired && entry.grantId != nil && !blocked.contains(entry.key) }
-    /// Resume all can start something: a location app or any entry is enabled (#676). `apps` stays in: `entries` is
-    /// empty until the first `/native/me` after an upgrade.
-    var canResumeAll: Bool { apps.contains(where: enabled) || entries.contains(where: enabled) }
+    /// The app's location is on, which heart rate needs: a session starts only with location (ADR-020 decision 11).
+    func locationEnabled(_ appId: String) -> Bool { apps.contains { $0.id == appId && enabled($0) } }
+    /// Heart rate is offered only once the app's location is on (decision 11).
+    func offersEnable(_ entry: NativeEntry) -> Bool {
+        !enabled(entry) && (!blocked.contains(entry.key) || entry.grantId == nil) && locationEnabled(entry.appId)
+    }
+    /// The heart-rate line's state while it is off or has no session, else nil for the sensor's own state. Android's copy
+    /// (SharingScreen.kt `heartRateState`).
+    func heartRateGate(_ entry: NativeEntry) -> String? {
+        if blocked.contains(entry.key) { return entry.grantId != nil ? "Turning off…" : "Off" }
+        if !enabled(entry) { return locationEnabled(entry.appId) ? "Off" : "Off · turn on location for \(entry.appName) first" }
+        if sessions[entry.appId] == nil {
+            return locationEnabled(entry.appId) ? "Not sharing · tap Start" : "Not sharing · turn on location for \(entry.appName) to start"
+        }
+        return nil
+    }
     /// This app's non-location entries, shown under its row.
     func otherEntries(_ appId: String) -> [NativeEntry] { entries.filter { $0.appId == appId && $0.capability != NativeEntry.LOCATION } }
     /// Both collectors follow the same rules: called wherever the screen changes what may be collected.
@@ -80,7 +108,7 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     /// The app's state chip; `running` is the collector's.
     func state(_ app: ConnectedApp, running: Bool) -> SharingState {
         if expired { return .expired }
-        return SharingState.of(granted: app.grantId != nil, blocked: blocked.contains(app.id), appPaused: pausedApps.contains(app.id), pausedAll: paused, running: running)
+        return SharingState.of(granted: app.grantId != nil, blocked: blocked.contains(app.id), session: sessions[app.id] != nil, running: running)
     }
 
     func refresh() {
@@ -91,7 +119,8 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         heartRateSyncError = local.heartRateSyncError
         lastHeartRateByApp = Set(entries.filter { $0.capability == HeartRate.CAPABILITY }.map(\.appId))
             .reduce(into: [:]) { $0[$1] = (try? local.lastHeartRate($1)) ?? nil }
-        name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked(); pausedApps = local.pausedApps(); paused = local.paused
+        name = local.userName; deviceLabel = local.deviceLabel; apps = local.apps(); blocked = local.blocked()
+        sessions = Dictionary(uniqueKeysWithValues: local.sessions().map { ($0.appId, $0) })
         queued = (try? local.count()) ?? 0; lastSync = local.lastSync; pairingCode = repository.pairingCode()
         lastSyncAttempt = local.lastSyncAttempt; lastSyncError = local.lastSyncError
         events = (try? local.events()) ?? []
@@ -100,7 +129,12 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
         message = error.isEmpty ? local.message : error
     }
 
+    /// ADR-020 §7: an interrupted session resumes only here, when the user opens the companion. Sessions past 12 hours end
+    /// as `max`; the rest get their stationary clock restarted.
     func becameActive() {
+        if !collector.running { try? local.resumeSessions() }
+        live = true
+        collector.endDueSessions()
         refresh(); evaluate()
         refreshTask?.cancel()
         refreshTask = Task {
@@ -164,29 +198,69 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
 
     func completeSignIn() { act { [self] in _ = try await repository.finishSignIn() } }
 
-    /// Links never grant anything: they finish a pending connection or bring a disclosure forward.
-    /// `native/apps/<id>` keeps meaning location; `native/apps/<id>/<capability>` is that entry (ADR-018 §9).
+    /// Links never grant or start anything (ADR-020 §2): they finish a pending connection or bring an app forward.
+    /// `native/apps/<id>` is the app: its consent if not enabled, the Start prompt if enabled with no session, its page
+    /// while sharing, the Sharing tab if unknown. `native/apps/<id>/<capability>` (ADR-018 §9) asks for the app's location
+    /// first (decision 11), then that entry's consent, then acts as the two-part link.
     func handle(_ url: URL) {
         guard url.scheme == "proappstore", url.host == "native" else { return }
-        let parts = url.pathComponents.filter { $0 != "/" }
-        if parts == ["connected"] { completeSignIn() }
-        else if parts.count == 2, parts[0] == "apps" {
-            guard let app = apps.first(where: { $0.id == parts[1] }) else { return keep(url) }
-            if !enabled(app) { consent = app }
-        } else if parts.count == 3, parts[0] == "apps", parts[2] != NativeEntry.LOCATION {
-            guard let entry = entries.first(where: { $0.appId == parts[1] && $0.capability == parts[2] }) else { return keep(url) }
-            if !enabled(entry) { entryConsent = entry }
+        if url.pathComponents.filter({ $0 != "/" }) == ["connected"] { return completeSignIn() }
+        guard let link = SharingSessions.linkedApp(url) else { return }
+        guard let app = apps.first(where: { $0.id == link.appId }) else { keep(url); showSharing = true; return }
+        if let capability = link.capability, capability != NativeEntry.LOCATION, enabled(app) {
+            guard let entry = entries.first(where: { $0.appId == link.appId && $0.capability == capability }) else { return keep(url) }
+            if !enabled(entry) { entryConsent = entry; return }
         }
+        if !enabled(app) { consent = app }
+        else if sessions[app.id] == nil { startPrompt = app }
+        else { showSharing = true; openApp = app.id }
     }
 
     /// Signed in, an unknown app or entry may only be missing until the first `/native/me` after an upgrade (#682).
     private func keep(_ url: URL) { if signedIn { pendingLink = url } }
 
-    func enable(_ app: ConnectedApp) {
-        act { [self] in
-            try await repository.enable(app)
-            if collector.authorization == .notDetermined { collector.requestWhenInUse() }
+    func enable(_ app: ConnectedApp) { act { [self] in try await repository.enable(app) } }
+
+    /// Start on an app's row or in a link's prompt (ADR-020 §2): a local write, no request and no disclosure (#620). It
+    /// needs a current grant and precise location. Before the first location answer it asks for While Using and starts
+    /// once that is granted.
+    func start(_ app: ConnectedApp) {
+        guard enabled(app) else { return }
+        // §4's end notice, quietly in Notification Center: provisional authorization shows no prompt.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .provisional]) { _, _ in }
+        if collector.authorization == .notDetermined {
+            pendingStart = app.id
+            return collector.requestWhenInUse()
         }
+        guard collector.permitted else { return } // Start is disabled; PermissionControls shows the fix
+        startSession(app)
+    }
+
+    /// Start once location is allowed: the session, then the collectors. Separate from `start` so tests reach it
+    /// without a location prompt.
+    func startSession(_ app: ConnectedApp) {
+        do { try local.startSession(app.id) } catch { self.error = error.localizedDescription }
+        live = true
+        refresh(); evaluate()
+    }
+
+    /// The one step after the While Using prompt: precise access continues the pending Start. Nothing here asks again,
+    /// so a denial never loops.
+    private func continuePendingStart() {
+        guard let id = pendingStart, collector.authorization != .notDetermined else { return }
+        pendingStart = nil
+        if let app = apps.first(where: { $0.id == id }), enabled(app), collector.permitted { startSession(app) }
+    }
+
+    /// Local writes, not `act`: Stop works offline and instantly, and never touches the grant, consent or queue.
+    func stop(_ app: ConnectedApp) {
+        do { try local.endSession(app.id, detail: "user") } catch { self.error = error.localizedDescription }
+        refresh(); evaluate()
+    }
+
+    func stopAll() {
+        do { try local.endAllSessions("all") } catch { self.error = error.localizedDescription }
+        refresh(); evaluate()
     }
     func disable(_ app: ConnectedApp) { act { [self] in try await repository.disable(app) } }
     func enable(_ entry: NativeEntry) { act { [self] in try await repository.enable(entry) } }
@@ -194,30 +268,15 @@ final class CompanionModel: NSObject, ObservableObject, ASWebAuthenticationPrese
     func sync() { act { [self] in try await repository.sync() } }
     func disconnect() {
         act { [self] in
-            try local.setPaused(true); evaluate()
+            try local.endAllSessions("grant"); evaluate()
             try await repository.disconnect()
         }
-    }
-    func setPaused(_ value: Bool) {
-        do { try local.setPaused(value) } catch { self.error = error.localizedDescription }
-        if !value && collector.authorization == .notDetermined { collector.requestWhenInUse() }
-        refresh(); evaluate()
     }
 
     /// Local only: the queue, and so pending uploads, are kept.
     func clearHistory() {
         do { try local.clearHistory() } catch { self.error = error.localizedDescription }
         refresh()
-    }
-
-    /// Local writes, not `act`: pausing works offline and instantly.
-    func pause(_ app: ConnectedApp) {
-        do { try local.pause(app.id) } catch { self.error = error.localizedDescription }
-        refresh(); evaluate()
-    }
-    func resume(_ app: ConnectedApp) {
-        do { try local.resume(app.id) } catch { self.error = error.localizedDescription }
-        refresh(); evaluate()
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -262,8 +321,17 @@ struct ContentView: View {
             } else { model.resignActive() }
         }
         .onOpenURL { model.handle($0) }
+        .onChange(of: model.showSharing) { _, show in if show { tab = .sharing; model.showSharing = false } }
         .sheet(item: $model.consent) { app in disclosure(app) }
         .sheet(item: $model.entryConsent) { entry in HeartRateDisclosure(entry: entry, model: model) }
+        .alert("Start sharing with \(model.startPrompt?.name ?? "")?",
+               isPresented: Binding(get: { model.startPrompt != nil }, set: { if !$0 { model.startPrompt = nil } }),
+               presenting: model.startPrompt) { app in
+            Button("Start") { model.startPrompt = nil; model.start(app) }
+            Button("Not now", role: .cancel) { model.startPrompt = nil }
+        } message: { app in
+            Text("ProAppStore will share your location with \(app.name) while you record, including with your phone locked. It stops when you tap Stop, after 30 minutes without moving, or after 12 hours.")
+        }
     }
 
     private func disclosure(_ app: ConnectedApp) -> some View {

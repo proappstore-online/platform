@@ -59,14 +59,15 @@ final class HeartRateTests: XCTestCase {
         return try JSONDecoder().decode(NativeEntry.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    func testRecipientsAreHeartRateGrantsNotDisabledPausedOrBeforeConsent() throws {
+    func testRecipientsAreHeartRateGrantsNotDisabledWithASessionAndAfterConsent() throws {
         let entries = [try entry("run", "heart_rate.ble", grant: "hr"), try entry("run", "location.background", grant: "loc"),
                        try entry("other", "heart_rate.ble", grant: nil), try entry("late", "heart_rate.ble", grant: "late", consentAt: 50)]
-        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], pausedApps: [], at: 10), ["hr"])
-        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], pausedApps: [], at: 50), ["hr", "late"])
-        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: ["run"], pausedApps: [], at: 10), ["hr"], "location's key leaves heart rate")
-        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: ["run/heart_rate.ble"], pausedApps: [], at: 10), [])
-        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], pausedApps: ["run"], at: 10), [], "pausing Run pauses its heart rate (#620)")
+        let all: Set<String> = ["run", "other", "late"]
+        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], sessions: all, at: 10), ["hr"])
+        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], sessions: all, at: 50), ["hr", "late"])
+        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: ["run"], sessions: all, at: 10), ["hr"], "location's key leaves heart rate")
+        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: ["run/heart_rate.ble"], sessions: all, at: 10), [])
+        XCTAssertEqual(HeartRatePolicy.recipients(entries, blocked: [], sessions: ["late"], at: 10), [], "Run stopped: no heart rate (ADR-020)")
     }
 
     func testEntryKeysAndGrantPathsStayUnderNative() throws {
@@ -122,6 +123,7 @@ final class HeartRateTests: XCTestCase {
     /// Heart-rate events never open, end or pause a location session.
     func testHeartRateEventsLeaveLocationSessionsAlone() {
         let events = [ShareEvent(id: 1, at: 10, appId: "run", kind: .enabled, detail: ""),
+                      ShareEvent(id: 5, at: 10, appId: "run", kind: .sessionStarted, detail: ""),
                       ShareEvent(id: 2, at: 20, appId: "run", kind: .heartRate, detail: "disabled"),
                       ShareEvent(id: 3, at: 30, appId: nil, kind: .bluetooth, detail: "off"),
                       ShareEvent(id: 4, at: 40, appId: "run", kind: .heartRate, detail: "enabled")]

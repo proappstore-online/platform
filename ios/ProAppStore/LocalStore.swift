@@ -62,6 +62,9 @@ final class LocalStore: @unchecked Sendable {
         for path in [fileURL.path, fileURL.path + "-wal", fileURL.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
             try FileManager.default.setAttributes(protection, ofItemAtPath: path)
         }
+        try SharingSessions.migrate(try query("SELECT key FROM settings") { String(cString: sqlite3_column_text($0, 0)) }) {
+            try exec("DELETE FROM settings WHERE key = ?", [$0])
+        }
     }
 
     deinit { close() }
@@ -73,16 +76,87 @@ final class LocalStore: @unchecked Sendable {
 
     // MARK: Settings
 
-    var paused: Bool { setting("paused").map { $0 == "1" } ?? true }
-    /// Durable: a failed write throws, like Android's `check(commit())`. A change is recorded as `paused_all` /
-    /// `resumed_all`, or as `stopped` with `reason` when the system forces the stop.
-    func setPaused(_ value: Bool, stopped reason: String? = nil) throws {
+    // MARK: Collection sessions (ADR-020)
+    // They replace Pause all and per-app pause (#620). Local to the phone, never reported. Every write is durable: a
+    // failed one throws, like Android's `check(commit())`.
+
+    /// The running sessions, at most one per app.
+    func sessions() -> [Session] { SharingSessions.decode(setting("sessions")) }
+    func sessionIds() -> Set<String> { Set(sessions().map(\.appId)) }
+    private func saveSessions(_ sessions: [Session]) throws { try setSetting("sessions", SharingSessions.encode(sessions)) }
+
+    /// Only from a tap in the companion (ADR-020 §2). A running session is left as it is.
+    func startSession(_ appId: String, now: Int64 = CompanionRepository.now()) throws {
         lock.lock(); defer { lock.unlock() }
+        guard !sessionIds().contains(appId) else { return }
         try transaction {
-            if value != paused { try record(value ? (reason == nil ? .pausedAll : .stopped) : .resumedAll, detail: reason ?? "") }
-            try setSetting("paused", value ? "1" : "0")
+            try record(.sessionStarted, appId: appId, at: now)
+            try saveSessions(sessions() + [Session(appId: appId, startedAt: now, lastMovedAt: now)])
         }
     }
+
+    /// Ends `appId`'s session, recorded as `session_ended` with `detail`. Never touches its grant, consent or queue: points
+    /// recorded before it were authorized when taken and still upload (#620).
+    func endSession(_ appId: String, detail: String, now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction { try endSessionRow(appId, detail: detail, now: now) }
+    }
+
+    func endAllSessions(_ detail: String, now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction { for s in sessions() { try endSessionRow(s.appId, detail: detail, now: now) } }
+    }
+
+    /// Inside a transaction.
+    private func endSessionRow(_ appId: String, detail: String, now: Int64) throws {
+        let sessions = sessions()
+        guard sessions.contains(where: { $0.appId == appId }) else { return }
+        try record(.sessionEnded, appId: appId, detail: detail, at: now)
+        try saveSessions(sessions.filter { $0.appId != appId })
+    }
+
+    /// Ends every session due at `now` (ADR-020 §3), recorded as `session_ended stationary` / `max`, and returns them.
+    @discardableResult
+    func endDueSessions(now: Int64 = CompanionRepository.now()) throws -> [(appId: String, reason: SharingSessions.EndReason)] {
+        lock.lock(); defer { lock.unlock() }
+        let due = sessions().compactMap { s in SharingSessions.endReason(s, now: now).map { (appId: s.appId, reason: $0) } }
+        if due.isEmpty { return [] }
+        try transaction { for end in due { try endSessionRow(end.appId, detail: end.reason.rawValue, now: now) } }
+        return due
+    }
+
+    /// Movement at `now` restarts every session's stationary clock. Written at most once a minute: the clock's unit is 30
+    /// minutes.
+    func moved(now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        let sessions = sessions()
+        guard sessions.contains(where: { now - $0.lastMovedAt >= 60_000 }) else { return }
+        try saveSessions(sessions.map { Session(appId: $0.appId, startedAt: $0.startedAt, lastMovedAt: max($0.lastMovedAt, now)) })
+    }
+
+    /// Opening the companion after iOS stopped the collector (ADR-020 §7): sessions past `LocationPolicy.MAX_SESSION_MS`
+    /// end as `max`, the rest resume with their stationary clock restarted.
+    func resumeSessions(now: Int64 = CompanionRepository.now()) throws {
+        lock.lock(); defer { lock.unlock() }
+        try transaction {
+            for s in sessions() where SharingSessions.endReason(Session(appId: s.appId, startedAt: s.startedAt, lastMovedAt: now), now: now) == .maxLength {
+                try endSessionRow(s.appId, detail: SharingSessions.EndReason.maxLength.rawValue, now: now)
+            }
+            let left = sessions()
+            if !left.isEmpty { try saveSessions(left.map { Session(appId: $0.appId, startedAt: $0.startedAt, lastMovedAt: now) }) }
+        }
+    }
+
+    /// A forced stop, recorded as `stopped` with `reason` (unlock_failed, storage_failed): every session ends.
+    func stop(_ reason: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !sessions().isEmpty else { return }
+        try transaction {
+            try record(.stopped, detail: reason)
+            try saveSessions([])
+        }
+    }
+
     var lastSync: Int64 {
         get { setting("lastSync").flatMap { Int64($0) } ?? 0 }
         set { try? setSetting("lastSync", String(newValue)) }
@@ -119,10 +193,11 @@ final class LocalStore: @unchecked Sendable {
     var expiredUser: String? { setting("expiredUser") }
     var expired: Bool { expiredUser != nil }
 
-    /// Records `expired` once and remembers `userId`, so pairing that account again keeps the history.
+    /// Records `expired` once and remembers `userId`, so pairing that account again keeps the history. Every session ends.
     func markExpired(userId: String, detail: String = "") throws {
         lock.lock(); defer { lock.unlock() }
         try transaction {
+            for s in sessions() { try endSessionRow(s.appId, detail: "grant", now: CompanionRepository.now()) }
             if !expired { try record(.expired, detail: detail) }
             try setSetting("expiredUser", userId)
         }
@@ -131,44 +206,47 @@ final class LocalStore: @unchecked Sendable {
     /// Disabled on this phone, keyed by `NativeEntry.key`: a bare app id is location, `app/capability` another one.
     func blocked() -> Set<String> { ids("blocked") }
 
-    /// `key` is a `NativeEntry.key`. Disabling one capability never touches another's grant, queue or pause.
+    /// `key` is a `NativeEntry.key`. Disabling one capability never touches another's grant or queue. The app's session
+    /// ends only when it has no enabled capability left (#677): turning off Run's location leaves a running session's
+    /// heart rate alone, and never starts or resumes heart rate for a stopped Run.
     func block(_ key: String) throws {
         lock.lock(); defer { lock.unlock() }
-        if key.contains("/") { return try blockEntry(key) }
-        let appId = key
+        let appId = key.split(separator: "/", maxSplits: 1).first.map(String.init) ?? key
         try transaction {
-            if !blocked().contains(appId) { try record(.disabled, appId: appId) }
-            try saveIds("blocked", blocked().union([appId]))
-            // A disabled app is not "paused": re-enabling it starts sharing. Unless another of its capabilities is still on
-            // (#677): the pause is per app, and turning off location must not resume its heart rate.
-            let stillOn = entries().contains { $0.appId == appId && $0.capability != NativeEntry.LOCATION && $0.grantId != nil && !blocked().contains($0.key) }
-            if !stillOn { try saveIds("pausedApps", pausedApps().subtracting([appId])) }
-            // Never shared, and now never will be.
-            try exec("DELETE FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId])
-            // Discard only this recipient. Other enabled apps retain their own queued copy.
-            guard let revoked = apps().first(where: { $0.id == appId })?.grantId else { return }
-            for p in try pending(limit: LocationPolicy.MAX_QUEUE) where p.grants.contains(revoked) {
-                let keep = p.with(grants: p.grants.filter { $0 != revoked })
-                if keep.grants.isEmpty { try exec("DELETE FROM points WHERE id = ?", [p.id]) }
-                else { try exec("UPDATE points SET payload = ? WHERE id = ?", [try json(keep), p.id]) }
+            if key.contains("/") { try blockEntry(key) } else { try blockLocation(appId) }
+            if !SharingSessions.keepsSession(appId, apps: apps(), entries: entries(), blocked: blocked()) {
+                try endSessionRow(appId, detail: "grant", now: CompanionRepository.now())
             }
         }
     }
 
+    /// Inside a transaction.
+    private func blockLocation(_ appId: String) throws {
+        if !blocked().contains(appId) { try record(.disabled, appId: appId) }
+        try saveIds("blocked", blocked().union([appId]))
+        // Never shared, and now never will be.
+        try exec("DELETE FROM share_points WHERE app_id = ? AND sent_at IS NULL", [appId])
+        // Discard only this recipient. Other enabled apps retain their own queued copy.
+        guard let revoked = apps().first(where: { $0.id == appId })?.grantId else { return }
+        for p in try pending(limit: LocationPolicy.MAX_QUEUE) where p.grants.contains(revoked) {
+            let keep = p.with(grants: p.grants.filter { $0 != revoked })
+            if keep.grants.isEmpty { try exec("DELETE FROM points WHERE id = ?", [p.id]) }
+            else { try exec("UPDATE points SET payload = ? WHERE id = ?", [try json(keep), p.id]) }
+        }
+    }
+
     /// A non-location capability: drops its grant from the heart-rate queue. The location sharing history is keyed by
-    /// app and records nothing here.
+    /// app and records nothing here. Inside a transaction.
     private func blockEntry(_ key: String) throws {
-        try transaction {
-            let entry = entries().first(where: { $0.key == key })
-            if !blocked().contains(key), let entry { try record(.heartRate, appId: entry.appId, detail: "disabled") }
-            try saveIds("blocked", blocked().union([key]))
-            if let entry { try exec("DELETE FROM share_hr WHERE app_id = ? AND sent_at IS NULL", [entry.appId]) }
-            guard let revoked = entry?.grantId else { return }
-            for s in try pendingHeartRate(limit: HeartRatePolicy.MAX_QUEUE) where s.grants.contains(revoked) {
-                let keep = s.with(grants: s.grants.filter { $0 != revoked })
-                if keep.grants.isEmpty { try exec("DELETE FROM hr WHERE id = ?", [s.id]) }
-                else { try exec("UPDATE hr SET payload = ? WHERE id = ?", [try json(keep), s.id]) }
-            }
+        let entry = entries().first(where: { $0.key == key })
+        if !blocked().contains(key), let entry { try record(.heartRate, appId: entry.appId, detail: "disabled") }
+        try saveIds("blocked", blocked().union([key]))
+        if let entry { try exec("DELETE FROM share_hr WHERE app_id = ? AND sent_at IS NULL", [entry.appId]) }
+        guard let revoked = entry?.grantId else { return }
+        for s in try pendingHeartRate(limit: HeartRatePolicy.MAX_QUEUE) where s.grants.contains(revoked) {
+            let keep = s.with(grants: s.grants.filter { $0 != revoked })
+            if keep.grants.isEmpty { try exec("DELETE FROM hr WHERE id = ?", [s.id]) }
+            else { try exec("UPDATE hr SET payload = ? WHERE id = ?", [try json(keep), s.id]) }
         }
     }
 
@@ -177,39 +255,14 @@ final class LocalStore: @unchecked Sendable {
         try saveIds("blocked", blocked().subtracting([key]))
     }
 
-    /// Apps the user paused on this phone. A local recipient filter only: the grant, consent and platform
-    /// copy are untouched, and resuming needs no new disclosure.
-    func pausedApps() -> Set<String> { ids("pausedApps") }
-
-    /// Never rewrites the queue: points recorded before the pause were authorized when taken and still upload.
-    func pause(_ appId: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard !pausedApps().contains(appId) else { return }
-        try transaction {
-            try record(.paused, appId: appId)
-            try saveIds("pausedApps", pausedApps().union([appId]))
-        }
-    }
-
-    func resume(_ appId: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard pausedApps().contains(appId) else { return }
-        try transaction {
-            try record(.resumed, appId: appId)
-            try saveIds("pausedApps", pausedApps().subtracting([appId]))
-        }
-    }
-
-    /// Apps that must not receive new fixes: revoked, or paused by the user.
-    func excluded() -> Set<String> { blocked().union(pausedApps()) }
-
     func apps() -> [ConnectedApp] {
         guard let raw = setting("apps")?.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([ConnectedApp].self, from: raw)) ?? []
     }
 
     /// The `apps` array of `GET /native/me`, stored as received. A held grant that the server dropped or
-    /// replaced (publisher change, disclosure revision, app-account deletion) is recorded as `grant_lost`.
+    /// replaced (publisher change, disclosure revision, app-account deletion) is recorded as `grant_lost`, and ends its
+    /// session.
     func saveApps(_ json: Data) throws {
         lock.lock(); defer { lock.unlock() }
         let incoming = (try? JSONDecoder().decode([ConnectedApp].self, from: json)) ?? []
@@ -218,7 +271,9 @@ final class LocalStore: @unchecked Sendable {
             let previous = apps()
             for old in previous where old.grantId != nil && !blocked.contains(old.id) {
                 let grant = incoming.first(where: { $0.id == old.id })?.grantId
-                if grant != old.grantId { try record(.grantLost, appId: old.id, detail: grant == nil ? "revoked" : "replaced") }
+                guard grant != old.grantId else { continue }
+                try record(.grantLost, appId: old.id, detail: grant == nil ? "revoked" : "replaced")
+                try endSessionRow(old.id, detail: "grant", now: CompanionRepository.now())
             }
             // A grant back after `grant_lost`, for example after re-consent on another path.
             for new in incoming where new.grantId != nil && !blocked.contains(new.id) && previous.first(where: { $0.id == new.id })?.grantId == nil {
@@ -261,9 +316,9 @@ final class LocalStore: @unchecked Sendable {
     func enqueue(_ point: TrackPoint) throws {
         lock.lock(); defer { lock.unlock() }
         let apps = apps()
-        let allowed = Set(LocationPolicy.recipients(apps, blocked: excluded(), at: point.at))
+        let allowed = Set(LocationPolicy.recipients(apps, blocked: blocked(), sessions: sessionIds(), at: point.at))
         let retained = point.with(grants: point.grants.filter { allowed.contains($0) })
-        if paused || retained.grants.isEmpty { return }
+        if retained.grants.isEmpty { return }
         guard try count() < LocationPolicy.MAX_QUEUE else {
             try? record(.queueFull)
             throw QueueFullError()
@@ -319,15 +374,15 @@ final class LocalStore: @unchecked Sendable {
 
     // MARK: Heart-rate queue (#631)
 
-    /// Re-filters recipients against current consent, Pause all and per-app pause before insert. Returns true when this
-    /// insert filled the queue (#679), recording `queue_full` with it: the collector stops at the cap before the throw
-    /// below could report it, so the insert that fills the queue is where it is reported.
+    /// Re-filters recipients against current consent and sessions before insert. Returns true when this insert filled the
+    /// queue (#679), recording `queue_full` with it: the collector stops at the cap before the throw below could report
+    /// it, so the insert that fills the queue is where it is reported.
     @discardableResult
     func enqueueHeartRate(_ sample: HeartRateSample) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let allowed = Set(HeartRatePolicy.recipients(entries(), blocked: blocked(), pausedApps: pausedApps(), at: sample.at))
+        let allowed = Set(HeartRatePolicy.recipients(entries(), blocked: blocked(), sessions: sessionIds(), at: sample.at))
         let retained = sample.with(grants: sample.grants.filter { allowed.contains($0) })
-        if paused || retained.grants.isEmpty { return false }
+        if retained.grants.isEmpty { return false }
         let count = try heartRateCount()
         let full = count + 1 >= HeartRatePolicy.MAX_QUEUE
         guard count < HeartRatePolicy.MAX_QUEUE else {
@@ -495,14 +550,10 @@ final class LocalStore: @unchecked Sendable {
 
     private func seed(now: Int64, consentTime: Bool, detail: String) throws {
         guard !expired else { return } // the expired device's grants share nothing
-        let blocked = blocked(), paused = pausedApps()
-        for app in apps() where app.grantId != nil && !blocked.contains(app.id) {
-            try record(.enabled, appId: app.id, detail: detail, at: consentTime ? min(app.consentAt, now) : now)
-        }
-        for app in apps() where app.grantId != nil && !blocked.contains(app.id) && paused.contains(app.id) {
-            try record(.paused, appId: app.id, detail: detail, at: now)
-        }
-        if self.paused { try record(.pausedAll, detail: detail, at: now) }
+        let blocked = blocked(), sessions = sessionIds()
+        let granted = apps().filter { $0.grantId != nil && !blocked.contains($0.id) }
+        for app in granted { try record(.enabled, appId: app.id, detail: detail, at: consentTime ? min(app.consentAt, now) : now) }
+        for app in granted where sessions.contains(app.id) { try record(.sessionStarted, appId: app.id, detail: detail, at: now) }
     }
 
     // MARK: SQLite

@@ -8,6 +8,8 @@ final class ActivityTextTests: XCTestCase {
 
     func testEveryKind() {
         let table: [(ShareEvent.Kind, String, String?, String)] = [
+            (.sessionStarted, "", "run", "Started sharing with Run"),
+            (.sessionEnded, "user", "run", "Stopped sharing with Run"),
             (.enabled, "", "run", "Run sharing turned on"),
             (.disabled, "", "run", "Run sharing turned off"),
             (.paused, "", "run", "Run paused by you"),
@@ -37,8 +39,28 @@ final class ActivityTextTests: XCTestCase {
         for (kind, detail, app, expected) in table { XCTAssertEqual(sentence(kind, detail, app: app), expected) }
     }
 
+    /// ADR-020: every `session_ended` detail has Android's sentence (ActivityText.kt).
+    func testEverySessionEndedDetail() {
+        let table = [
+            ("user", "Stopped sharing with Run"),
+            ("all", "Stopped sharing with Run (Stop all)"),
+            ("notification", "Stopped sharing with Run from the notification"),
+            ("stationary", "Stopped sharing with Run: no movement for 30 minutes"),
+            ("max", "Stopped sharing with Run: 12 hours reached"),
+            ("grant", "Stopped sharing with Run: access turned off or ended"),
+            ("permission", "Stopped sharing with Run: precise location permission withdrawn"),
+            ("other", "Stopped sharing with Run: other"),
+        ]
+        for (detail, expected) in table { XCTAssertEqual(sentence(.sessionEnded, detail), expected) }
+    }
+
     func testCategories() {
         XCTAssertEqual(ActivityText.category(.paused), .sharing)
+        XCTAssertEqual(ActivityText.category(.sessionStarted), .sharing)
+        XCTAssertEqual(ActivityText.category(.sessionEnded), .sharing)
         XCTAssertEqual(ActivityText.category(.syncFailed), .problem)
+        XCTAssertEqual(ShareEvent.Kind(rawValue: "session_ended"), .sessionEnded)
+        XCTAssertEqual(ShareEvent.Kind(rawValue: "paused"), .paused, "old rows still decode")
+        XCTAssertEqual(ShareEvent.Kind(rawValue: "paused_all"), .pausedAll)
     }
 }

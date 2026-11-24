@@ -75,6 +75,10 @@ struct TrackPoint: Codable, Equatable {
 /// coordinates or response bodies.
 struct ShareEvent: Equatable {
     enum Kind: String, CaseIterable {
+        /// Collection sessions (ADR-020). `sessionEnded` detail: user, all, notification (#625), stationary, max, grant,
+        /// permission; the same raw values and details as Android.
+        case sessionStarted = "session_started", sessionEnded = "session_ended"
+        /// `paused`, `resumed`, `pausedAll` and `resumedAll` are retired by ADR-020 §9 and kept so older history decodes.
         case enabled, disabled, paused, resumed
         case pausedAll = "paused_all", resumedAll = "resumed_all", stopped
         case grantLost = "grant_lost", historyCleared = "history_cleared"

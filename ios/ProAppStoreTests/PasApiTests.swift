@@ -58,7 +58,7 @@ final class PasApiTests: XCTestCase {
     private func connected() async throws -> CompanionRepository {
         try secure.write(["token": "ndev_test", "userId": "u1"])
         try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"]!))
-        try local.setPaused(false)
+        try local.startSession("ski")
         let now = CompanionRepository.now() // sync expires anything older than 7 days first
         try local.enqueue(TrackPoint(id: "a", at: now - 1_000, lat: 1, lng: 2, accuracy: 5, grants: ["g1"]))
         try local.enqueue(TrackPoint(id: "b", at: now, lat: 1, lng: 2, accuracy: 5, grants: ["g1"]))
@@ -253,9 +253,9 @@ final class PasApiTests: XCTestCase {
         XCTAssertFalse(local.expired)
         XCTAssertEqual(try local.count(), 0, "points tagged with the old grants can never upload")
         XCTAssertNil(local.apps().first?.grantId)
-        XCTAssertEqual(try local.events().map(\.kind), [.resumedAll, .enabled, .expired], "no grant_lost noise for the old device's grants")
+        XCTAssertEqual(try local.events().map(\.kind), [.sessionStarted, .enabled, .sessionEnded, .expired], "no grant_lost noise for the old device's grants")
         XCTAssertEqual(try local.track(appId: "ski", from: 0, to: .max).count, 2, "uploaded history kept, the unsent point dropped")
-        XCTAssertTrue(local.paused)
+        XCTAssertEqual(local.sessions(), [], "the expiry ended the session; reconnecting creates none")
     }
 
     /// A different account after an expiry never sees the previous account's history.
@@ -320,7 +320,7 @@ final class PasApiTests: XCTestCase {
         respond(locations: .init(status: 429, json: ["error": "Upload limit reached. Retry later."]))
         do { try await repository.sync(); XCTFail("429 must fail the sync") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, 429) }
         XCTAssertEqual(try local.count(), 2)
-        XCTAssertFalse(local.paused)
+        XCTAssertEqual(local.sessionIds(), ["ski"], "a failed upload ends no session")
         XCTAssertEqual(local.message, "Upload limit reached. Retry later.")
     }
 
@@ -375,10 +375,12 @@ final class PasApiTests: XCTestCase {
     private let hrEntry: [String: Any] = ["appId": "run", "appName": "Run", "capability": "heart_rate.ble", "name": "Heart rate", "purpose": "p",
                                           "disclosure": "d", "version": "hv", "grant": ["id": "hr1", "consent_at": 1]]
 
-    /// `connected()` plus Run's heart-rate grant and one queued sample; `/native/me` lists it under `capabilities`.
+    /// `connected()` plus Run's heart-rate grant, a Run session and one queued sample; `/native/me` lists it under
+    /// `capabilities`.
     private func connectedWithHeartRate(heartRate: StubProtocol.Stub) async throws -> CompanionRepository {
         let repository = try await connected()
         try local.saveEntries(try JSONSerialization.data(withJSONObject: [hrEntry]))
+        try local.startSession("run")
         try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
         var withCapabilities = me
         withCapabilities["capabilities"] = [hrEntry]
@@ -462,7 +464,7 @@ final class PasApiTests: XCTestCase {
         XCTAssertFalse(StubProtocol.seen.contains { $0.url!.path.hasSuffix("/location") }, "Run's location grant is untouched")
     }
 
-    /// Signed in on a fresh store (Pause all on, as after pairing), `/native/me` granting Run's heart rate.
+    /// Signed in on a fresh store (no session, as after pairing), `/native/me` granting Run's heart rate.
     private func freshWithHeartRate() throws -> (CompanionRepository, NativeEntry) {
         try secure.write(["token": "ndev_test", "userId": "u1"])
         try local.saveEntries(try JSONSerialization.data(withJSONObject: [hrEntry]))
@@ -474,25 +476,33 @@ final class PasApiTests: XCTestCase {
         return (CompanionRepository(local: local, secure: secure, api: api), try XCTUnwrap(local.entries().first))
     }
 
-    /// #676: heart rate alone must be able to start after a fresh pairing.
-    func testEnablingHeartRateEndsPauseAll() async throws {
+    /// ADR-020 §2 and decision 11 (replaces #676's "enabling heart rate ends Pause all" and "keeps Run's own pause"):
+    /// enabling heart rate is a grant only. It starts no session, so no heart rate is stored until Start.
+    func testEnablingHeartRateCreatesNoSession() async throws {
         let (repository, entry) = try freshWithHeartRate()
-        XCTAssertTrue(local.paused, "a fresh pairing starts under Pause all")
         try await repository.enable(entry)
-        XCTAssertFalse(local.paused)
-        try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
-        XCTAssertEqual(try local.heartRateCount(), 1)
-    }
-
-    /// #676: enabling heart rate never resumes a paused Run, whose pause covers its location too.
-    func testEnablingHeartRateKeepsRunsOwnPause() async throws {
-        let (repository, entry) = try freshWithHeartRate()
-        try local.pause("run")
-        try await repository.enable(entry)
-        XCTAssertFalse(local.paused)
-        XCTAssertTrue(local.pausedApps().contains("run"))
+        XCTAssertEqual(local.sessions(), [])
         try local.enqueueHeartRate(HeartRateSample(id: "h", at: CompanionRepository.now(), bpm: 140, grants: ["hr1"]))
         XCTAssertEqual(try local.heartRateCount(), 0)
+    }
+
+    /// ADR-020 §2: enabling location is a grant only; Start on the row begins sharing.
+    func testEnablingLocationCreatesNoSession() async throws {
+        try secure.write(["token": "ndev_test", "userId": "u1"])
+        StubProtocol.handler = { [me] request in request.url!.path == "/v1/native/me" ? .init(json: me) : .init(json: ["grant": ["id": "g1"]]) }
+        let repository = CompanionRepository(local: local, secure: secure, api: api)
+        try local.saveApps(try JSONSerialization.data(withJSONObject: me["apps"]!))
+        try await repository.enable(local.apps()[0])
+        XCTAssertEqual(local.sessions(), [])
+        XCTAssertFalse(try local.events().contains { $0.kind == .sessionStarted })
+    }
+
+    /// A disconnect ends every session before it wipes the phone.
+    func testDisconnectEndsSessions() async throws {
+        let repository = try await connected()
+        StubProtocol.handler = { _ in .init(json: ["disconnected": true]) }
+        try await repository.disconnect()
+        XCTAssertEqual(local.sessions(), [])
     }
 
     private static func read(_ stream: InputStream) -> Data {
