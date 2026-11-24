@@ -490,6 +490,40 @@ describe('consumer native companion', () => {
       const rest = await (await request(`/apps/run/native/heart-rate?after=${last.at}&afterId=${encodeURIComponent(last.cursorId)}`, 'GET', undefined, await readToken('google:1', 'run'))).json() as { samples: unknown[] };
       expect(rest.samples).toHaveLength(201);
     });
+    it('pages two devices whose samples share timestamps: every sample once, in (at, cursorId) order (#678)', async () => {
+      // The reads order by (recorded_at, grant_id, id) so the index serves them; that equals (at, cursorId) only because every
+      // grant id is 64 hex chars. Pages end mid-timestamp and mid-grant, the places a wrong order would skip or repeat.
+      const one = await device(), two = await device(), at = Date.now() - 60_000;
+      const hr = [await hrGrant(one.token), await hrGrant(two.token)], loc = [await grant(one.token, 'run'), await grant(two.token, 'run')];
+      // Rows go in directly: this pins the read, and 1,800 uploaded samples would be 12 upload round trips.
+      const addHr = db.sql.prepare('INSERT INTO native_heart_rate (grant_id, sample_id, recorded_at, bpm) VALUES (?, ?, ?, 120)');
+      const addLoc = db.sql.prepare('INSERT INTO native_locations (grant_id, point_id, recorded_at, latitude, longitude, accuracy) VALUES (?, ?, ?, 1, 2, 3)');
+      db.sql.exec('BEGIN');
+      for (const i of [0, 1]) for (const t of [at, at + 1, at + 2]) for (let j = 0; j < 300; j++) {
+        addHr.run(hr[i]!.id, `h${t - at}-${j}`, t);
+        if (j < 100) addLoc.run(loc[i]!.id, `p${t - at}-${j}`, t);
+      }
+      db.sql.exec('COMMIT');
+      const pageAll = async (path: string, key: 'samples' | 'points', limit: number) => {
+        const rows: { at: number; cursorId: string }[] = [], sizes: number[] = [], token = await readToken('google:1', 'run');
+        for (let cursor = ''; ;) {
+          const page = (await (await request(`/apps/run/native/${path}${cursor}`, 'GET', undefined, token)).json() as Record<string, { at: number; cursorId: string }[]>)[key]!;
+          sizes.push(page.length); rows.push(...page);
+          if (page.length < limit) return { rows, sizes };
+          const last = page.at(-1)!;
+          cursor = `?after=${last.at}&afterId=${encodeURIComponent(last.cursorId)}`;
+        }
+      };
+      const expected = (rows: { at: number; cursorId: string }[]) => [...rows].sort((a, b) => a.at - b.at || (a.cursorId < b.cursorId ? -1 : 1));
+      const hrPages = await pageAll('heart-rate', 'samples', 1000);
+      expect(hrPages.sizes).toEqual([1000, 800]);
+      expect(new Set(hrPages.rows.map(r => r.cursorId)).size).toBe(1800);
+      expect(hrPages.rows).toEqual(expected(hrPages.rows));
+      const locPages = await pageAll('locations', 'points', 500);
+      expect(locPages.sizes).toEqual([500, 100]);
+      expect(new Set(locPages.rows.map(r => r.cursorId)).size).toBe(600);
+      expect(locPages.rows).toEqual(expected(locPages.rows));
+    });
     it('accepts the largest batch the validator allows: 300 samples, 80-char ids, 10 grants (#671)', async () => {
       const d = await device(), g = await hrGrant(d.token), now = Date.now();
       const grants = [g.id, ...Array.from({ length: 9 }, (_, i) => String(i).repeat(64))];

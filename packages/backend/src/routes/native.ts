@@ -152,11 +152,14 @@ nativeRoutes.get('/apps/:appId/native/locations', async c => {
   const after = Number(c.req.query('after') ?? '0'), afterId = c.req.query('afterId') ?? '';
   if (!Number.isSafeInteger(after) || after < 0 || afterId.length > 160) throw new HttpError('Invalid location cursor.', 400);
   // Composite cursor remains stable when several devices produce points at the same timestamp.
+  // #678: ordered by columns, not by cursorId, so the (grant_id, recorded_at, point_id) index serves each page without
+  // sorting the rest of the buffer. Same order: every grant id is 64 hex chars (nativeRandom), so grant_id || ':' || id
+  // compares as grant_id, then id.
   const rows = await c.env.DB.prepare(`SELECT p.point_id AS id, p.grant_id AS grantId, p.recorded_at AS at,
     p.latitude AS lat, p.longitude AS lng, p.accuracy, p.grant_id || ':' || p.point_id AS cursorId
     ${NATIVE_LOCATION_SCOPE}
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.point_id > ?))
-    ORDER BY p.recorded_at, cursorId LIMIT 500`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
+    ORDER BY p.recorded_at, p.grant_id, p.point_id LIMIT 500`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
   return c.json({ points: rows.results ?? [] });
 });
 
@@ -167,10 +170,11 @@ nativeRoutes.get('/apps/:appId/native/heart-rate', async c => {
   if (!definition) throw new HttpError('Native heart rate is unavailable for this app.', 404);
   const after = Number(c.req.query('after') ?? '0'), afterId = c.req.query('afterId') ?? '';
   if (!Number.isSafeInteger(after) || after < 0 || afterId.length > 160) throw new HttpError('Invalid heart-rate cursor.', 400);
+  // Ordered like the locations read (#678): (at, grant, sample) is (at, cursorId) for 64-char grant ids.
   const rows = await c.env.DB.prepare(`SELECT p.sample_id AS id, p.recorded_at AS at, p.bpm, p.grant_id || ':' || p.sample_id AS cursorId
     ${NATIVE_HEART_RATE_SCOPE}
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.sample_id > ?))
-    ORDER BY p.recorded_at, cursorId LIMIT 1000`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
+    ORDER BY p.recorded_at, p.grant_id, p.sample_id LIMIT 1000`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
   return c.json({ samples: rows.results ?? [] });
 });
 
@@ -184,10 +188,12 @@ nativeRoutes.get('/apps/:appId/native/status', async c => {
   const { user, appId } = await appUser(c);
   const now = Date.now(), capabilities: Record<string, { available: boolean; enabled: boolean; lastAt: number | null }> = {};
   for (const entry of (await nativeCatalog()).filter(a => a.id === appId)) {
-    const row = await c.env.DB.prepare(`SELECT COUNT(DISTINCT g.id) AS grants, MAX(p.recorded_at) AS lastAt
+    // #678: a per-grant MAX, answered from the end of the (grant_id, recorded_at, …) index, not a join over the whole buffer.
+    // Without the sample join each grant is one row, so COUNT(*) counts grants.
+    const row = await c.env.DB.prepare(`SELECT COUNT(*) AS grants,
+      MAX((SELECT MAX(p.recorded_at) FROM ${COLLECT_TABLES[entry.capability]} p WHERE p.grant_id = g.id AND p.recorded_at >= ?)) AS lastAt
       FROM native_grants g JOIN native_devices d ON d.id = g.device_id
       JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
-      LEFT JOIN ${COLLECT_TABLES[entry.capability]} p ON p.grant_id = g.id AND p.recorded_at >= ?
       WHERE g.app_id = ? AND g.capability = ? AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ?`)
       .bind(now - NATIVE_RETENTION_MS, appId, entry.capability, user.id, entry.version, now).first<{ grants: number; lastAt: number | null }>();
     capabilities[entry.capability] = { available: true, enabled: (row?.grants ?? 0) > 0, lastAt: row?.lastAt ?? null };
