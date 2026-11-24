@@ -8,7 +8,8 @@ get_project_files agent_project_status agent_board agent_activity agent_ticket_d
 qa_list_flows qa_list_runs qa_run_artifacts qa_flow_playwright inspect_admin_console
 list_admin_capabilities preview_admin_console propose_admin_update validate_admin_security
 ownership_status find_apps list_oidc_session_grants list_enquiries get_enquiry get_action_trace
-app_email_status app_email_list_sends app_email_list_suppressions`.split(/\s+/));
+app_email_status app_email_list_sends app_email_list_suppressions
+native_devices native_grants native_status native_locations native_heart_rate native_diagnostics`.split(/\s+/));
 
 const DESTRUCTIVE = new Set(`call_app_tool provision_pas_app scaffold_app write_file delete_file
 provision_app publish_app batch_write_files write_project_files delete_project_files deploy_project

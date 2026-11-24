@@ -18,6 +18,7 @@ import { registerQaTools } from "./qa-tools.js";
 import { registerAppEmailTools } from "./app-email-tools.js";
 import { registerAdminConsoleTools } from "./admin-console-tools.js";
 import { registerEnquiryTools } from "./enquiry-tools.js";
+import { registerNativeTools } from "./native-tools.js";
 import { registerTraceTools } from "./trace-tools.js";
 import { registerOwnershipTools } from "./ownership-tools.js";
 import { registerDirectoryTools } from "./directory-tools.js";
@@ -119,6 +120,12 @@ export async function createPasMcpServer(env: Env, props: Record<string, unknown
 
     // ── Marketing-site enquiries, owner-only (#413) ─────────────
     registerEnquiryTools(server, env, () => ({
+      userId: userId,
+      token: userToken,
+    }));
+
+    // ── Your own native companion data and phone diagnostics (#660) ─
+    registerNativeTools(server, env, () => ({
       userId: userId,
       token: userToken,
     }));

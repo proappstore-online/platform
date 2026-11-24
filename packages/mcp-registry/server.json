@@ -312,6 +312,30 @@
       "description": "Read-only: explain a failed action from the traceId in its error \u2014 which action, status, fault verdict, safe errorCode, SQLite's error text and class for a tenant fault, and when. Owner or platform admin of that app only; server-side records, no request values."
     },
     {
+      "name": "native_devices",
+      "description": "Read-only: your phones connected to the ProAppStore companion, with platform, app version, last sync, expiry and last diagnostics report."
+    },
+    {
+      "name": "native_grants",
+      "description": "Read-only: which apps each of your phones shares with, per capability, and whether each grant is current."
+    },
+    {
+      "name": "native_status",
+      "description": "Read-only: per app and capability, enabled state, newest sample, and per phone the sharing session state from its diagnostics report."
+    },
+    {
+      "name": "native_locations",
+      "description": "Read-only: your own uploaded location points within the 7-day buffer, paged with a composite cursor."
+    },
+    {
+      "name": "native_heart_rate",
+      "description": "Read-only: your own uploaded heart-rate samples within the 7-day buffer, paged with a composite cursor."
+    },
+    {
+      "name": "native_diagnostics",
+      "description": "Read-only: the latest diagnostics report from each of your phones (no locations or heart rate), kept 7 days."
+    },
+    {
       "name": "ownership_status",
       "description": "Read-only: your relationship to an app's ownership, open transfer/recovery requests you are party to, and the immutable audit record \u2014 other parties by login only, never the owner's identity to a non-party."
     },

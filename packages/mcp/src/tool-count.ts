@@ -16,7 +16,8 @@
 // #423 the five ownership transfer/recovery tools; #424 find_apps; #475 OIDC e2e grants; #413 list/get/mark enquiries; #502 get_action_trace.
 // #605 adds eight verified-app-email tools.
 // #577 adds twelve managed-principal, scoped-grant and audit tools.
-export const MCP_SHARED_TOOL_COUNT = 95;
+// #660 adds six read-only native_* tools: the user's own phones, grants, samples and diagnostics.
+export const MCP_SHARED_TOOL_COUNT = 101;
 
 /** Fixed tools on /mcp/apps/<id> besides that app's own tools (`whoami`, `mcp_audit_log`). */
 export const MCP_APP_SCOPED_FIXED = 2;

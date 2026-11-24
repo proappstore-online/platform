@@ -122,6 +122,21 @@ report the registration.
 |------|-------------|
 | `get_action_trace` | Explain a failed action from the `traceId` in its error: action, HTTP status, fault verdict (tenant, platform, client), safe `errorCode`, SQLite's error text, class and named object for a tenant fault, and when. Server-side rows only (browser rows are counted, never echoed); no request values. Owner or platform admin of that app only. |
 
+### Native companion, your own data (#660, ADR-019)
+
+`src/native-tools.ts`, thin over the backend's `/v1/me/native/*` routes. They need the connection's session **and**
+`X-Internal-Token` (this Worker's `INTERNAL_TOKEN`), because an app page holds the same session and must never read
+across apps. Without `INTERNAL_TOKEN` every tool fails closed and calls nothing. Audited with ids and cursors only.
+
+| Tool | Description |
+|------|-------------|
+| `native_devices` | Your connected phones: label, platform, app version, last sync, expiry, last diagnostics report |
+| `native_grants` | Per phone, app and capability: consent time and whether the grant is current |
+| `native_status` | Per app and capability: enabled, newest sample, and per phone the sharing session from its report |
+| `native_locations` | Your uploaded location points, 7-day buffer, `next` cursor; limit up to 500 (default 200) |
+| `native_heart_rate` | Your uploaded heart-rate samples, 7-day buffer, `next` cursor; limit up to 1,000 (default 500) |
+| `native_diagnostics` | Each phone's latest diagnostics report (never locations or heart rate), kept 7 days |
+
 ### Ownership transfer and recovery (#423)
 
 `src/ownership-tools.ts`, thin over the backend's `/v1/apps/:appId/ownership` routes with the
