@@ -6,7 +6,7 @@ description: "Android-first consumer companion for shared native capabilities, w
 
 ## Status and date
 
-Accepted, 2026-11-06. Android implementation started; public store distribution is not approved or submitted.
+Accepted, 2026-11-06. Partly superseded by ADR-020 (collection runs in user-started sessions).
 
 ## Context
 
