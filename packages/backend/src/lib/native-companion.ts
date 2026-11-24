@@ -8,11 +8,14 @@ export const NATIVE_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const NATIVE_LOCATION = 'location.background';
 export const NATIVE_HEART_RATE = 'heart_rate.ble';
 // ADR-018 §1: platform facts per native capability id. Not consent text and not hashed; a change that would contradict an
-// existing disclosure (say, longer retention) must edit that disclosure in the same change.
+// existing disclosure (say, longer retention) must edit that disclosure in the same change. A Collect definition names its
+// own table (ADR-018 §5): a constant SQL identifier from reviewed source, never request input. Reads, uploads, the relay and
+// prune all take the table and the retention from here.
 export const NATIVE_CAPABILITIES = {
-  [NATIVE_LOCATION]: { name: 'Location', flow: 'collect', retentionMs: NATIVE_RETENTION_MS },
-  [NATIVE_HEART_RATE]: { name: 'Heart rate', flow: 'collect', retentionMs: NATIVE_RETENTION_MS },
-} as const satisfies Record<string, { name: string; flow: 'collect' | 'deliver' | 'act'; retentionMs?: number }>;
+  [NATIVE_LOCATION]: { name: 'Location', flow: 'collect', table: 'native_locations', retentionMs: NATIVE_RETENTION_MS },
+  [NATIVE_HEART_RATE]: { name: 'Heart rate', flow: 'collect', table: 'native_heart_rate', retentionMs: NATIVE_RETENTION_MS },
+} as const satisfies Record<string, { name: string; flow: 'collect' | 'deliver' | 'act'; table?: string; retentionMs?: number }>;
+type NativeCapability = keyof typeof NATIVE_CAPABILITIES;
 // Curated, reviewed recipients, one per (app, capability) (list order is /native/me order); app declarations must never grant
 // a capability by themselves. Each entry's hash is its contract version (see nativeCatalog): never reshape an existing entry,
 // not even to add a field, or every grant for it is revoked.
@@ -69,18 +72,18 @@ export function nativeRelayActionError(appId: string, tool: ToolManifest): strin
   return null;
 }
 /**
- * The location read's authorization (#613): current publisher, current contract, unexpired device, retention. The relay
- * (#654) uses the same, so a revocation, publisher transfer, disclosure change or device expiry stops both. Binds, in order:
- * app id, user id, contract version, now, retention floor.
+ * A Collect capability's read authorization (#613): current publisher, current contract, unexpired device, retention, over
+ * the definition's own table and grant. The relay (#654) uses location's, so a revocation, publisher transfer, disclosure
+ * change or device expiry stops both. Binds, in order: app id, user id, contract version, now, retention floor.
  */
-export const NATIVE_LOCATION_SCOPE = `FROM native_locations p JOIN native_grants g ON g.id = p.grant_id JOIN native_devices d ON d.id = g.device_id
+function collectScope(capability: NativeCapability) {
+  return `FROM ${NATIVE_CAPABILITIES[capability].table} p JOIN native_grants g ON g.id = p.grant_id JOIN native_devices d ON d.id = g.device_id
     JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
-    WHERE g.app_id = ? AND g.capability = 'location.background' AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ? AND p.recorded_at >= ?`;
-
-/** The heart-rate read's authorization: the location read's (#613), over native_heart_rate and the heart-rate grant (#631). */
-export const NATIVE_HEART_RATE_SCOPE = `FROM native_heart_rate p JOIN native_grants g ON g.id = p.grant_id JOIN native_devices d ON d.id = g.device_id
-    JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
-    WHERE g.app_id = ? AND g.capability = 'heart_rate.ble' AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ? AND p.recorded_at >= ?`;
+    WHERE g.app_id = ? AND g.capability = '${capability}' AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ? AND p.recorded_at >= ?`;
+}
+export const NATIVE_LOCATION_SCOPE = collectScope(NATIVE_LOCATION);
+/** #631: heart rate's, over native_heart_rate and the heart-rate grant. */
+export const NATIVE_HEART_RATE_SCOPE = collectScope(NATIVE_HEART_RATE);
 
 interface NativeDevice { id: string; user_id: string; label: string; expires_at: number; }
 interface NativeGrant { id: string; app_id: string; capability: string; consent_at: number; contract_version: string; publisher_id: string; }
@@ -125,17 +128,23 @@ export async function nativeGrants(db: D1Database, deviceId: string): Promise<Na
   const catalog = await nativeCatalog();
   return (rows.results ?? []).filter(g => catalog.some(a => a.id === g.app_id && a.capability === g.capability && a.version === g.contract_version));
 }
+/** The fields every Collect sample shares: a new id, a time inside retention (and at most a minute ahead), 1-10 grant ids. */
+function sampleHead(p: unknown, ids: Set<string>, now: number, retentionMs: number): boolean {
+  if (!p || typeof p !== 'object') return false;
+  const { id, at, grants } = p as Record<string, unknown>;
+  return typeof id === 'string' && /^[A-Za-z0-9-]{1,80}$/.test(id) && !ids.has(id)
+    && Number.isSafeInteger(at) && (at as number) >= now - retentionMs && (at as number) <= now + 60_000
+    && Array.isArray(grants) && grants.length >= 1 && grants.length <= 10
+    && grants.every((g: unknown) => typeof g === 'string' && /^[a-f0-9]{64}$/.test(g));
+}
 export function nativePoints(value: unknown, now: number): NativePoint[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 100) throw new HttpError('Send 1 to 100 location points.', 400);
   const ids = new Set<string>();
   return value.map(p => {
-    if (!p || typeof p.id !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(p.id) || ids.has(p.id)
-      || !Number.isSafeInteger(p.at) || p.at < now - NATIVE_RETENTION_MS || p.at > now + 60_000
+    if (!sampleHead(p, ids, now, NATIVE_CAPABILITIES[NATIVE_LOCATION].retentionMs)
       || typeof p.lat !== 'number' || !Number.isFinite(p.lat) || Math.abs(p.lat) > 90
       || typeof p.lng !== 'number' || !Number.isFinite(p.lng) || Math.abs(p.lng) > 180
-      || typeof p.accuracy !== 'number' || !Number.isFinite(p.accuracy) || p.accuracy < 0 || p.accuracy > 10_000
-      || !Array.isArray(p.grants) || p.grants.length < 1 || p.grants.length > 10
-      || p.grants.some((g: unknown) => typeof g !== 'string' || !/^[a-f0-9]{64}$/.test(g))) throw new HttpError('Invalid location point.', 400);
+      || typeof p.accuracy !== 'number' || !Number.isFinite(p.accuracy) || p.accuracy < 0 || p.accuracy > 10_000) throw new HttpError('Invalid location point.', 400);
     ids.add(p.id);
     return { id: p.id, at: p.at, lat: p.lat, lng: p.lng, accuracy: p.accuracy, grants: [...new Set<string>(p.grants)] };
   });
@@ -145,19 +154,16 @@ export function nativeHeartRateSamples(value: unknown, now: number): NativeHeart
   if (!Array.isArray(value) || value.length < 1 || value.length > 300) throw new HttpError('Send 1 to 300 heart-rate samples.', 400);
   const ids = new Set<string>();
   return value.map(p => {
-    if (!p || typeof p.id !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(p.id) || ids.has(p.id)
-      || !Number.isSafeInteger(p.at) || p.at < now - NATIVE_RETENTION_MS || p.at > now + 60_000
-      || !Number.isInteger(p.bpm) || p.bpm < 25 || p.bpm > 250
-      || !Array.isArray(p.grants) || p.grants.length < 1 || p.grants.length > 10
-      || p.grants.some((g: unknown) => typeof g !== 'string' || !/^[a-f0-9]{64}$/.test(g))) throw new HttpError('Invalid heart-rate sample.', 400);
+    if (!sampleHead(p, ids, now, NATIVE_CAPABILITIES[NATIVE_HEART_RATE].retentionMs)
+      || !Number.isInteger(p.bpm) || p.bpm < 25 || p.bpm > 250) throw new HttpError('Invalid heart-rate sample.', 400);
     ids.add(p.id);
     return { id: p.id, at: p.at, bpm: p.bpm, grants: [...new Set<string>(p.grants)] };
   });
 }
 export async function pruneNativeData(db: D1Database, now: number): Promise<void> {
   await db.batch([
-    db.prepare('DELETE FROM native_locations WHERE recorded_at < ?').bind(now - NATIVE_RETENTION_MS),
-    db.prepare('DELETE FROM native_heart_rate WHERE recorded_at < ?').bind(now - NATIVE_RETENTION_MS),
+    ...Object.values(NATIVE_CAPABILITIES).filter(d => d.flow === 'collect')
+      .map(d => db.prepare(`DELETE FROM ${d.table} WHERE recorded_at < ?`).bind(now - d.retentionMs)),
     db.prepare('DELETE FROM native_pairings WHERE expires_at <= ?').bind(now),
     db.prepare('DELETE FROM native_devices WHERE expires_at <= ?').bind(now),
     db.prepare('DELETE FROM native_grants WHERE NOT EXISTS (SELECT 1 FROM apps a WHERE a.id = native_grants.app_id AND a.creator_id = native_grants.publisher_id)'),

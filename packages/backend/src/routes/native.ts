@@ -4,9 +4,10 @@ import { HttpError, requireUser } from '../lib/auth.js';
 import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import {
   nativeBody, nativeCatalog, nativeEntry, NATIVE_CAPABILITIES, NATIVE_HEART_RATE, NATIVE_HEART_RATE_SCOPE, NATIVE_LOCATION, NATIVE_LOCATION_SCOPE,
-  NATIVE_RETENTION_MS, nativeDevice, nativeGrants, nativeHeartRateSamples, nativePoints, nativeRandom, nativeRelayOf,
+  nativeDevice, nativeGrants, nativeHeartRateSamples, nativePoints, nativeRandom, nativeRelayOf,
 } from '../lib/native-companion.js';
 import { armNativeRelay } from '../lib/native-relay.js';
+import { claimAttempt } from '../lib/credential-rate-limit.js';
 
 export const nativeRoutes = new Hono<{ Bindings: Env }>();
 nativeRoutes.use('/native/*', async (c, next) => { c.header('Cache-Control', 'private, no-store'); await next(); });
@@ -17,9 +18,12 @@ nativeRoutes.get('/native/me', async c => {
   if (!user) throw new HttpError('Account no longer exists.', 401);
   const grants = await nativeGrants(c.env.DB, device.id);
   // ADR-018 §7: `apps` stays location entries only, in the shape shipped clients decode; `capabilities` lists every entry.
-  const apps = [], capabilities = [];
-  for (const a of await nativeCatalog()) {
-    if (!await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(a.id).first()) continue;
+  const apps = [], capabilities = [], catalog = await nativeCatalog(), ids = [...new Set(catalog.map(a => a.id))];
+  // One lookup for the whole catalog (#683): this runs on every sync of every connected phone.
+  const existing = await c.env.DB.prepare(`SELECT id FROM apps WHERE id IN (${ids.map(() => '?').join(', ')})`).bind(...ids).all<{ id: string }>();
+  const live = new Set((existing.results ?? []).map(r => r.id));
+  for (const a of catalog) {
+    if (!live.has(a.id)) continue;
     const found = grants.find(g => g.app_id === a.id && g.capability === a.capability), grant = found ? publicGrant(found) : null;
     if (a.capability === NATIVE_LOCATION) apps.push({ ...a, grant });
     capabilities.push({ appId: a.id, appName: a.name, capability: a.capability, name: NATIVE_CAPABILITIES[a.capability].name,
@@ -46,16 +50,19 @@ async function enableCapability(c: Context<{ Bindings: Env }>, capability: strin
   const current = (await nativeGrants(c.env.DB, device.id)).find(g => g.app_id === appId && g.capability === definition.capability);
   if (current) return c.json({ grant: publicGrant(current) });
   // Replace an obsolete grant for THIS capability only; the FK removes its points. A new consent never adopts old queued points.
+  // Only an obsolete grant is deleted (#683): a current one inserted by a concurrent enable is the same user's consent to the
+  // same reviewed version moments earlier, so it is kept (INSERT OR IGNORE) and answered, not replaced under the first caller.
   // The capability is bound from the reviewed entry, never from the request (ADR-018 §3).
-  const id = nativeRandom(), now = Date.now();
+  const now = Date.now();
   await c.env.DB.batch([
-    c.env.DB.prepare('DELETE FROM native_grants WHERE device_id = ? AND app_id = ? AND capability = ?').bind(device.id, appId, definition.capability),
-    c.env.DB.prepare(`INSERT INTO native_grants (id, device_id, app_id, publisher_id, capability, contract_version, consent_at)
+    c.env.DB.prepare('DELETE FROM native_grants WHERE device_id = ? AND app_id = ? AND capability = ? AND (contract_version <> ? OR publisher_id <> ?)')
+      .bind(device.id, appId, definition.capability, definition.version, app.creator_id),
+    c.env.DB.prepare(`INSERT OR IGNORE INTO native_grants (id, device_id, app_id, publisher_id, capability, contract_version, consent_at)
       SELECT ?, ?, id, creator_id, ?, ?, ? FROM apps WHERE id = ? AND creator_id = ?
       AND NOT EXISTS (SELECT 1 FROM per_app_deleted_users x WHERE x.app_id = apps.id AND x.user_id = ?)`)
-      .bind(id, device.id, definition.capability, definition.version, now, appId, app.creator_id, device.user_id),
+      .bind(nativeRandom(), device.id, definition.capability, definition.version, now, appId, app.creator_id, device.user_id),
   ]);
-  const grant = (await nativeGrants(c.env.DB, device.id)).find(g => g.id === id);
+  const grant = (await nativeGrants(c.env.DB, device.id)).find(g => g.app_id === appId && g.capability === definition.capability);
   if (!grant) throw new HttpError('App changed. Review its disclosure again.', 409);
   return c.json({ grant: publicGrant(grant) });
 }
@@ -80,11 +87,7 @@ nativeRoutes.delete('/native/device', async c => {
 
 /** 200 uploads per 15 minutes per device, counted separately under each upload's key. */
 async function uploadQuota(db: D1Database, key: string, now: number) {
-  const quota = await db.prepare(`INSERT INTO credential_login_attempts (login, window_start, count) VALUES (?1, ?2, 1)
-    ON CONFLICT(login) DO UPDATE SET window_start = CASE WHEN ?2 - window_start >= 900000 THEN ?2 ELSE window_start END,
-    count = CASE WHEN ?2 - window_start >= 900000 THEN 1 ELSE count + 1 END RETURNING count`)
-    .bind(key, now).first<{ count: number }>();
-  if (!quota || quota.count > 200) throw new HttpError('Upload limit reached. Retry later.', 429);
+  if (!await claimAttempt(db, key, now, 200)) throw new HttpError('Upload limit reached. Retry later.', 429);
 }
 
 nativeRoutes.post('/native/locations', async c => {
@@ -92,7 +95,8 @@ nativeRoutes.post('/native/locations', async c => {
   await uploadQuota(c.env.DB, `native-upload:${device.id}`, now);
   const body = await nativeBody(c, 80_000);
   const points = nativePoints(body.points, now);
-  const grants = await nativeGrants(c.env.DB, device.id);
+  // Only location grants: a point naming another capability's grant would only build an INSERT the recheck discards.
+  const grants = (await nativeGrants(c.env.DB, device.id)).filter(g => g.capability === NATIVE_LOCATION);
   const statements: D1PreparedStatement[] = [], statementApps: string[] = [];
   for (const point of points) for (const grant of grants) {
     if (!point.grants.includes(grant.id) || point.at < grant.consent_at) continue;
@@ -120,7 +124,7 @@ nativeRoutes.post('/native/heart-rate', async c => {
   await uploadQuota(c.env.DB, `native-hr:${device.id}`, now);
   // #671: at least the validator's worst case (300 samples, 80-char ids, 10 grants, bpm 250 = 240,013 bytes).
   const samples = nativeHeartRateSamples((await nativeBody(c, 256_000)).samples, now);
-  const grants = await nativeGrants(c.env.DB, device.id);
+  const grants = (await nativeGrants(c.env.DB, device.id)).filter(g => g.capability === NATIVE_HEART_RATE);
   const statements: D1PreparedStatement[] = [];
   for (const sample of samples) for (const grant of grants) {
     if (!sample.grants.includes(grant.id) || sample.at < grant.consent_at) continue;
@@ -159,7 +163,8 @@ nativeRoutes.get('/apps/:appId/native/locations', async c => {
     p.latitude AS lat, p.longitude AS lng, p.accuracy, p.grant_id || ':' || p.point_id AS cursorId
     ${NATIVE_LOCATION_SCOPE}
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.point_id > ?))
-    ORDER BY p.recorded_at, p.grant_id, p.point_id LIMIT 500`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
+    ORDER BY p.recorded_at, p.grant_id, p.point_id LIMIT 500`)
+    .bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_CAPABILITIES[NATIVE_LOCATION].retentionMs, after, after, afterId).all();
   return c.json({ points: rows.results ?? [] });
 });
 
@@ -174,12 +179,10 @@ nativeRoutes.get('/apps/:appId/native/heart-rate', async c => {
   const rows = await c.env.DB.prepare(`SELECT p.sample_id AS id, p.recorded_at AS at, p.bpm, p.grant_id || ':' || p.sample_id AS cursorId
     ${NATIVE_HEART_RATE_SCOPE}
     AND (p.recorded_at > ? OR (p.recorded_at = ? AND p.grant_id || ':' || p.sample_id > ?))
-    ORDER BY p.recorded_at, p.grant_id, p.sample_id LIMIT 1000`).bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_RETENTION_MS, after, after, afterId).all();
+    ORDER BY p.recorded_at, p.grant_id, p.sample_id LIMIT 1000`)
+    .bind(appId, user.id, definition.version, Date.now(), Date.now() - NATIVE_CAPABILITIES[NATIVE_HEART_RATE].retentionMs, after, after, afterId).all();
   return c.json({ samples: rows.results ?? [] });
 });
-
-// Each Collect capability's own table (ADR-018 §5), for status's lastAt. Constant SQL identifiers, never request input.
-const COLLECT_TABLES: Record<keyof typeof NATIVE_CAPABILITIES, string> = { [NATIVE_LOCATION]: 'native_locations', [NATIVE_HEART_RATE]: 'native_heart_rate' };
 
 // Lets the app's web UI show companion state before any point exists. Exposes no device identity.
 // Predicates mirror the locations read above, so status never says enabled when that read returns nothing.
@@ -188,14 +191,15 @@ nativeRoutes.get('/apps/:appId/native/status', async c => {
   const { user, appId } = await appUser(c);
   const now = Date.now(), capabilities: Record<string, { available: boolean; enabled: boolean; lastAt: number | null }> = {};
   for (const entry of (await nativeCatalog()).filter(a => a.id === appId)) {
+    const collect = NATIVE_CAPABILITIES[entry.capability]; // its table is a constant identifier from reviewed source (ADR-018 §5)
     // #678: a per-grant MAX, answered from the end of the (grant_id, recorded_at, …) index, not a join over the whole buffer.
     // Without the sample join each grant is one row, so COUNT(*) counts grants.
     const row = await c.env.DB.prepare(`SELECT COUNT(*) AS grants,
-      MAX((SELECT MAX(p.recorded_at) FROM ${COLLECT_TABLES[entry.capability]} p WHERE p.grant_id = g.id AND p.recorded_at >= ?)) AS lastAt
+      MAX((SELECT MAX(p.recorded_at) FROM ${collect.table} p WHERE p.grant_id = g.id AND p.recorded_at >= ?)) AS lastAt
       FROM native_grants g JOIN native_devices d ON d.id = g.device_id
       JOIN apps a ON a.id = g.app_id AND a.creator_id = g.publisher_id
       WHERE g.app_id = ? AND g.capability = ? AND d.user_id = ? AND g.contract_version = ? AND d.expires_at > ?`)
-      .bind(now - NATIVE_RETENTION_MS, appId, entry.capability, user.id, entry.version, now).first<{ grants: number; lastAt: number | null }>();
+      .bind(now - collect.retentionMs, appId, entry.capability, user.id, entry.version, now).first<{ grants: number; lastAt: number | null }>();
     capabilities[entry.capability] = { available: true, enabled: (row?.grants ?? 0) > 0, lastAt: row?.lastAt ?? null };
   }
   // The top-level fields stay location's (#613); Run is written against exactly them.

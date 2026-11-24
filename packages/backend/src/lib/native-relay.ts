@@ -13,7 +13,7 @@ import { HttpError } from './auth.js';
 import { batchPayload, prepareActionBatch, prepareActionQuery, referencesChildFlag, type ToolManifest } from './action-sql.js';
 import { sendAppEvent, type AppEventMessage } from './app-event-queue.js';
 import { isChildAccount } from './user-flags.js';
-import { NATIVE_LOCATION_SCOPE, NATIVE_RETENTION_MS, nativeEntry, nativeRelayActionError, nativeRelayOf } from './native-companion.js';
+import { NATIVE_CAPABILITIES, NATIVE_LOCATION, NATIVE_LOCATION_SCOPE, nativeEntry, nativeRelayActionError, nativeRelayOf } from './native-companion.js';
 import { forwardToDataWorker, loadManifest } from '../routes/actions.js';
 
 const RELAY_SPACING_MS = 3_000;
@@ -58,7 +58,7 @@ async function release(env: Env, m: AppEventMessage, set = '', ...values: unknow
 async function newestPoint(env: Env, appId: string, userId: string, version: string, after: number, now: number): Promise<RelayPoint | null> {
   return env.DB.prepare(`SELECT p.recorded_at AS at, p.latitude AS lat, p.longitude AS lng, p.accuracy
     ${NATIVE_LOCATION_SCOPE} AND p.recorded_at > ?
-    ORDER BY p.recorded_at DESC LIMIT 1`).bind(appId, userId, version, now, now - NATIVE_RETENTION_MS, after).first<RelayPoint>();
+    ORDER BY p.recorded_at DESC LIMIT 1`).bind(appId, userId, version, now, now - NATIVE_CAPABILITIES[NATIVE_LOCATION].retentionMs, after).first<RelayPoint>();
 }
 
 /** Run the relay action with one point. Returns null on success, else the error and whether retrying could help. */

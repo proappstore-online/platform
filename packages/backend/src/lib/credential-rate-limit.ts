@@ -32,11 +32,13 @@ export const MAX_ATTEMPTS = 10;
 export const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
- * Claim one attempt for `key`; false when the key is locked out. A row whose
- * window has expired restarts at 1. SQLite evaluates every SET expression
- * against the old row, so both CASEs see the same window_start.
+ * Claim one attempt for `key`; false when the key is locked out (more than `max`
+ * claims in the window). A row whose window has expired restarts at 1. SQLite
+ * evaluates every SET expression against the old row, so both CASEs see the same
+ * window_start. Native upload quotas (routes/native.ts) share this table, with
+ * max 200, under the `native-upload:` and `native-hr:` key prefixes.
  */
-export async function claimAttempt(db: D1Database, key: string, nowMs: number): Promise<boolean> {
+export async function claimAttempt(db: D1Database, key: string, nowMs: number, max = MAX_ATTEMPTS): Promise<boolean> {
   const row = await db
     .prepare(
       `INSERT INTO credential_login_attempts (login, window_start, count) VALUES (?1, ?2, 1)
@@ -47,7 +49,7 @@ export async function claimAttempt(db: D1Database, key: string, nowMs: number): 
     )
     .bind(key, nowMs, WINDOW_MS)
     .first<{ count: number }>();
-  return (row?.count ?? 0) <= MAX_ATTEMPTS;
+  return (row?.count ?? 0) <= max;
 }
 
 /** Clear the counter after a success. */

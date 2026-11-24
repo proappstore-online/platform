@@ -4,7 +4,7 @@ import { mintSession, credentialContext } from '@proappstore/build-core';
 import { nativeAuthRoutes } from './native-auth.js';
 import { nativeRoutes } from './native.js';
 import { listingsRoutes } from './listings.js';
-import { nativeCatalog, nativeHash, nativeHeartRateSamples, nativePoints, NATIVE_RELAYS, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
+import { NATIVE_CAPABILITIES, nativeCatalog, nativeHash, nativeHeartRateSamples, nativePoints, NATIVE_RELAYS, NATIVE_RETENTION_MS, pruneNativeData } from '../lib/native-companion.js';
 import { handleAppEventBatch } from '../lib/app-event-consumer.js';
 import type { AppEventMessage } from '../lib/app-event-queue.js';
 import type { ToolManifest } from '../lib/action-sql.js';
@@ -225,10 +225,17 @@ describe('consumer native companion', () => {
     expect((await request('/native/apps/other/location', 'PUT', { version: '1', enabled: true }, d.token)).status).toBe(404);
     expect((await request('/native/apps/ski/location', 'PUT', { version: '0', enabled: true }, d.token)).status).toBe(400);
     expect((await request('/native/apps/ski/location', 'PUT', { version: '1', enabled: false }, d.token)).status).toBe(400);
-    for (const points of [[], [point('x', Date.now(), [])], [point('x', 0, ['a'.repeat(64)])], [{ ...point('x', Date.now(), ['a'.repeat(64)]), lat: 91 }]]) {
-      expect((await request('/native/locations', 'POST', { points }, d.token)).status).toBe(400);
+    // Shipped clients log these messages (#683): the text is part of the API.
+    const a = 'a'.repeat(64), invalid = 'Invalid location point.';
+    for (const [points, error] of [[[], 'Send 1 to 100 location points.'], [Array.from({ length: 101 }, (_, i) => point(`p${i}`, Date.now(), [a])), 'Send 1 to 100 location points.'],
+      [[point('x', Date.now(), [])], invalid], [[point('x', 0, [a])], invalid], [[{ ...point('x', Date.now(), [a]), lat: 91 }], invalid],
+      [[point('bad id', Date.now(), [a])], invalid], [[point('x', Date.now() + 120_000, [a])], invalid], [[point('x', Date.now(), Array(11).fill(a))], invalid],
+      [[point('x', Date.now(), ['A'.repeat(64)])], invalid]] as const) {
+      const response = await request('/native/locations', 'POST', { points }, d.token);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe(error);
     }
-    expect(() => nativePoints([point('x', Date.now(), ['a'.repeat(64)]), point('x', Date.now(), ['a'.repeat(64)])], Date.now())).toThrow();
+    expect(() => nativePoints([point('x', Date.now(), [a]), point('x', Date.now(), [a])], Date.now())).toThrow(invalid);
   });
   it('disconnect removes grants and points, and expired devices cannot ingest', async () => {
     const d = await device(), g = await grant(d.token);
@@ -248,6 +255,22 @@ describe('consumer native companion', () => {
     expect(db.sql.prepare('SELECT * FROM native_locations').all()).toHaveLength(0);
     const catalog = await (await request('/native/me', 'GET', undefined, d.token)).json() as { apps: { version: string }[] };
     expect((await request('/native/apps/ski/location', 'PUT', { version: catalog.apps[0].version, enabled: true }, d.token)).status).toBe(403);
+  });
+  it('prune deletes an 8-day-old row from every table a Collect definition names, and keeps a fresh one (#683)', async () => {
+    const d = await device(), g = await grant(d.token), now = Date.now(), old = now - 8 * 24 * 60 * 60_000;
+    // One seed per Collect table: a new Collect capability fails here until its table has one.
+    const seed: Record<string, (id: string, at: number) => void> = {
+      native_locations: (id, at) => db.sql.prepare('INSERT INTO native_locations VALUES (?, ?, ?, 1, 2, 3)').run(g.id, id, at),
+      native_heart_rate: (id, at) => db.sql.prepare('INSERT INTO native_heart_rate VALUES (?, ?, ?, 120)').run(g.id, id, at),
+    };
+    const collect = Object.values(NATIVE_CAPABILITIES).filter(def => def.flow === 'collect');
+    expect(collect.map(def => def.table).sort()).toEqual(Object.keys(seed).sort());
+    for (const def of collect) { seed[def.table]!('old', old); seed[def.table]!('fresh', now); }
+    await pruneNativeData(db, now);
+    for (const def of collect) {
+      expect(def.retentionMs).toBeLessThan(now - old);
+      expect(db.sql.prepare(`SELECT ${def.table === 'native_locations' ? 'point_id' : 'sample_id'} AS id FROM ${def.table}`).all()).toEqual([{ id: 'fresh' }]);
+    }
   });
   it('physically prunes expired points and device credentials', async () => {
     const d = await device(), g = await grant(d.token);
@@ -440,6 +463,35 @@ describe('consumer native companion', () => {
       expect(me.apps.find(a => a.id === 'run')!.grant).toBeNull();
       expect(me.capabilities.find(e => e.appId === 'run' && e.capability === 'heart_rate.ble')!.grant!.id).toBe(g.id);
     });
+    it('builds an insert only for heart-rate grants: a sample naming the location grant too is one statement, one row (#683)', async () => {
+      const d = await device(), hr = await hrGrant(d.token), loc = await grant(d.token, 'run');
+      const batch = vi.spyOn(db, 'batch');
+      expect((await request('/native/heart-rate', 'POST', { samples: [sample('both', Date.now(), [loc.id, hr.id])] }, d.token)).status).toBe(200);
+      expect(batch).toHaveBeenCalledTimes(1);
+      expect(batch.mock.calls[0]![0]).toHaveLength(1);
+      batch.mockClear();
+      expect((await request('/native/locations', 'POST', { points: [point('both', Date.now(), [loc.id, hr.id])] }, d.token)).status).toBe(200);
+      expect(batch.mock.calls[0]![0]).toHaveLength(1);
+      batch.mockRestore();
+      expect(stored()).toEqual(['both']);
+      expect(db.sql.prepare('SELECT grant_id FROM native_locations').all()).toEqual([{ grant_id: loc.id }]);
+    });
+    it('two concurrent enables answer the same grant; an obsolete grant is still replaced with its samples (#683)', async () => {
+      const d = await device(), body = { version: await hrVersion(), enabled: true };
+      const [a, b] = await Promise.all([request(HR, 'PUT', body, d.token), request(HR, 'PUT', body, d.token)]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const [ga, gb] = await Promise.all([a.json(), b.json()]) as { grant: { id: string } }[];
+      expect(ga!.grant.id).toBe(gb!.grant.id);
+      expect(db.sql.prepare("SELECT id FROM native_grants WHERE capability = 'heart_rate.ble'").all()).toEqual([{ id: ga!.grant.id }]);
+      // Replace: a grant to an edited disclosure is deleted with its samples, never adopted.
+      await request('/native/heart-rate', 'POST', { samples: [sample('queued', Date.now(), [ga!.grant.id])] }, d.token);
+      expect(stored()).toEqual(['queued']);
+      db.sql.exec("UPDATE native_grants SET contract_version = 'stale' WHERE capability = 'heart_rate.ble'");
+      const replaced = await hrGrant(d.token);
+      expect(replaced.id).not.toBe(ga!.grant.id);
+      expect(stored()).toEqual([]);
+      expect(db.sql.prepare("SELECT id FROM native_grants WHERE capability = 'heart_rate.ble'").all()).toEqual([{ id: replaced.id }]);
+    });
     it('stores only post-consent samples naming the heart-rate grant; a location grant is acknowledged and stored nowhere', async () => {
       const d = await device(), hr = await hrGrant(d.token), loc = await grant(d.token, 'run');
       const samples = [sample('valid', hr.consent_at, [hr.id]), sample('old', hr.consent_at - 1, [hr.id]),
@@ -457,11 +509,16 @@ describe('consumer native companion', () => {
     });
     it('rejects bpm 0, 300 and 25.5, an 8-day-old sample, and malformed batches', async () => {
       const d = await device(), g = await hrGrant(d.token), now = Date.now();
-      for (const samples of [[sample('a', now, [g.id], 0)], [sample('a', now, [g.id], 300)], [sample('a', now, [g.id], 25.5)],
-        [sample('a', now - 8 * 24 * 60 * 60_000, [g.id])], [], [sample('a', now, [])], Array.from({ length: 301 }, (_, i) => sample(`s${i}`, now, [g.id]))]) {
-        expect((await request('/native/heart-rate', 'POST', { samples }, d.token)).status).toBe(400);
+      const invalid = 'Invalid heart-rate sample.', count = 'Send 1 to 300 heart-rate samples.';
+      for (const [samples, error] of [[[sample('a', now, [g.id], 0)], invalid], [[sample('a', now, [g.id], 300)], invalid], [[sample('a', now, [g.id], 25.5)], invalid],
+        [[sample('a', now - 8 * 24 * 60 * 60_000, [g.id])], invalid], [[], count], [[sample('a', now, [])], invalid],
+        [Array.from({ length: 301 }, (_, i) => sample(`s${i}`, now, [g.id])), count], [[sample('a'.repeat(81), now, [g.id])], invalid],
+        [[sample('a', now + 120_000, [g.id])], invalid], [[sample('a', now, Array(11).fill(g.id))], invalid]] as const) {
+        const response = await request('/native/heart-rate', 'POST', { samples }, d.token);
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as { error: string }).error).toBe(error);
       }
-      expect(() => nativeHeartRateSamples([sample('x', now, [g.id]), sample('x', now, [g.id])], now)).toThrow();
+      expect(() => nativeHeartRateSamples([sample('x', now, [g.id]), sample('x', now, [g.id])], now)).toThrow(invalid);
       expect(nativeHeartRateSamples([sample('lo', now, [g.id], 25), sample('hi', now, [g.id], 250)], now)).toHaveLength(2);
       expect((await request('/native/heart-rate', 'POST', { samples: [sample('x', now, [g.id])] }, await readToken('google:1', 'run'))).status).toBe(401);
       expect(stored()).toEqual([]);

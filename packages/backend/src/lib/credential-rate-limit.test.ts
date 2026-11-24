@@ -51,6 +51,12 @@ describe('credential attempt limiting (fixed window, atomic claim)', () => {
     expect(row('cat')).toEqual({ window_start: T + WINDOW_MS, count: 1 });
   });
 
+  it('takes a per-caller limit: the native upload quota allows the 200th claim and refuses the 201st (#683)', async () => {
+    for (let i = 0; i < 200; i++) expect(await claimAttempt(db, 'native-hr:device', T, 200)).toBe(true);
+    expect(await claimAttempt(db, 'native-hr:device', T, 200)).toBe(false);
+    expect(await claimAttempt(db, 'native-hr:device', T + WINDOW_MS, 200)).toBe(true);
+  });
+
   it('a success clears the counter', async () => {
     for (let i = 0; i <= MAX_ATTEMPTS; i++) await claimAttempt(db, 'pug', T);
     await recordSuccess(db, 'pug');
