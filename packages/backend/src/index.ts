@@ -74,6 +74,7 @@ import { keysRoutes } from './routes/keys.js';
 import { authRoutes } from './routes/auth.js';
 import { nativeAuthRoutes } from './routes/native-auth.js';
 import { nativeRoutes } from './routes/native.js';
+import { nativeAccountRoutes } from './routes/native-account.js';
 import { pruneNativeData } from './lib/native-companion.js';
 import { cleanupRemoteAuthRequests, mcpBrokerRoutes } from './routes/mcp-broker.js';
 import { mcpGrantRoutes } from './routes/mcp-grants.js';
@@ -343,6 +344,7 @@ v1.use('*', activationObserver);
 v1.route('/', authRoutes);
 v1.route('/', nativeAuthRoutes);
 v1.route('/', nativeRoutes);
+v1.route('/', nativeAccountRoutes); // #660: the user's own native data (session + X-Internal-Token) and the phone's diagnostics
 v1.route('/', mcpBrokerRoutes);
 v1.route('/', mcpGrantRoutes);
 v1.route('/', passkeyRoutes);

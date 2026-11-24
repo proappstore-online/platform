@@ -164,6 +164,8 @@ export async function pruneNativeData(db: D1Database, now: number): Promise<void
   await db.batch([
     ...Object.values(NATIVE_CAPABILITIES).filter(d => d.flow === 'collect')
       .map(d => db.prepare(`DELETE FROM ${d.table} WHERE recorded_at < ?`).bind(now - d.retentionMs)),
+    // #660 / ADR-019 §3: a diagnostics report is kept 7 days; a deleted device takes its report with it (FK).
+    db.prepare('DELETE FROM native_diagnostics WHERE received_at < ?').bind(now - NATIVE_RETENTION_MS),
     db.prepare('DELETE FROM native_pairings WHERE expires_at <= ?').bind(now),
     db.prepare('DELETE FROM native_devices WHERE expires_at <= ?').bind(now),
     db.prepare('DELETE FROM native_grants WHERE NOT EXISTS (SELECT 1 FROM apps a WHERE a.id = native_grants.app_id AND a.creator_id = native_grants.publisher_id)'),

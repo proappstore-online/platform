@@ -264,6 +264,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/routes/logs.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/marketing-deploy.ts': live(OWNER_ONLY),
   'packages/backend/src/routes/notifications.ts': live('creator_id === user.id decides who may notify the app audience'),
+  'packages/backend/src/routes/native-account.ts': proj('reports whether the user\'s own native grant still matches the app\'s current publisher (`current`, #660); scoped to the caller\'s devices, grants no creator or admin rights'),
   'packages/backend/src/routes/native.ts': live('binds native end-user consent, ingestion and reads to the current publisher; device credentials have no creator or admin rights'),
   'packages/backend/src/routes/oidc-session.ts': live('isAdminId gate on minting e2e sessions (platform trust, not account authority)'),
   'packages/backend/src/routes/ownership.ts': live('creator-only transfer/recovery; T07 turns it into account-to-account transfer'),

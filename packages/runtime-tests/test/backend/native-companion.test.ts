@@ -42,3 +42,19 @@ it('D1 enforces native grant isolation, idempotent delivery and cascading revoca
   await call('/native/locations', 'POST', payload);
   expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM native_locations').first('n')).toBe(0);
 });
+
+it('D1 keeps one diagnostics report per device, caps its size, and drops it with the device (#660, migration 0151)', async () => {
+  const now = Date.now();
+  const snapshot = {
+    v: 1, at: now, app: { platform: 'android', version: '1.4.0', build: '57', os: 'Android 15' },
+    permissions: { location: 'whenInUse', precise: true, bluetooth: 'allowed' }, sensors: { location: 'idle', heartRate: 'off' },
+    queue: { location: 0, heartRate: 0 }, sync: { lastSuccessAt: now, lastAttemptAt: now, lastError: '' },
+    collection: { sessions: [], lastEnded: [], pendingRevocations: [] }, activity: [],
+  };
+  for (let i = 0; i < 2; i++) expect((await call('/native/diagnostics', 'PUT', { snapshot })).status).toBe(200);
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM native_diagnostics').first('n')).toBe(1);
+  await expect(env.DB.prepare('INSERT INTO native_diagnostics (device_id, received_at, snapshot) VALUES (?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET snapshot = excluded.snapshot')
+    .bind(deviceId, now, 'x'.repeat(65_537)).run()).rejects.toThrow(/CHECK/);
+  expect((await call('/native/device', 'DELETE')).status).toBe(200);
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM native_diagnostics').first('n')).toBe(0);
+});

@@ -16,6 +16,7 @@ nativeRoutes.get('/native/me', async c => {
   const device = await nativeDevice(c);
   const user = await c.env.DB.prepare('SELECT id, login FROM users WHERE id = ?').bind(device.user_id).first<{ id: string; login: string }>();
   if (!user) throw new HttpError('Account no longer exists.', 401);
+  await recordDeviceSeen(c.env.DB, device.id, c.req.header(NATIVE_CLIENT_HEADER), Date.now());
   const grants = await nativeGrants(c.env.DB, device.id);
   // ADR-018 §7: `apps` stays location entries only, in the shape shipped clients decode; `capabilities` lists every entry.
   const apps = [], capabilities = [], catalog = await nativeCatalog(), ids = [...new Set(catalog.map(a => a.id))];
@@ -31,6 +32,25 @@ nativeRoutes.get('/native/me', async c => {
   }
   return c.json({ user: { id: user.id, name: user.login }, device: { id: device.id, label: device.label, expiresAt: device.expires_at }, apps, capabilities });
 });
+
+/** `ios/1.4.0 (57)` or `android/1.4.0 (57)`, sent by both clients on every `/native/*` request (#660). */
+const NATIVE_CLIENT_HEADER = 'X-PAS-Native-Client';
+const NATIVE_CLIENT = /^(ios|android)\/([0-9A-Za-z.+-]{1,32}( \([0-9]{1,10}\))?)$/;
+
+/**
+ * Device facts for the user's own device list (#660): platform, app version, and when it last synced (`/native/me` runs on
+ * every sync). Device metadata, not diagnostics, so recorded with diagnostics off too. At most one write a minute unless the
+ * version changed; a shipped client without the header records the time only.
+ */
+async function recordDeviceSeen(db: D1Database, deviceId: string, header: string | undefined, now: number) {
+  const client = header ? NATIVE_CLIENT.exec(header) : null;
+  await (client
+    ? db.prepare(`UPDATE native_devices SET platform = ?, app_version = ?, last_seen_at = ?
+        WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ? OR app_version IS NOT ? OR platform IS NOT ?)`)
+      .bind(client[1], client[2], now, deviceId, now - 60_000, client[2], client[1])
+    : db.prepare('UPDATE native_devices SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)').bind(now, deviceId, now - 60_000)
+  ).run();
+}
 
 // The grant as the native API has always returned it; the capability is implied by where it is listed.
 function publicGrant({ capability, ...grant }: Awaited<ReturnType<typeof nativeGrants>>[number]) { void capability; return grant; }
@@ -85,8 +105,8 @@ nativeRoutes.delete('/native/device', async c => {
   return c.json({ disconnected: true });
 });
 
-/** 200 uploads per 15 minutes per device, counted separately under each upload's key. */
-async function uploadQuota(db: D1Database, key: string, now: number) {
+/** 200 uploads per 15 minutes per device, counted separately under each upload's key (diagnostics too, #660). */
+export async function uploadQuota(db: D1Database, key: string, now: number) {
   if (!await claimAttempt(db, key, now, 200)) throw new HttpError('Upload limit reached. Retry later.', 429);
 }
 
