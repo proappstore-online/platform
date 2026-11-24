@@ -94,6 +94,15 @@ describe("admin publish identities (#327)", () => {
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
+  it("refuses a retired app ID with 409 (#686)", async () => {
+    const token = await mintSession({ uid: "google:123", login: "Serge Ivy", roles: ["user"] }, KEY);
+    mocks.claim.mockResolvedValue({ creator_id: null, alias_reserved: 0, retired: 1 });
+    const response = await post({ "X-Internal-Token": "internal-secret", Authorization: `Bearer ${token}` });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "app ID retired" });
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to a trusted login when the forwarded session is invalid", async () => {
     const credential = await mintSession({ uid: "cred:123", login: "victim", roles: ["user"] }, KEY);
     const forged = await mintSession({ uid: "google:123", login: "victim", roles: ["user"] }, "wrong-key");

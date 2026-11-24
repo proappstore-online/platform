@@ -55,6 +55,13 @@ describe('provisionData', () => {
     expect(deployDataWorker).not.toHaveBeenCalled();
   });
 
+  it('refuses a retired app ID before any external allocation (#686)', async () => {
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ creator_id: null, alias_reserved: 0, retired: 1 }) }) }) } as unknown as D1Database;
+    expect(await provisionData({ ...base, db })).toMatchObject({ dbId: '', steps: [{ name: 'reserve_id', status: 'fail', detail: 'app ID retired' }] });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(deployDataWorker).not.toHaveBeenCalled();
+  });
+
   it('creates D1, deploys worker, records app on success', async () => {
     // D1 create succeeds
     mockFetch.mockResolvedValueOnce({

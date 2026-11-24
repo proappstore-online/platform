@@ -39,10 +39,11 @@ export async function provisionData(
 ): Promise<{ steps: Step[]; dataWorkerUrl: string; dbId: string }> {
   const { appId, creatorId, creatorLabel, cfToken, cfAccount, db, sessionSigningKey, internalToken, templateId, templateRev, dataWorkerHost } = args;
   const steps: Step[] = [];
-  if ((await appClaim(db, appId))?.alias_reserved) {
-    return { steps: [{ name: 'reserve_id', status: 'fail', detail: 'app ID reserved by canonical hostname' }], dataWorkerUrl: '', dbId: '' };
+  const claim = await appClaim(db, appId);
+  if (claim?.retired || claim?.alias_reserved) {
+    const detail = claim.retired ? 'app ID retired' : 'app ID reserved by canonical hostname';
+    return { steps: [{ name: 'reserve_id', status: 'fail', detail }], dataWorkerUrl: '', dbId: '' };
   }
-
 
   // 1. Resolve the app's D1 database (#688).
   const dbName = `pas-data-${appId}`;

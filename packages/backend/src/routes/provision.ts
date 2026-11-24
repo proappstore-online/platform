@@ -199,6 +199,7 @@ provisionRoutes.post('/provision-operations', wrap(async (c) => {
   // Ownership always precedes quota/reservation, so an attacker cannot reserve
   // or spend quota against another owner's app id.
   const claimed = await appClaim(c.env.DB, body.appId);
+  if (claimed?.retired) return c.text('app ID retired', 409);
   if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   if (claimed && claimed.creator_id !== user.id && !user.roles.includes('admin')) {
     return c.json({ error: 'appId already claimed by another user' }, 403);
@@ -413,6 +414,7 @@ export async function provisionApp(c: Context<{ Bindings: Env }>, body: Provisio
   // not a "must exist" one. Platform admins pass for support/re-provision,
   // matching requireAppAccess.
   const claimed = await appClaim(c.env.DB, appId);
+  if (claimed?.retired) return c.text('app ID retired', 409);
   if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   // #382: an admin's support bypass covers provisioning as themselves only; an
   // approval provisioning for a submitter must not land on someone else's app.
@@ -653,6 +655,7 @@ provisionRoutes.post('/provision-data', async (c) => {
   // Team developers pass: running Agent Teams on an app you build for its
   // creator is legitimate. Before any Cloudflare call, like the user path.
   const claimed = await appClaim(c.env.DB, body.appId);
+  if (claimed?.retired) return c.text('app ID retired', 409);
   if (claimed?.alias_reserved) return c.text('app ID reserved by canonical hostname', 409);
   if (claimed && claimed.creator_id !== body.creatorId) {
     const member = await c.env.DB.prepare('SELECT role FROM team_members WHERE app_id = ? AND user_id = ?')

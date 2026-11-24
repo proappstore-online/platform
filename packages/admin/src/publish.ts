@@ -652,8 +652,9 @@ async function provisionApp(
     return stop();
   }
 
-  if ((await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE))?.alias_reserved) {
-    steps.push({ name: "Validation", status: "fail", detail: "app ID reserved by canonical hostname" });
+  const claim = await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE);
+  if (claim?.retired || claim?.alias_reserved) {
+    steps.push({ name: "Validation", status: "fail", detail: claim.retired ? "app ID retired" : "app ID reserved by canonical hostname" });
     return stop();
   }
 
@@ -933,7 +934,9 @@ export async function runProvisionSteps(
   if (idError) throw new ProvisionValidationError(`Validation: ${idError}`);
   if (!req.name) throw new ProvisionValidationError("Validation: name is required");
 
-  if ((await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE))?.alias_reserved) {
+  const claim = await appClaim(env.DB, req.id, env.APPS_DOMAIN_BASE);
+  if (claim?.retired) throw new ProvisionValidationError("Validation: app ID retired");
+  if (claim?.alias_reserved) {
     throw new ProvisionValidationError("Validation: app ID reserved by canonical hostname");
   }
 

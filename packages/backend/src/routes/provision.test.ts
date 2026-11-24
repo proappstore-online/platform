@@ -89,6 +89,25 @@ describe('canonical alias preflight (#574)', () => {
   });
 });
 
+describe('retired app IDs (#686)', () => {
+  it.each([TOK, NON_ADMIN_TOK])('refuses a retired ID on every provisioning path before quota or allocation', async (token) => {
+    const stmt = mockStmt({ first: { creator_id: null, alias_reserved: 0, retired: 1 } });
+    const db = { prepare: vi.fn().mockReturnValue(stmt) };
+    const network = vi.fn(); vi.stubGlobal('fetch', network);
+    for (const [path, body, headers] of [
+      ['/v1/provision', { appId: 'loopride', skipCompliance: true }, { Authorization: `Bearer ${token}` }],
+      ['/v1/provision-operations', { appId: 'loopride', intent: {}, bootstrapIntent: {} }, { Authorization: `Bearer ${token}` }],
+      ['/v1/provision-data', { appId: 'loopride', creatorId: 'gh:42' }, { 'X-Internal-Token': 'sekret' }],
+    ] as const) {
+      const response = await app.request(path, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, makeEnv({ INTERNAL_TOKEN: 'sekret' }, db));
+      expect(response.status).toBe(409);
+      expect(await response.text()).toBe('app ID retired');
+    }
+    expect(network).not.toHaveBeenCalled();
+    expect(db.prepare.mock.calls.every(([sql]) => sql.includes('app_id_retirements'))).toBe(true);
+  });
+});
+
 describe('POST /v1/provision', () => {
   it('returns 401 without auth', async () => {
     const res = await app.request('/v1/provision', {

@@ -140,6 +140,7 @@ async function verifyPublishPrincipal(request: Request, env: Env): Promise<Publi
 async function checkInternalPublishOwner(principal: PublishPrincipal, appId: string, env: Env): Promise<Response | null> {
   if (principal.kind !== "internal-owner") return null;
   const app = await appClaim(env.DB, appId, env.APPS_DOMAIN_BASE);
+  if (app?.retired) return Response.json({ error: "app ID retired" }, { status: 409 });
   // Match MCP's effective owner role, including an explicitly granted team
   // owner. A viewer/editor/admin membership alone does not authorize publish.
   const owns = app && !app.alias_reserved && (app.creator_id === principal.userId || await env.DB.prepare(

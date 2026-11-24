@@ -51,6 +51,7 @@ async function checkOwnership(
   userId: string,
 ): Promise<GuardResult> {
   const row = await appClaim(db, appId);
+  if (row?.retired) return { ok: false, status: 409, error: "app ID retired" };
   if (row?.alias_reserved) return { ok: false, status: 409, error: "app ID reserved by canonical hostname" };
 
   // No row — an unclaimed id. First publish proceeds; this is a "not yours"

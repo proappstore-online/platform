@@ -70,7 +70,7 @@ describe('atomic canonical alias reservations (#574)', () => {
     db.exec(appInsert('original').replace('INSERT', 'INSERT OR IGNORE'));
     db.exec(routeInsert('original').replace('INSERT', 'INSERT OR IGNORE'));
     const d1 = { prepare: (sql: string) => ({ bind: (...args: unknown[]) => ({ first: async () => db.prepare(sql).get(...args as never[]) ?? null }) }) } as unknown as D1Database;
-    expect(await appClaim(d1, 'renamed')).toEqual({ creator_id: null, alias_reserved: 1 });
-    expect(await appClaim(d1, 'original')).toEqual({ creator_id: 'gh:1', alias_reserved: 0 });
+    expect(await appClaim(d1, 'renamed')).toEqual({ creator_id: null, alias_reserved: 1, retired: 0 });
+    expect(await appClaim(d1, 'original')).toEqual({ creator_id: 'gh:1', alias_reserved: 0, retired: 0 });
   });
 });

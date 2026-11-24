@@ -47,6 +47,12 @@ function db(opts: {
 }
 
 describe("guardProvisionRequest — appId ownership (#83)", () => {
+  it("refuses a retired app ID with 409, before the rate limiter (#686)", async () => {
+    const d = db({ owner: { creator_id: null, retired: 1 } as never });
+    expect(await guardProvisionRequest({ db: d, appId: "loopride", userId: "gh:1" })).toMatchObject({ ok: false, status: 409, error: "app ID retired" });
+    expect(d.sqlSeen.some((sql) => /provision_attempts/i.test(sql))).toBe(false);
+  });
+
   it("allows an unclaimed appId (first publish)", async () => {
     const r = await guardProvisionRequest({
       db: db({ owner: null }), appId: "brand-new", userId: "gh:1",

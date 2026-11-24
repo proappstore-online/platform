@@ -148,6 +148,21 @@ describe("canonical alias allocation preflight (#574)", () => {
   });
 });
 
+describe("retired app IDs (#686)", () => {
+  it("refuses publishing and agent deploy of a retired ID before creating external resources", async () => {
+    const network = vi.fn(); globalThis.fetch = network;
+    const db = { prepare: () => ({ bind: () => ({ first: async () => ({ creator_id: null, alias_reserved: 0, retired: 1 }) }) }) } as unknown as D1Database;
+    const req = { id: "loopride", name: "Loopride", category: "tools", icon: "x", iconBg: "#fff", description: "Test app" };
+    const refused = { success: false, steps: [{ name: "Validation", status: "fail", detail: "app ID retired" }] };
+    expect(await handlePublish(req, { ...ENV, DB: db })).toMatchObject(refused);
+    expect(await handleAgentDeploy({ ...req, files: {} }, { ...ENV, DB: db })).toMatchObject(refused);
+    const step = vi.fn();
+    await expect(runProvisionSteps({ req }, { ...ENV, DB: db }, step)).rejects.toThrow("app ID retired");
+    expect(step).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
+  });
+});
+
 describe("provisioning: shared core", () => {
   it("handlePublish provisions hosting + registry, succeeds, pushes no files", async () => {
     const rec = install();
