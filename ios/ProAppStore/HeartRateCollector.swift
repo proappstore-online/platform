@@ -108,7 +108,9 @@ final class HeartRateCollector: NSObject, ObservableObject, CBCentralManagerDele
             if bluetooth != .unknown, bluetooth != central.state, let detail = Self.name(central.state) { try? local.record(.bluetooth, detail: detail) }
             bluetooth = central.state
             if scanning && central.state == .poweredOn { central.scanForPeripherals(withServices: [Self.service]) }
-            if central.state != .poweredOn { connected = false }
+            // Below .poweredOn every CBPeripheral may be invalid (a reset or revoked permission invalidates them all), and no
+            // connection survives anyway: drop it so the next .poweredOn evaluate() retrieves the strap afresh (#681).
+            if central.state != .poweredOn { connected = false; peripheral = nil }
             evaluate()
         }
     }
