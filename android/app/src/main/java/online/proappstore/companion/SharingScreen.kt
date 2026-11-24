@@ -276,9 +276,12 @@ internal fun CompanionState.heartRateState(entry: NativeEntry): String = when {
     bluetooth == "unauthorized" -> "Bluetooth permission needed"
     bluetooth == "off" -> "Bluetooth is off"
     !heartRateConnected -> "Not connected"
-    else -> listOfNotNull("Connected", heartRateBpm?.let { "$it bpm" },
+    else -> listOfNotNull("Connected", heartRateBpm?.takeIf { now - heartRateReadingAt < LIVE_READING_MS }?.let { "$it bpm" } ?: "no reading",
         heartRateLastUpload.takeIf { it > 0 }?.let { "uploaded ${Format.relative(it, now)}" }).joinToString(" · ")
 }
+
+/** A bpm older than this is not live: the strap is connected but off the chest, or out of contact (#674). */
+private const val LIVE_READING_MS = 10_000L
 
 /**
  * Run's heart rate under its row: Enable, Choose sensor, state, the control room's figures, Forget sensor, Turn off. Enable

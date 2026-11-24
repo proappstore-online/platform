@@ -173,7 +173,7 @@ class HeartRateTest {
         val hr = entry("run", "heart_rate.ble", "hr")
         val run = ConnectedApp("run", "Run", "Runs", "D", "1", "loc")
         val on = CompanionState(signedIn = true, apps = listOf(run), entries = listOf(hr), sessions = mapOf("run" to Session("run", 0, 0)),
-            heartRateSensor = true, heartRateConnected = true, heartRateBpm = 142, now = 10)
+            heartRateSensor = true, heartRateConnected = true, heartRateBpm = 142, heartRateReadingAt = 5, now = 10)
         assertEquals("Connected · 142 bpm", on.heartRateState(hr))
         assertEquals("Not sharing · tap Start", on.copy(sessions = emptyMap()).heartRateState(hr))
         assertEquals("Not sharing · turn on location for run to start", on.copy(sessions = emptyMap(), blocked = setOf("run")).heartRateState(hr))
@@ -185,5 +185,16 @@ class HeartRateTest {
         assertEquals("Turning off…", on.copy(blocked = setOf("run/heart_rate.ble")).heartRateState(hr))
         assertEquals("Off", on.heartRateState(entry("run", "heart_rate.ble", null)))
         assertEquals("location's block is not heart rate's", "Connected · 142 bpm", on.copy(blocked = setOf("run")).heartRateState(hr))
+    }
+
+    @Test fun aBpmOlderThanTenSecondsIsNotShownAsLive() {
+        // #674: a strap connected but off the chest sends no accepted reading, so its last bpm goes stale.
+        val hr = entry("run", "heart_rate.ble", "hr")
+        val on = CompanionState(signedIn = true, apps = listOf(ConnectedApp("run", "Run", "Runs", "D", "1", "loc")), entries = listOf(hr),
+            sessions = mapOf("run" to Session("run", 0, 0)), heartRateSensor = true, heartRateConnected = true, heartRateBpm = 142, now = 20_000)
+        assertEquals("Connected · 142 bpm", on.copy(heartRateReadingAt = 11_000).heartRateState(hr))
+        assertEquals("Connected · no reading", on.copy(heartRateReadingAt = 9_000).heartRateState(hr))
+        assertEquals("Connected · no reading", on.copy(heartRateBpm = null).heartRateState(hr))
+        assertEquals("Connected · no reading · uploaded just now", on.copy(heartRateReadingAt = 9_000, heartRateLastUpload = 15_000).heartRateState(hr))
     }
 }

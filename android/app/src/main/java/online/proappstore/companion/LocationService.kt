@@ -235,7 +235,9 @@ class LocationService : Service(), LocationListenerCompat {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, LocationService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val sessions = graph.local.sessions()
-        val names = sessions.map { s -> graph.local.apps().find { it.id == s.appId }?.name ?: s.appId }
+        // Exactly the apps that receive samples now (#674): the same session-aware recipients the points and readings carry.
+        val points = graph.repository.recipients().toSet(); val readings = graph.repository.heartRateRecipients().toSet()
+        val names = graph.local.apps().filter { it.grantId in points }.map { it.name } + graph.local.entries().filter { it.grantId in readings }.map { it.appName }
         val now = System.currentTimeMillis()
         val text = SharingSessions.summary(names, sessions.minOfOrNull { it.startedAt } ?: now, now)
         val waiting = t.location && (lastFixAt == 0L || now - lastFixAt > 30_000)

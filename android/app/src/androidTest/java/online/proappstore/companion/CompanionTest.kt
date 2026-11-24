@@ -643,6 +643,17 @@ class CompanionTest {
             local.clear(); local.close()
         }
     }
+    @Test fun aLocationFailureAlsoShowsOnAWaitingHeartRateQueue() = kotlinx.coroutines.runBlocking {
+        // #674: sync never reached heart rate, so its line stayed green while its queue grew.
+        val repository = connected(Server { if (it == "/native/locations") 400 else 200 })
+        val local = repository.local
+        val queued = sample("h")
+        local.writableDatabase.execSQL("INSERT INTO hr(id, at, payload) VALUES (?, ?, ?)", arrayOf<Any>(queued.id, queued.at, queued.json().toString()))
+        assertTrue(runCatching { repository.sync() }.isFailure)
+        assertNotEquals("", local.heartRateSyncError)
+        assertEquals(1, local.heartRateCount())
+        local.clear(); local.close()
+    }
 
     // Storage off the main thread (#663 criterion 5). The activity's own store, so its lock is the one contended.
     private fun timeOnMain(scenario: ActivityScenario<MainActivity>, action: (MainActivity) -> Unit): Long {

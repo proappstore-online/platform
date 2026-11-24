@@ -18,10 +18,11 @@ import java.util.UUID
 /** Run's strap heart rate (#634, parity for iOS #631): the `heart_rate.ble` capability id and its Bluetooth UUIDs. */
 object HeartRate {
     const val CAPABILITY = "heart_rate.ble"
-    const val SERVICE = "0000180d-0000-1000-8000-00805f9b34fb"
-    const val MEASUREMENT = "00002a37-0000-1000-8000-00805f9b34fb"
+    // Parsed once, not on every 1 Hz notification (#674).
+    val SERVICE: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
+    val MEASUREMENT: UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
     /** Client Characteristic Configuration: written to enable notifications. */
-    const val CCCD = "00002902-0000-1000-8000-00805f9b34fb"
+    val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 }
 
 /** One Heart Rate Measurement (GATT 0x2A37) notification, per the Heart Rate Service spec. Pure; ported from iOS HeartRate.swift. */
@@ -142,35 +143,33 @@ enum class HeartRateLink {
  */
 class HeartRateGatt(private val context: Context, val address: String, private val onReading: (ByteArray) -> Unit, private val onConnected: (Boolean) -> Unit) {
     private var gatt: BluetoothGatt? = null
-    @Volatile var connected = false
-        private set
     /** `connectGatt` returned a connection. False before [connect], after [close], and when Bluetooth was off (AOSP returns null). */
     val opened: Boolean get() = gatt != null
 
     private val callback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission") // only reached after connect(), which checked
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            connected = newState == BluetoothProfile.STATE_CONNECTED
+            val connected = newState == BluetoothProfile.STATE_CONNECTED
             onConnected(connected)
             if (connected && Bluetooth.permitted(context)) gatt.discoverServices()
         }
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (!Bluetooth.permitted(context)) return
-            val c = gatt.getService(UUID.fromString(HeartRate.SERVICE))?.getCharacteristic(UUID.fromString(HeartRate.MEASUREMENT)) ?: return
+            val c = gatt.getService(HeartRate.SERVICE)?.getCharacteristic(HeartRate.MEASUREMENT) ?: return
             gatt.setCharacteristicNotification(c, true)
-            val cccd = c.getDescriptor(UUID.fromString(HeartRate.CCCD)) ?: return
+            val cccd = c.getDescriptor(HeartRate.CCCD) ?: return
             if (Build.VERSION.SDK_INT >= 33) gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
             else @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; gatt.writeDescriptor(cccd) }
         }
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            if (characteristic.uuid == UUID.fromString(HeartRate.MEASUREMENT)) onReading(value)
+            if (characteristic.uuid == HeartRate.MEASUREMENT) onReading(value)
         }
         @Deprecated("Android 12L and lower")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             // Android 13+ calls the overload above instead; this one runs on 12L and lower only.
             @Suppress("DEPRECATION")
-            if (Build.VERSION.SDK_INT < 33 && characteristic.uuid == UUID.fromString(HeartRate.MEASUREMENT)) characteristic.value?.let(onReading)
+            if (Build.VERSION.SDK_INT < 33 && characteristic.uuid == HeartRate.MEASUREMENT) characteristic.value?.let(onReading)
         }
     }
 
@@ -184,7 +183,7 @@ class HeartRateGatt(private val context: Context, val address: String, private v
     @SuppressLint("MissingPermission")
     fun close() {
         if (Bluetooth.permitted(context)) gatt?.close()
-        gatt = null; connected = false
+        gatt = null
     }
 }
 

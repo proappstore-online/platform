@@ -99,34 +99,28 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
     suspend fun sync() = withContext(Dispatchers.IO) { operations.withLock {
         val credential = token() ?: return@withLock
         var uploading = false; var partial = false; var heartRateStage = false
+        /** Up to 10 batches, stopping at an empty queue. Exact acknowledgement (#621): anything less keeps the device copy. */
+        fun upload(path: String, key: String, next: () -> List<JSONObject>, ack: (List<String>) -> Unit) {
+            for (round in 1..10) {
+                val batch = next()
+                if (batch.isEmpty()) break
+                uploading = true
+                val acknowledged = device("POST", path, credential, JSONObject().put(key, JSONArray(batch))).getJSONArray("acknowledged")
+                val ids = (0 until acknowledged.length()).map { acknowledged.getString(it) }
+                if (ids.toSet() != batch.map { it.getString("id") }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
+                ack(ids)
+            }
+        }
         try {
             val blocked = local.blocked()
             for (key in blocked) device("DELETE", grantPath(key), credential)
             updateMe(device("GET", "/native/me", credential))
             for (id in blocked) local.unblock(id)
             local.expire(System.currentTimeMillis())
-            repeat(10) {
-                val batch = local.pending()
-                if (batch.isEmpty()) return@repeat
-                uploading = true
-                val result = device("POST", "/native/locations", credential, JSONObject().put("points", JSONArray(batch.map { it.json() })))
-                val ack = result.getJSONArray("acknowledged")
-                val ids = (0 until ack.length()).map { ack.getString(it) }
-                if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
-                local.acknowledge(ids)
-            }
+            upload("/native/locations", "points", { local.pending().map { it.json() } }, { local.acknowledge(it) })
             // Heart rate after points (#634), under its own quota and the same exact-acknowledgement rule.
             heartRateStage = true
-            repeat(10) {
-                val batch = local.pendingHeartRate()
-                if (batch.isEmpty()) return@repeat
-                uploading = true
-                val result = device("POST", "/native/heart-rate", credential, JSONObject().put("samples", JSONArray(batch.map { it.json() })))
-                val ack = result.getJSONArray("acknowledged")
-                val ids = (0 until ack.length()).map { ack.getString(it) }
-                if (ids.toSet() != batch.map { it.id }.toSet()) { partial = true; error("Upload was not fully acknowledged. Device copy retained.") }
-                local.acknowledgeHeartRate(ids)
-            }
+            upload("/native/heart-rate", "samples", { local.pendingHeartRate().map { it.json() } }, { local.acknowledgeHeartRate(it) })
             local.heartRateSyncError = ""
             local.lastSync = System.currentTimeMillis(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
             runCatching { local.syncSucceeded() }
@@ -134,7 +128,8 @@ class CompanionRepository(val local: LocalStore, private val secure: SecureStore
             if (DeviceConnection.expired(e)) throw e // the expired card says it, not a sync failure
             local.message = if (e is ApiFailure) e.message ?: "Reconnect your account." else "Waiting to sync. Location stays on this phone."
             local.lastSyncAttempt = System.currentTimeMillis(); local.lastSyncError = e.message ?: local.message
-            if (heartRateStage) local.heartRateSyncError = e.message ?: local.message
+            // A failure before the heart-rate stage also holds back a waiting heart-rate queue (#674).
+            if (heartRateStage || runCatching { local.heartRateCount() > 0 }.getOrDefault(false)) local.heartRateSyncError = e.message ?: local.message
             val rejected = if (heartRateStage) ShareEvent.Kind.HEART_RATE_PROBLEM else ShareEvent.Kind.UPLOAD_REJECTED
             // Activity log: status (0 = network) plus the server's `error` text only.
             val status = (e as? ApiFailure)?.status ?: if (e is IOException) 0 else null

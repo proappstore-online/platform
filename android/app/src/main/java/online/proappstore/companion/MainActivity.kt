@@ -61,6 +61,8 @@ data class CompanionState(
     val entries: List<NativeEntry> = emptyList(), val heartRateQueued: Int = 0, val heartRateLastUpload: Long = 0,
     val heartRateSyncError: String = "", val lastHeartRateByApp: Map<String, HeartRatePoint> = emptyMap(),
     val heartRateSensor: Boolean = false, val heartRateConnected: Boolean = false, val heartRateBpm: Int? = null,
+    /** When [heartRateBpm] was read. A strap off the chest yields no accepted reading, so an old bpm is not shown as live (#674). */
+    val heartRateReadingAt: Long = 0,
     /** `on`, `off` or `unauthorized` (Bluetooth.state). */
     val bluetooth: String = "on",
 )
@@ -194,7 +196,7 @@ class MainActivity : ComponentActivity() {
     private fun startScan() {
         if (scanning || !choosing || !Bluetooth.canScan(this)) return
         val scanner = getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner ?: run { error = "Turn on Bluetooth to find your sensor."; return }
-        scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid.fromString(HeartRate.SERVICE)).build()),
+        scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(HeartRate.SERVICE)).build()),
             ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCallback)
         scanning = true
     }
@@ -265,6 +267,7 @@ class MainActivity : ComponentActivity() {
             heartRateSyncError = local.heartRateSyncError,
             lastHeartRateByApp = local.entries().filter { it.capability == HeartRate.CAPABILITY }.mapNotNull { e -> local.lastHeartRate(e.appId)?.let { e.appId to it } }.toMap(),
             heartRateSensor = local.heartRateSensor != null, heartRateConnected = LocationService.heartRateConnected, heartRateBpm = LocationService.lastBpm,
+            heartRateReadingAt = LocationService.lastReadingAt,
             bluetooth = Bluetooth.state(this))
     }
     private fun act(action: suspend () -> Unit) {
