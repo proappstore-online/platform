@@ -1,8 +1,9 @@
 -- Refs proappstore-online/platform#670: the Rideshare app's platform ID moves from
 -- `loopride` to `rideshare` (repo proappstore-online/loopride -> /rideshare).
 -- Child tables reference apps(id) without ON UPDATE CASCADE, so FK checks are
--- deferred to commit. Order matters for the 0136 canonical-alias triggers (below). History/usage rows move too,
--- so the app keeps one identity. Production had no app_user_secrets (whose AAD
+-- deferred to commit. Order matters for the 0136 canonical-alias triggers (below).
+-- History/usage rows move too, so the app keeps one identity, except the
+-- append-only audit/event tables (no FK to apps), which keep `loopride`. Production had no app_user_secrets (whose AAD
 -- binds the app ID) and no `rideshare` rows when this was written.
 PRAGMA defer_foreign_keys = ON;
 
@@ -13,7 +14,6 @@ UPDATE app_custom_domains SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE apps SET id = 'rideshare' WHERE id = 'loopride';
 UPDATE routes SET slug = 'rideshare', r2_prefix = 'apps/rideshare' WHERE slug = 'loopride';
 UPDATE app_custom_domains SET canonical = 1 WHERE app_id = 'rideshare' AND domain = 'rideshare.proappstore.online';
-UPDATE account_audit_events SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE agent_projects SET slug = 'rideshare' WHERE slug = 'loopride';
 UPDATE app_access_grants SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_action_audit SET app_id = 'rideshare' WHERE app_id = 'loopride';
@@ -46,12 +46,10 @@ UPDATE app_marketing_sites SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_metric_buckets SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_operator_gate SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_operator_view SET app_id = 'rideshare' WHERE app_id = 'loopride';
-UPDATE app_ownership_audit SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_ownership_transfers SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_page_meta SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_pags_bindings SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_permissions SET app_id = 'rideshare' WHERE app_id = 'loopride';
-UPDATE app_promoter_events SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_promoter_settings SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_promoters SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_proxy_allowlist SET app_id = 'rideshare' WHERE app_id = 'loopride';
@@ -59,7 +57,6 @@ UPDATE app_proxy_usage SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_proxy_usage_user SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_purchases SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_referral_attributions SET app_id = 'rideshare' WHERE app_id = 'loopride';
-UPDATE app_referral_events SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_referral_readiness SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_reliability_objectives SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE app_roles SET app_id = 'rideshare' WHERE app_id = 'loopride';
@@ -113,7 +110,6 @@ UPDATE oidc_session_grants SET repository = 'proappstore-online/rideshare' WHERE
 UPDATE oidc_session_mints SET repository = 'proappstore-online/rideshare' WHERE repository = 'proappstore-online/loopride';
 UPDATE per_app_deleted_users SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE project_commits SET app_id = 'rideshare' WHERE app_id = 'loopride';
-UPDATE project_contribution_events SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE project_contribution_sync SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE project_repositories SET app_id = 'rideshare' WHERE app_id = 'loopride';
 UPDATE project_repositories SET full_name = 'proappstore-online/rideshare' WHERE full_name = 'proappstore-online/loopride';

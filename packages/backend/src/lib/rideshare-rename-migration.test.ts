@@ -60,16 +60,28 @@ describe('loopride -> rideshare app-ID rename (#670)', () => {
     }
   });
 
-  it('covers every table column that holds an app ID or repository', () => {
+  it('covers every app ID / repository column except append-only tables, which keep their history', () => {
     const db = schema();
     try {
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%\\_new' ESCAPE '\\'").all() as { name: string }[];
+      // A BEFORE UPDATE trigger that always aborts makes the table append-only; production refused 0150's first
+      // version on one of these, and none of them references apps(id).
+      const appendOnly = new Set((db.prepare("SELECT tbl_name FROM sqlite_master WHERE type = 'trigger' AND sql LIKE '%BEFORE UPDATE ON%' AND sql NOT LIKE '%WHEN%' AND sql LIKE '%RAISE(ABORT%'").all() as { tbl_name: string }[]).map((t) => t.tbl_name));
       const missing: string[] = [];
+      const blocked: string[] = [];
       for (const { name } of tables) {
         const columns = (db.prepare(`PRAGMA table_info("${name}")`).all() as { name: string }[]).map((c) => c.name)
           .filter((c) => /^(app_id|project_slug|credential_app_id|repository|full_name)$/.test(c) || (c === 'slug' && ['routes', 'agent_projects'].includes(name)));
-        for (const column of columns) if (!rename.includes(`UPDATE ${name} SET ${column} = `)) missing.push(`${name}.${column}`);
+        for (const column of columns) {
+          const updated = rename.includes(`UPDATE ${name} SET ${column} = `);
+          if (appendOnly.has(name)) {
+            if (updated) blocked.push(`${name}.${column}`);
+            expect(db.prepare(`PRAGMA foreign_key_list("${name}")`).all()).toEqual([]);
+          } else if (!updated) missing.push(`${name}.${column}`);
+        }
       }
+      expect(appendOnly.has('project_contribution_events')).toBe(true);
+      expect(blocked).toEqual([]);
       expect(missing).toEqual([]);
     } finally {
       db.close();
