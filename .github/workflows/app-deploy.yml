@@ -111,6 +111,9 @@ jobs:
           echo "e2e_dir=$DIR" >> "$GITHUB_OUTPUT"
           echo "has_e2e=$([ -n "$DIR" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@v4
+        with:
+          # Per-runner, not the default ~/setup-pnpm: runners on one machine share $HOME and delete each other's install (#615).
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
@@ -607,6 +610,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          # Per-runner, not the default ~/setup-pnpm: runners on one machine share $HOME and delete each other's install (#615).
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}

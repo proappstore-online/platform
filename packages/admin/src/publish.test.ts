@@ -643,6 +643,14 @@ describe("provisioning hygiene (#195)", () => {
     expect(yaml).not.toMatch(/startsWith\(github\.event\.repository\.name|contains\(github\.event\.repository\.name/);
   });
 
+  it("installs pnpm per runner, never into the shared default ~/setup-pnpm (#615)", () => {
+    // Several self-hosted runners on one Mac share $HOME; with the default dest, concurrent jobs
+    // deleted each other's pnpm install (ENOTEMPTY in pnpm/action-setup, run 45095346758).
+    const steps = pipeline().split("\n      - ").filter((s) => s.startsWith("uses: pnpm/action-setup@"));
+    expect(steps.length).toBeGreaterThan(0);
+    for (const step of steps) expect(step).toContain("dest: ${{ runner.temp }}/setup-pnpm");
+  });
+
   it("URL-encodes each KB upload path segment, keeping / as the separator", () => {
     const kb = buildAgentBundle({}, ENV)[KB_YAML]!;
     expect(kb).toContain(`jq -sRr 'split("/") | map(@uri) | join("/")'`);
