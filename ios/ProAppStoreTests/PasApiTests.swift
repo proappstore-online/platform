@@ -419,6 +419,36 @@ final class PasApiTests: XCTestCase {
         XCTAssertEqual(try logged([.uploadRejected, .heartRateProblem]), ["heart_rate_problem:400"])
     }
 
+    /// #682: the location quota (429) does not starve heart rate, which has its own; each stage keeps its own error.
+    func testHeartRateUploadsWhenPointsHitTheirQuota() async throws {
+        let repository = try await connectedWithHeartRate(heartRate: .init(json: ["acknowledged": ["h"]]))
+        let handler = StubProtocol.handler
+        StubProtocol.handler = { request in
+            request.url!.path == "/v1/native/locations" ? .init(status: 429, json: ["error": "Upload limit reached. Retry later."]) : handler(request)
+        }
+        do { try await repository.sync(); XCTFail("the points failure is still thrown") } catch let failure as ApiFailure { XCTAssertEqual(failure.status, 429) }
+        XCTAssertEqual(try local.heartRateCount(), 0)
+        XCTAssertEqual(local.heartRateSyncError, "")
+        XCTAssertEqual(try local.count(), 2)
+        XCTAssertEqual(local.lastSyncError, "Upload limit reached. Retry later.")
+        XCTAssertEqual(try logged([.syncFailed, .quota, .uploadRejected, .heartRateProblem]), ["sync_failed:429 Upload limit reached. Retry later.", "quota:429"])
+    }
+
+    /// #682: one sync per 15 s across both collectors, from the persisted attempt time.
+    func testTheCollectorsSyncAtMostEveryFifteenSeconds() async throws {
+        XCTAssertTrue(CompanionRepository.syncDue(lastAttempt: 0, now: 1_000_000))
+        XCTAssertFalse(CompanionRepository.syncDue(lastAttempt: 1_000_000, now: 1_014_999))
+        XCTAssertTrue(CompanionRepository.syncDue(lastAttempt: 1_000_000, now: 1_015_000))
+        let repository = try await connected()
+        respond(locations: .init(json: ["acknowledged": ["a", "b"]]))
+        let attempt = CompanionRepository.now() - 5_000
+        local.lastSyncAttempt = attempt
+        repository.syncIfDue()
+        XCTAssertEqual(local.lastSyncAttempt, attempt, "not due: nothing starts")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(StubProtocol.seen.count, 0)
+    }
+
     func testEnablingHeartRateUsesItsCapabilityPathAndDisablingRevokesOnlyIt() async throws {
         let repository = try await connectedWithHeartRate(heartRate: .init(json: ["acknowledged": ["h"]]))
         let entry = try XCTUnwrap(local.entries().first)

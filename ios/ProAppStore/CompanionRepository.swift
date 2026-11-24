@@ -132,61 +132,91 @@ actor CompanionRepository {
         }
     }
 
+    /// Two stages, location then heart rate, each with its own outcome (#682). Heart rate has its own upload quota
+    /// (#631), so a location failure, such as a 429 while draining a backlog, never holds it back. The first failure is
+    /// rethrown after both stages, so callers see a failed sync as before. A 401 ends the sync at once: the connection
+    /// expired, and the expired card says so, not a sync failure (#652).
     func sync() async throws {
         try await exclusive { [self] in
             guard let credential = token() else { return }
-            var uploading = false, partial = false, heartRateStage = false
+            var points: Error?, heartRate: Error?, uploading = false
             do {
                 let blocked = local.blocked()
                 for key in blocked { _ = try await device("DELETE", Self.grantPath(key), credential) }
                 try updateMe(try await device("GET", "/native/me", credential))
                 for id in blocked { try local.unblock(id) }
                 try local.expire(now: Self.now())
-                for _ in 0..<10 {
-                    let batch = try local.pending()
-                    if batch.isEmpty { break }
-                    uploading = true
-                    let result = try await device("POST", "/native/locations", credential, body: try JSONEncoder().encode(["points": batch]))
-                    let ids = result["acknowledged"] as? [String] ?? []
-                    guard Set(ids) == Set(batch.map(\.id)) else {
-                        partial = true
-                        throw CompanionError("Upload was not fully acknowledged. Device copy retained.")
-                    }
-                    try local.acknowledge(ids)
-                }
-                // Heart rate after points (#631), under its own quota and the same exact-acknowledgement rule.
-                heartRateStage = true
-                for _ in 0..<10 {
-                    let batch = try local.pendingHeartRate()
-                    if batch.isEmpty { break }
-                    uploading = true
-                    let result = try await device("POST", "/native/heart-rate", credential, body: try JSONEncoder().encode(["samples": batch]))
-                    let ids = result["acknowledged"] as? [String] ?? []
-                    guard Set(ids) == Set(batch.map(\.id)) else {
-                        partial = true
-                        throw CompanionError("Upload was not fully acknowledged. Device copy retained.")
-                    }
-                    try local.acknowledgeHeartRate(ids)
-                }
-                local.heartRateSyncError = ""
-                local.lastSync = Self.now(); local.lastSyncAttempt = local.lastSync; local.message = ""; local.lastSyncError = ""
-                try? local.syncSucceeded()
+                uploading = true
+                try await upload("/native/locations", field: "points", credential,
+                                 batch: { try local.pending() }, ids: \.id, acknowledge: { try local.acknowledge($0) })
+                local.lastSync = Self.now(); local.lastSyncError = ""
             } catch {
-                if (error as? ApiFailure)?.status == 401 { throw error } // expired: the expired card says so, not a sync failure
-                local.message = (error as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
-                local.lastSyncAttempt = Self.now(); local.lastSyncError = error.localizedDescription
-                if heartRateStage { local.heartRateSyncError = error.localizedDescription }
-                let rejected: ShareEvent.Kind = heartRateStage ? .heartRateProblem : .uploadRejected
-                // Activity log: status (0 = network) plus the server's `error` text only.
-                let status = (error as? ApiFailure)?.status ?? (error is URLError ? 0 : nil)
-                if (try? local.syncFailed(status.map { "\($0) \(error.localizedDescription)" } ?? error.localizedDescription)) == true {
-                    if status == 429 { try? local.record(.quota, detail: "429") }
-                    if uploading, let status, status == 400 || status == 413 { try? local.record(rejected, detail: "\(status)") }
-                    if partial { try? local.record(rejected, detail: "partial_ack") }
-                }
-                throw error
+                if Self.status(error) == 401 { throw error }
+                points = error; local.lastSyncError = error.localizedDescription
             }
+            do {
+                try await upload("/native/heart-rate", field: "samples", credential,
+                                 batch: { try local.pendingHeartRate() }, ids: \.id, acknowledge: { try local.acknowledgeHeartRate($0) })
+                local.heartRateSyncError = ""
+            } catch {
+                if Self.status(error) == 401 { throw error }
+                heartRate = error; local.heartRateSyncError = error.localizedDescription
+            }
+
+            // After both stages.
+            guard let failure = points ?? heartRate else {
+                local.lastSyncAttempt = local.lastSync; local.message = ""
+                try? local.syncSucceeded()
+                return
+            }
+            local.lastSyncAttempt = Self.now()
+            local.message = (failure as? ApiFailure)?.message ?? "Waiting to sync. Location stays on this phone."
+            // Activity log, once per run of identical failures: status (0 = network) plus the server's `error` text only.
+            let status = Self.status(failure)
+            if (try? local.syncFailed(status.map { "\($0) \(failure.localizedDescription)" } ?? failure.localizedDescription)) == true {
+                if [points, heartRate].contains(where: { $0.flatMap(Self.status) == 429 }) { try? local.record(.quota, detail: "429") }
+                // `uploading`: past /native/me, so a 400 or 413 was the upload's. The heart-rate stage is only its upload.
+                for (error, rejected, sent) in [(points, ShareEvent.Kind.uploadRejected, uploading), (heartRate, .heartRateProblem, true)] {
+                    guard let error else { continue }
+                    if sent, let status = Self.status(error), status == 400 || status == 413 { try? local.record(rejected, detail: "\(status)") }
+                    if (error as? CompanionError)?.message == Self.notAcknowledged { try? local.record(rejected, detail: "partial_ack") }
+                }
+            }
+            throw failure
         }
+    }
+
+    private static let notAcknowledged = "Upload was not fully acknowledged. Device copy retained."
+
+    /// Uploads `batch()` to `path` as `{field: batch}`, up to 10 batches. Every id sent must come back in `acknowledged`,
+    /// exactly (ADR-015): anything else keeps the whole batch on the phone and throws.
+    private func upload<T: Encodable>(_ path: String, field: String, _ credential: String, batch: () throws -> [T],
+                                      ids: (T) -> String, acknowledge: ([String]) throws -> Void) async throws {
+        for _ in 0..<10 {
+            let items = try batch()
+            if items.isEmpty { return }
+            let result = try await device("POST", path, credential, body: try JSONEncoder().encode([field: items]))
+            let acknowledged = result["acknowledged"] as? [String] ?? []
+            guard Set(acknowledged) == Set(items.map(ids)) else { throw CompanionError(Self.notAcknowledged) }
+            try acknowledge(acknowledged)
+        }
+    }
+
+    /// A failure's HTTP status, 0 for a network error, nil for anything on the phone.
+    private static func status(_ error: Error) -> Int? { (error as? ApiFailure)?.status ?? (error is URLError ? 0 : nil) }
+
+    static let SYNC_INTERVAL_MS: Int64 = 15_000
+
+    /// Whether the collectors' periodic sync is due (#682): one every 15 s across both, from the persisted attempt time.
+    static func syncDue(lastAttempt: Int64, now: Int64) -> Bool { now - lastAttempt >= SYNC_INTERVAL_MS }
+
+    /// The collectors' upload after a new reading or fix. The attempt is stamped before the sync starts, so readings
+    /// that arrive while it runs (an offline request can take a minute) do not queue more syncs.
+    nonisolated func syncIfDue() {
+        let now = Self.now()
+        guard Self.syncDue(lastAttempt: local.lastSyncAttempt, now: now) else { return }
+        local.lastSyncAttempt = now
+        Task { try? await sync() }
     }
 
     /// Reconnecting before the connection expires (#652): uploads what it can, then takes the same path as an

@@ -18,7 +18,6 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     private let repository: CompanionRepository
     private var local: LocalStore { repository.local }
     private var lastAcceptedAt: Int64 = 0
-    private var lastSyncAttempt = Date.distantPast
     private var emitter = EmitFilter()
     /// CoreLocation's motion state while collecting (#639): stationary turns GPS off and holds back jitter.
     private var stationary = false
@@ -94,7 +93,6 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
     }
 
     func flush() {
-        lastSyncAttempt = Date()
         Task { try? await repository.sync() }
     }
 
@@ -156,7 +154,7 @@ final class LocationCollector: NSObject, ObservableObject, CLLocationManagerDele
                 return
             }
         }
-        if Date().timeIntervalSince(lastSyncAttempt) >= 15 { flush() }
+        repository.syncIfDue()
     }
 
     nonisolated static func saveFailureMessage(_ error: Error) -> String {
