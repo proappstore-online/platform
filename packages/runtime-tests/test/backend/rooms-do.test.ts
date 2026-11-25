@@ -10,6 +10,17 @@ function nextClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => ws.addEventListener('close', (ev) => resolve({ code: (ev as CloseEvent).code, reason: (ev as CloseEvent).reason }), { once: true }));
 }
 
+/** Resolves on the first `peers` broadcast listing exactly `n` peers; earlier, larger lists are skipped. */
+function peersCount(ws: WebSocket, n: number): Promise<void> {
+  return new Promise((resolve) => {
+    const on = (ev: Event) => {
+      const msg = JSON.parse(String((ev as MessageEvent).data)) as { kind?: string; peers?: unknown[] };
+      if (msg.kind === 'peers' && msg.peers?.length === n) { ws.removeEventListener('message', on); resolve(); }
+    };
+    ws.addEventListener('message', on);
+  });
+}
+
 beforeEach(async () => { mockNetwork(); await resetTables(); });
 
 describe('Room Durable Object', () => {
@@ -60,9 +71,10 @@ describe('Room Durable Object', () => {
     const closed = nextClose(res.webSocket!);
     res.webSocket!.accept();
     expect(await closed).toEqual({ code: 4429, reason: 'room_full' });
-    // One leaves, the seat frees up.
+    // One leaves, the seat frees up: the room announces the 31 left once it has dropped the peer (#582).
+    const freed = peersCount(inside[1]!, 31);
     inside[0]!.close();
-    await new Promise((r) => setTimeout(r, 50));
+    await freed;
     const again = await stub.fetch('https://room/?uid=gh:33&login=late', { headers: { Upgrade: 'websocket' } });
     expect(again.status).toBe(101);
     again.webSocket!.accept();

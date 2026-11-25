@@ -59,12 +59,13 @@ function makeEnv(key: string | null) {
   return { env, vault };
 }
 
-async function waitFor(pred: () => boolean, describe: () => string, ms = 8000): Promise<void> {
-  const until = Date.now() + ms;
-  while (!pred()) {
-    if (Date.now() > until) throw new Error(`timed out waiting for the pipeline: ${describe()}`);
-    await new Promise((r) => setTimeout(r, 20));
-  }
+/**
+ * The pipeline advances through fire-and-forget `autoAdvance` calls, so there is no single promise to
+ * await: poll the ticket's status itself until it reaches `want` (#582). No fixed sleep decides the
+ * outcome; the timeout only bounds a pipeline that never gets there.
+ */
+function untilStatus(status: () => string, want: string, describe: () => string): Promise<void> {
+  return vi.waitFor(() => expect(status(), `the pipeline did not reach ${want}: ${describe()}`).toBe(want), { timeout: 8000 });
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -91,7 +92,7 @@ describe('autoAdvance → runtime adapters (#2)', () => {
 
     const status = () => (db.prepare('SELECT status FROM tickets WHERE id = ?').get(id) as { status: string }).status;
     const dump = () => `status=${status()} model calls=${model.mock.calls.length} trail=${JSON.stringify((db.prepare('SELECT type, detail FROM activity_log ORDER BY created_at, rowid').all() as { type: string; detail: string }[]).map((r) => `${r.type}: ${r.detail}`))}`;
-    await waitFor(() => status() === 'done', dump);
+    await untilStatus(status, 'done', dump);
 
     // Every stage ran an agent through the real adapter, against the mocked model, with the vault key.
     expect(model).toHaveBeenCalledTimes(3);
@@ -147,7 +148,7 @@ describe('autoAdvance → runtime adapters (#2)', () => {
     await doInstance.fetch(new Request('http://do/project/play', { method: 'POST', headers: H }));
     const { id } = (await (await doInstance.fetch(new Request('http://do/tickets', { method: 'POST', headers: H, body: JSON.stringify({ title: 'T', rawIdea: 'x' }) }))).json()) as { id: string };
     const status = () => (db.prepare('SELECT status FROM tickets WHERE id = ?').get(id) as { status: string }).status;
-    await waitFor(() => status() === 'needs-input', () => status());
+    await untilStatus(status, 'needs-input', status);
     expect(model).not.toHaveBeenCalled();
     const ask = broadcasts.find((b) => b.type === 'chat' && b.role === 'system');
     expect(String(ask?.body)).toContain('BA needs a anthropic API key');

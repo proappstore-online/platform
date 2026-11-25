@@ -126,9 +126,12 @@ describe('POST /v1/apps/:appId/actions/:name with a pas_at_ token', () => {
 
   it('a failed token call is logged with the token user id', async () => {
     const exec = manifest({ name: 'add_item', operation: 'execute', sql: 'INSERT INTO items (id, user_id) VALUES (:__uuid, :__user_id)' });
-    const res = await app.request('/v1/apps/leads/actions/add_item', call('add_item'), makeEnv(mockD1(mockStmt({ first: { manifest: exec } }), mockStmt({ first: tokenRow() }), usersRow())));
+    // The failure is logged off the response path, through waitUntil: await exactly that work (#582).
+    const pending: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => {} } as unknown as ExecutionContext;
+    const res = await app.request('/v1/apps/leads/actions/add_item', call('add_item'), makeEnv(mockD1(mockStmt({ first: { manifest: exec } }), mockStmt({ first: tokenRow() }), usersRow())), ctx);
     expect(res.status).toBe(403);
-    await new Promise((r) => setTimeout(r, 0));
+    await Promise.all(pending);
     expect(recordOperationFailure).toHaveBeenCalledTimes(1);
     expect((recordOperationFailure.mock.calls[0] as unknown[])[1]).toMatchObject({ appId: 'leads', userId: 'gh:7', status: 403 });
   });

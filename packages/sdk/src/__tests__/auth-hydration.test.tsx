@@ -18,8 +18,20 @@ import type { ProAppStore } from '../index.js';
 const USER = { id: 'gh:1', name: 'Ada', login: 'ada', avatarUrl: null };
 const SIGN_IN = 'Sign in to your ProAppStore account';
 
-/** `/.pas/auth/me` held until the test answers it (a fresh response per call); every other request succeeds quietly. */
+const realInit = Auth.prototype.init;
+
+/**
+ * `/.pas/auth/me` held until the test answers it (a fresh response per call); every other request succeeds quietly.
+ * Answering awaits the session checks it releases — every `init()` started since — inside `act`, so the
+ * state the check settles is rendered before the test reads it, with no macrotask flush (#582).
+ */
 function holdMe() {
+  const checks: Promise<void>[] = [];
+  vi.spyOn(Auth.prototype, 'init').mockImplementation(function (this: Auth) {
+    const check = realInit.call(this);
+    checks.push(check);
+    return check;
+  });
   let answer!: (outcome: 'in' | 'out' | 'down') => void;
   const settled = new Promise<'in' | 'out' | 'down'>((resolve) => { answer = resolve; });
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -29,7 +41,11 @@ function holdMe() {
     return outcome === 'in' ? Response.json(USER) : new Response('unauthorized', { status: 401 });
   });
   vi.stubGlobal('fetch', fetchMock);
-  const settle = (outcome: 'in' | 'out' | 'down') => act(async () => { answer(outcome); await settled; await new Promise((r) => setTimeout(r, 0)); });
+  const settle = (outcome: 'in' | 'out' | 'down') => act(async () => {
+    expect(checks.length, 'no session check is waiting on /.pas/auth/me').toBeGreaterThan(0);
+    answer(outcome);
+    await Promise.all(checks);
+  });
   return {
     fetchMock,
     signedIn: () => settle('in'),

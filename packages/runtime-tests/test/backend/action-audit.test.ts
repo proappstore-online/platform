@@ -1,5 +1,6 @@
-import { SELF, env, fetchMock } from 'cloudflare:test';
+import { SELF, createExecutionContext, env, fetchMock, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import worker from '../../../backend/src/index';
 import { BASE, json, seedApp, seedUser, session, mockNetwork, resetTables } from './helpers';
 
 // #232 (part of #228): every successful call of an action gated by
@@ -42,15 +43,6 @@ const call = async (name: string, token: string) => SELF.fetch(`${BASE}/v1/apps/
 const auditRows = async () =>
   (await env.DB.prepare('SELECT * FROM app_action_audit ORDER BY id').all<Record<string, unknown>>()).results ?? [];
 
-/** operation-log writes in the background (waitUntil); wait for its row. */
-async function eventually<T>(read: () => Promise<T | null>): Promise<T | null> {
-  for (let i = 0; i < 50; i++) {
-    const v = await read();
-    if (v) return v;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  return null;
-}
 
 describe('success audit of role-gated actions (#232)', () => {
   beforeEach(async () => {
@@ -98,13 +90,15 @@ describe('success audit of role-gated actions (#232)', () => {
     // #375: logged because gh:2 belongs to the app (a role, just not the one the action
     // needs). A caller with no relationship to the app is counted in Analytics Engine only.
     await grant('gh:2', 'viewer');
-    const res = await call('lookup_case', await session('gh:2'));
+    // The failure is logged in the background (waitUntil): run the worker in-process with an
+    // ExecutionContext and wait on exactly that work, instead of polling for the row (#582).
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(new Request(`${BASE}/v1/apps/ops/actions/lookup_case`, json('POST', { params: { case_id: 'c-secret-42' } }, await session('gh:2'))), env as never, ctx);
     expect(res.status).toBe(403);
     await res.text();
+    await waitOnExecutionContext(ctx);
 
-    const logged = await eventually(() =>
-      env.DB.prepare("SELECT user_id, category, level, data FROM app_logs WHERE app_id = 'ops' AND source = 'server'").first<{ user_id: string; category: string; level: string; data: string }>(),
-    );
+    const logged = await env.DB.prepare("SELECT user_id, category, level, data FROM app_logs WHERE app_id = 'ops' AND source = 'server'").first<{ user_id: string; category: string; level: string; data: string }>();
     expect(logged).toMatchObject({ user_id: 'gh:2', category: 'action', level: 'warn' });
     expect(JSON.parse(logged!.data)).toMatchObject({ operation: 'lookup_case', status: 403 });
     expect(await auditRows()).toHaveLength(0);

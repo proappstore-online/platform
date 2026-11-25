@@ -526,10 +526,10 @@ describe('POST /v1/auth/credentials/provision', () => {
 
 describe('POST /v1/auth/credentials/register (#118)', () => {
   const env = (db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}) => ({ DB: db, SESSION_SIGNING_KEY: KEY, ...over }) as never;
-  const register = (body: unknown, db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}, ip = '203.0.113.7') =>
+  const register = (body: unknown, db: ReturnType<typeof fakeDb>, over: Record<string, unknown> = {}, ip = '203.0.113.7', ctx?: ExecutionContext) =>
     app.request('/v1/auth/credentials/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify(body),
-    }, env(db, over));
+    }, env(db, over), ctx);
   const login = (body: unknown, db: ReturnType<typeof fakeDb>) =>
     app.request('/v1/auth/credentials/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, env(db));
   const GOOD = { email: 'Alice@Example.com', password: 'correct-horse-battery-staple', displayName: 'Alice' };
@@ -567,11 +567,14 @@ describe('POST /v1/auth/credentials/register (#118)', () => {
       throw new Error(`unexpected fetch ${String(input)}`);
     }));
     try {
-      const res = await register({ ...GOOD, password: 'another-long-passphrase' }, db, { RESEND_API_KEY: 're_test', EMAIL_FROM: 'ProAppStore <noreply@proappstore.online>' });
+      // The notice is sent off the response path, through waitUntil: await exactly that work (#582).
+      const pending: Promise<unknown>[] = [];
+      const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => {} } as unknown as ExecutionContext;
+      const res = await register({ ...GOOD, password: 'another-long-passphrase' }, db, { RESEND_API_KEY: 're_test', EMAIL_FROM: 'ProAppStore <noreply@proappstore.online>' }, undefined, ctx);
       expect(res.status).toBe(202);
       expect(await res.json()).toEqual({ ok: true });
       expect(db._users).toHaveLength(1);
-      await new Promise((r) => setTimeout(r, 0));
+      await Promise.all(pending);
       expect(sends).toHaveLength(1);
       expect(sends[0]).toMatchObject({ to: 'alice@example.com', subject: expect.stringMatching(/tried to register/) });
       expect(JSON.stringify(sends[0])).not.toContain('another-long-passphrase');

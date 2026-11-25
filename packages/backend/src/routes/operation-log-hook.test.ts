@@ -14,17 +14,17 @@ import { resetBurstState } from '../lib/log-quota.js';
 const TOK = await testToken('gh:7');
 
 /**
- * Operation logging is deliberately OFF the response path — `waitUntil` in a real
- * Worker, a floating promise when Hono is dispatched without an ExecutionContext
- * (as `app.request` does). So a test must let it settle before asserting; a
- * response alone proves nothing either way.
- *
- * Positive assertions poll via `vi.waitFor` rather than sleeping a fixed interval:
- * a fixed sleep passed in isolation and failed under full-suite load, which is a
- * flaky test rather than a real signal. Negative assertions have nothing to poll
- * for, so they wait a bounded interval and then assert absence.
+ * Operation logging is deliberately OFF the response path: it goes to `waitUntil`.
+ * A response alone proves nothing either way, so every request here runs with an
+ * ExecutionContext that captures those promises, and `settle` awaits exactly them
+ * before asserting. No fixed sleep: a negative assertion is checked after the
+ * background work has finished, not after an interval that may be too short (#582).
  */
-const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
+function context() {
+  const pending: Promise<unknown>[] = [];
+  const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException: () => {} } as unknown as ExecutionContext;
+  return { ctx, settle: () => Promise.allSettled(pending) };
+}
 
 /** A D1 mock that answers by SQL shape and records every app_logs insert. */
 function recordingDb() {
@@ -47,7 +47,7 @@ function recordingDb() {
   return { prepare, batch: vi.fn().mockResolvedValue([]), inserts };
 }
 
-function callAction(token: string | null, db: ReturnType<typeof recordingDb>) {
+function callAction(token: string | null, db: ReturnType<typeof recordingDb>, ctx: ExecutionContext) {
   return app.request(
     '/v1/apps/chess-academy/actions/provision_student',
     {
@@ -59,6 +59,7 @@ function callAction(token: string | null, db: ReturnType<typeof recordingDb>) {
       body: JSON.stringify({ params: {} }),
     },
     sharedMakeEnv({}, db as never),
+    ctx,
   );
 }
 
@@ -66,9 +67,11 @@ describe('failed app operations are logged server-side', () => {
   it('writes an app_logs row naming the action and status for a signed-in caller', async () => {
     resetBurstState();
     const db = recordingDb();
-    const res = await callAction(TOK, db);
+    const { ctx, settle } = context();
+    const res = await callAction(TOK, db, ctx);
     expect(res.status).toBeGreaterThanOrEqual(400);
-    await vi.waitFor(() => expect(db.inserts).toHaveLength(1));
+    await settle();
+    expect(db.inserts).toHaveLength(1);
 
     const row = db.inserts[0];
     expect(row[0]).toBe('chess-academy');
@@ -83,7 +86,8 @@ describe('failed app operations are logged server-side', () => {
   it('does not write a row for an anonymous caller', async () => {
     resetBurstState();
     const db = recordingDb();
-    const res = await callAction(null, db);
+    const { ctx, settle } = context();
+    const res = await callAction(null, db, ctx);
     expect(res.status).toBeGreaterThanOrEqual(400);
     await settle();
     expect(db.inserts).toHaveLength(0);
@@ -92,6 +96,7 @@ describe('failed app operations are logged server-side', () => {
   it('does not log a failed log upload, which would be circular', async () => {
     resetBurstState();
     const db = recordingDb();
+    const { ctx, settle } = context();
     const res = await app.request(
       '/v1/apps/chess-academy/logs',
       {
@@ -100,6 +105,7 @@ describe('failed app operations are logged server-side', () => {
         body: JSON.stringify({ notEntries: true }),
       },
       sharedMakeEnv({}, db as never),
+      ctx,
     );
     expect(res.status).toBe(400);
     await settle();
@@ -109,7 +115,8 @@ describe('failed app operations are logged server-side', () => {
   it('leaves successful requests alone', async () => {
     resetBurstState();
     const db = recordingDb();
-    const res = await app.request('/health', {}, sharedMakeEnv({}, db as never));
+    const { ctx, settle } = context();
+    const res = await app.request('/health', {}, sharedMakeEnv({}, db as never), ctx);
     expect(res.status).toBe(200);
     await settle();
     expect(db.inserts).toHaveLength(0);
