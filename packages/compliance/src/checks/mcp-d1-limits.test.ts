@@ -14,10 +14,10 @@ describe('checkMcpD1Limits (#571)', () => {
       .toMatchObject({ status: 'pass', detail: '2 action(s) within 100 parameters and 5 compound terms per statement' });
   });
 
-  it('warns, never fails, naming each action over a limit', async () => {
+  it('fails, naming each action over a limit (#572)', async () => {
     const binds101 = `SELECT ${Array.from({ length: 101 }, (_, i) => `:a${i}`).join(', ')}`;
     const result = await run({ tools: [{ name: 'report', sql: union(6) }, { name: 'save', statements: ['SELECT 1', binds101] }, 'junk'] });
-    expect(result.status).toBe('warn');
+    expect(result.status).toBe('fail');
     expect(result.detail).toMatch(/action "report" sql has a compound SELECT of 6 terms.*; action "save" statements\[1\] binds 101 parameters/);
     expect(result.suggestions?.join(' ')).toMatch(/Miniflare/);
   });
@@ -25,7 +25,7 @@ describe('checkMcpD1Limits (#571)', () => {
   it('runs in pas check, citing PAS-DATA-023', async () => {
     const results = await runChecksFromFiles(new Map([['mcp.json', JSON.stringify({ tools: [{ name: 'report', sql: union(6) }] })]]));
     const result = results.find((r) => r.checkId === 'mcp-d1-limits');
-    expect(result).toMatchObject({ status: 'warn' });
+    expect(result).toMatchObject({ status: 'fail' });
     expect(result?.citations?.map((c) => c.clauseId)).toEqual(['PAS-DATA-023']);
   });
 });

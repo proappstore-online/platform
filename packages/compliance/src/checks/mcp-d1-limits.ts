@@ -9,10 +9,9 @@ const NAME = 'Actions fit D1 limits';
  * and has at most 5 terms in any one compound SELECT, the limits D1 enforces and
  * local SQLite does not.
  *
- * The platform's registration gate refuses a new or changed action over a limit
- * and only warns for one registered unchanged, which already fails on every call.
- * This check has no registry, so it warns: a failure here would break the
- * `prebuild` of an app whose broken action is still registered.
+ * The platform's registration gate refuses any action over a limit, so this fails
+ * too (#572): the deploy would. It used to warn while 28 registered actions were
+ * still over a limit; none was on 2026-11-25.
  */
 export async function checkMcpD1Limits(source: FileSource): Promise<CheckResult> {
   const raw = await source.read('mcp.json');
@@ -31,8 +30,8 @@ export async function checkMcpD1Limits(source: FileSource): Promise<CheckResult>
   }
   return {
     name: NAME,
-    status: 'warn',
-    detail: `${errors.join('; ')}. Registration refuses a new or changed action like this; D1 refuses every call to one already registered`,
+    status: 'fail',
+    detail: `${errors.join('; ')}. Registration refuses an action like this, and D1 refuses every call to it`,
     suggestions: [
       'Use at most 100 distinct parameters per statement (a repeated :name counts once), or split the statement.',
       `Nest a long UNION in parenthesised groups of at most ${D1_MAX_COMPOUND_TERMS} terms.`,

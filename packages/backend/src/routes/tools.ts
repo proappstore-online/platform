@@ -118,21 +118,15 @@ function gateUnscoped(
 
 /**
  * #571: D1 refuses a statement that binds more than 100 parameters or has more than 5 terms in one compound
- * SELECT (`@proappstore/compliance` lib/d1-limits.ts). A new or changed action over either is refused. One
- * registered with the same statements already fails on every call, so it registers with a warning: this lands
- * without breaking the next deploy of an app that has one.
+ * SELECT (`@proappstore/compliance` lib/d1-limits.ts), so an action over either is refused. #572 dropped the
+ * registered-unchanged exemption once no registered action was over a limit (0 of 2,928 on 2026-11-25).
  */
-function gateD1Limits(tools: ToolManifest[], registered: Map<string, RegisteredTool>): { error: string } | { warnings: string[] } {
-  const statements = (tool: ToolManifest) => JSON.stringify(toolStatements(tool).map((st) => st.trim()));
-  const warnings: string[] = [];
+function gateD1Limits(tools: ToolManifest[]): string | null {
   for (const tool of tools) {
     const error = actionD1LimitError(tool);
-    if (!error) continue;
-    const before = registered.get(tool.name);
-    if (!before || statements(before.manifest) !== statements(tool)) return { error };
-    warnings.push(`${error}. It is registered unchanged, so it still registers, but D1 refuses every call to it: fix it before changing it`);
+    if (error) return error;
   }
-  return { warnings };
+  return null;
 }
 
 /**
@@ -256,8 +250,8 @@ export async function replaceAppTools(
   const registered = await readRegisteredTools(db, appId);
   const unscoped = gateUnscoped(appId, tools as ToolManifest[], site.approved_unscoped, registered);
   if ('error' in unscoped) return { status: 400, payload: { error: unscoped.error } };
-  const d1Limits = gateD1Limits(tools as ToolManifest[], registered);
-  if ('error' in d1Limits) return { status: 400, payload: { error: d1Limits.error } };
+  const d1Limit = gateD1Limits(tools as ToolManifest[]);
+  if (d1Limit) return { status: 400, payload: { error: d1Limit } };
   // Live by its worker, or by a recorded go-live (#429: migration 0109): a deploy that
   // cleared the app's tools must not make a live app's next actions staged.
   const appLive = await db.prepare(
@@ -407,7 +401,6 @@ export async function replaceAppTools(
     }
   }
   warnings.push(...unscoped.warnings);
-  warnings.push(...d1Limits.warnings);
   const staged = [...states].filter(([, st]) => st === 'staged').map(([name]) => name);
   if (staged.length) {
     warnings.push(`${staged.length} action(s) are staged: only the app's owner and team, its worker, hooks and the scheduler can call them until the app goes live (enable its worker, or POST /v1/apps/${appId}/tools/promote)`);

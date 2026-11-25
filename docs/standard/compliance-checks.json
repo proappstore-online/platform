@@ -437,7 +437,7 @@
       "automation": "partial",
       "evidenceClass": "configuration",
       "scope": "all",
-      "limits": "Warn-only (#571): counts bound :name occurrences (100 per statement) and compound SELECT terms per parenthesised chain (5) in mcp.json, the two D1 limits local SQLite does not enforce. Registration refuses a new or changed action over either; other D1-only differences need the statements run on Miniflare's D1.",
+      "limits": "Fails (#572): counts bound parameters as the executor binds them (100 distinct :names per statement, #575) and compound SELECT terms per parenthesised chain (5) in mcp.json, the two D1 limits local SQLite does not enforce. Registration refuses an action over either; other D1-only differences need the statements run on Miniflare's D1.",
       "live": false
     },
     {

@@ -876,7 +876,7 @@ web/src/**/*.test.ts: renders, formats dates — no test touches mcp.json
 
 ### PAS-DATA-023 — Registered statements fit D1's per-statement limits {#pas-data-023}
 
-**Severity:** High · **Verification:** Automated · **Enforcement:** automated — registration (`PUT /v1/apps/:id/tools`) refuses a new or changed action whose `sql` or any `statements[]` entry binds more than 100 parameters or has more than 5 terms in one compound SELECT, and warns for one registered unchanged; compliance check *Actions fit D1 limits* (`mcp-d1-limits`, warn-only) · **Since:** 1.13
+**Severity:** High · **Verification:** Automated · **Enforcement:** automated — registration (`PUT /v1/apps/:id/tools`) refuses an action whose `sql` or any `statements[]` entry binds more than 100 parameters or has more than 5 terms in one compound SELECT; compliance check *Actions fit D1 limits* (`mcp-d1-limits`) fails · **Since:** 1.13
 
 **Rule.** Every statement of a registered action MUST bind at most **100** parameters, counting each distinct `:name` once (the executor binds every name to one numbered `?N` and reuses it, magic params such as `:__user_id` included), and each `:__uuid` occurrence separately, and MUST have at most **5** terms in any one compound SELECT (`UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`). The app SHOULD run its registered statements against Miniflare's D1 in its tests.
 
@@ -901,9 +901,9 @@ SELECT 'a', … UNION ALL SELECT 'b', … UNION ALL SELECT 'c', … UNION ALL SE
 -- 6 terms in one chain: D1 answers "too many terms in compound SELECT" on every call
 ```
 
-**Evidence.** Configuration: each statement in `mcp.json`; the `mcp-d1-limits` result of `pas check`; registration warnings in the deploy log.
+**Evidence.** Configuration: each statement in `mcp.json`; the `mcp-d1-limits` result of `pas check`; registration errors in the deploy log.
 
-**Remediation.** Rewrite the statement with fewer distinct parameters or nested unions; add a Miniflare D1 test that runs it; deploy and confirm the registration warning is gone.
+**Remediation.** Rewrite the statement with fewer distinct parameters or nested unions; add a Miniflare D1 test that runs it; deploy and confirm registration accepts it.
 
 **Tests.** The app's Miniflare D1 test runs every registered statement without a D1 error; `pas check` reports *Actions fit D1 limits* as passed.
 

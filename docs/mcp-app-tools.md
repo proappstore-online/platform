@@ -337,12 +337,10 @@ Registration checks both for each `sql` and `statements[]` entry (#571,
 Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live
 D1 refused 10 terms and ran 4.
 
-- A **new or changed** action over either limit is refused, naming the action,
-  the statement, the count and the limit.
-- An action **already registered with the same statements** still registers, with
-  a warning: D1 already refuses every call to it. Fix it on your next change.
-- `pas check` runs the same count as the `mcp-d1-limits` check (warn-only, since
-  it cannot see what is registered).
+- An action over either limit is refused, naming the action, the statement, the
+  count and the limit. Since #572 that includes one already registered with the
+  same statements; none was over a limit when the exemption was removed.
+- `pas check` runs the same count as the `mcp-d1-limits` check, and fails.
 
 To stay within them, use fewer distinct parameters (or split the statement), and
 nest a long union in groups of at most 5:

@@ -2167,16 +2167,12 @@ describe('D1 per-statement limits (#571)', () => {
     expect(body.error).toMatch(/^action "save" statements\[1\] binds 101 parameters; D1 allows at most 100 per statement/);
   });
 
-  it('registers an action already registered with the same statements, with a warning', async () => {
+  // #572: no registered action was over a limit, so an unchanged one is no longer let through with a warning.
+  it('refuses an action over a limit even when it is registered with the same statements', async () => {
     const { res, body, inserted } = await put([{ ...report(6), description: 'Totals, reworded' }], [report(6)]);
-    expect(res.status).toBe(200);
-    expect(inserted).toBe(true);
-    expect(body.warnings).toContainEqual(expect.stringMatching(/^action "report" sql has a compound SELECT of 6 terms.*registered unchanged.*D1 refuses every call to it/));
-  });
-
-  it('refuses a registered action over the limit once its statements change', async () => {
-    const { res } = await put([report(7)], [report(6)]);
     expect(res.status).toBe(400);
+    expect(body.error).toMatch(/^action "report" sql has a compound SELECT of 6 terms/);
+    expect(inserted).toBe(false);
   });
 });
 
