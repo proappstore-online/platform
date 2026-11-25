@@ -97,7 +97,7 @@ interface ToolsResponse {
 // Cache one app's tools for 60 seconds, keyed per app so one connection cannot
 // widen another. There is no global cache and no global fetch any more (#157):
 // the cross-app `GET /v1/tools` is retired (#193).
-const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
+const cachedTools = new Map<string, { tools: AppTool[]; time: number; fetched: number; etag: string | null }>();
 /**
  * How long one isolate reuses an app's signed-out tool list. Short because it is
  * also the bound on how long a public → private flip (#259) can keep listing the
@@ -105,6 +105,14 @@ const cachedTools = new Map<string, { tools: AppTool[]; time: number }>();
  * call is re-checked in the backend). See index.ts PUBLIC_APP_TTL_MS.
  */
 export const TOOL_CACHE_TTL_MS = 10_000;
+
+/**
+ * #609: once the TTL lapses the list is revalidated with the backend's ETag (a 1-row
+ * read; the visibility check still runs) rather than re-read in full. This caps how
+ * long one fetched copy may be revalidated, so a change the stamp does not track (a
+ * backend deploy that changes the public view) still reaches every isolate.
+ */
+export const TOOL_LIST_MAX_AGE_MS = 10 * 60_000;
 
 /**
  * One app's registered tools, from `GET /v1/apps/:appId/tools` (public view — never SQL).
@@ -121,12 +129,17 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId: string, t
   if (cached && now - cached.time < TOOL_CACHE_TTL_MS) return cached.tools;
 
   const url = `${apiBase}/v1/apps/${encodeURIComponent(appId)}/tools`;
+  const revalidate = cached?.etag && now - cached.fetched < TOOL_LIST_MAX_AGE_MS ? cached.etag : null;
   let res: Response;
   try {
-    res = await api.fetch(url);
+    res = revalidate ? await api.fetch(url, { headers: { 'If-None-Match': revalidate } }) : await api.fetch(url);
   } catch (err) {
     console.error(`Failed to fetch tools (network):`, err);
     return cached?.tools ?? [];
+  }
+  if (res.status === 304 && cached) {
+    cached.time = now;
+    return cached.tools;
   }
   if (res.status === 401 || res.status === 403) {
     cachedTools.delete(cacheKey);
@@ -146,7 +159,7 @@ export async function fetchTools(api: Fetcher, apiBase: string, appId: string, t
   }
 
   const tools = toolsFrom((await res.json()) as ToolsResponse, appId);
-  cachedTools.set(cacheKey, { tools, time: now });
+  cachedTools.set(cacheKey, { tools, time: now, fetched: now, etag: res.headers.get('ETag') });
   return tools;
 }
 

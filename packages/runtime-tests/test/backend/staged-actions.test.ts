@@ -126,6 +126,33 @@ describe('staged actions (#428)', () => {
     expect(await all.json()).toMatchObject({ promoted: ['add_note'], staged_remaining: 0 });
   });
 
+  // #609: on real D1, migration 0153's triggers change the app's stamp on every app_tools write,
+  // and the signed-out list answers a matching If-None-Match with 304 (what the MCP revalidates with).
+  it('the signed-out list carries an ETag that a promote, a registration and a delete each change (#609)', async () => {
+    const anon = (headers: Record<string, string> = {}) => SELF.fetch(`${BASE}/v1/apps/club/tools`, { headers });
+    const etagAfter = async (write: () => Promise<unknown>, previous: string) => {
+      await write();
+      const res = await anon({ 'If-None-Match': previous });
+      expect(res.status).toBe(200);
+      await res.body?.cancel();
+      const next = res.headers.get('ETag')!;
+      expect(next).toMatch(/^"[0-9a-f]{16}"$/);
+      expect(next).not.toBe(previous);
+      return next;
+    };
+    expect((await register([listMine])).status).toBe(200);
+    let etag = (await anon()).headers.get('ETag')!;
+    expect(etag).toMatch(/^"[0-9a-f]{16}"$/);
+    const same = await anon({ 'If-None-Match': etag });
+    expect(same.status).toBe(304);
+    expect(same.headers.get('ETag')).toBe(etag);
+
+    etag = await etagAfter(async () => (await SELF.fetch(`${BASE}/v1/apps/club/tools/promote`, json('POST', {}, await owner()))).body?.cancel(), etag);
+    expect(((await (await anon()).json()) as { tools: { name: string }[] }).tools.map((t) => t.name)).toEqual(['list_mine']);
+    etag = await etagAfter(() => register([listMine, addNote]), etag);
+    await etagAfter(() => env.DB.prepare("DELETE FROM app_tools WHERE app_id = 'club' AND name = 'add_note'").run(), etag);
+  });
+
   it('a live app registers new and changed actions live; unchanged ones keep their state', async () => {
     await register([listMine]);
     await SELF.fetch(`${BASE}/v1/apps/club/tools/promote`, json('POST', {}, await owner()));

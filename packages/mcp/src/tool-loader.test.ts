@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 // Focus on fetchTools caching and the executeToolCall flow.
 
 // Re-export internals for testing by importing the module and inspecting behavior.
-import { CORE_TOOL_MAX, checkPlatformRoles, executeToolCall, fetchTools, fetchVisibleTools, invalidateCache, measureToolsListBytes, PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES, registerAppDiscoveryTools, registerAppTools, registerAppToolsProgressive, selectCoreTools, type AppTool } from './tool-loader.js';
+import { CORE_TOOL_MAX, TOOL_CACHE_TTL_MS, TOOL_LIST_MAX_AGE_MS, checkPlatformRoles, executeToolCall, fetchTools, fetchVisibleTools, invalidateCache, measureToolsListBytes, PROGRESSIVE_DISCLOSURE_THRESHOLD_BYTES, registerAppDiscoveryTools, registerAppTools, registerAppToolsProgressive, selectCoreTools, type AppTool } from './tool-loader.js';
 
 // The loader now calls the API over a service binding (Fetcher). Delegate to
 // globalThis.fetch so each test's stub keeps working unchanged.
@@ -605,6 +605,49 @@ describe('registerAppDiscoveryTools — list_app_tools / call_app_tool on the sh
     // Every other listing request is the staged-only one, asked as the caller.
     expect(lists.filter((r) => r.url.endsWith('/v1/apps/hiring/tools?state=staged') && r.authed)).toHaveLength(21);
     expect(lists).toHaveLength(22);
+  });
+
+  // #609: calls more than 10 s apart used to re-read the whole list on every TTL miss. The
+  // cache now revalidates by ETag (the backend answers 304 from a 1-row stamp read), so the
+  // full list is fetched once, and again only when the stamp changes or the copy is 10 min old.
+  it('call_app_tool calls spaced past the TTL revalidate by ETag: one full list until the stamp changes or the copy ages out (#609)', async () => {
+    const live = Array.from({ length: 300 }, (_, i) => ({ name: `live_${i}`, description: `Live ${i}`, operation: 'query', params: {}, requires_auth: true }));
+    let stamp = '"s1"';
+    const full: string[] = [];
+    let revalidated = 0;
+    globalThis.fetch = vi.fn().mockImplementation((request: Request | string, init?: RequestInit) => {
+      const url = String(request);
+      if (url.includes('/actions/')) return Promise.resolve(Response.json({ rows: [{ id: url.split('/').pop() }] }));
+      if (url.endsWith('/tools?state=staged')) return Promise.resolve(Response.json({ tools: [] }));
+      const tag = new Headers(init?.headers).get('If-None-Match');
+      if (tag) revalidated += 1;
+      if (tag === stamp) return Promise.resolve(new Response(null, { status: 304, headers: { ETag: stamp } }));
+      full.push(stamp);
+      return Promise.resolve(Response.json({ tools: live }, { headers: { ETag: stamp } }));
+    });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(5_000_000);
+    try {
+      const h = setup();
+      for (let i = 0; i < 20; i += 1) {
+        now.mockReturnValue(5_000_000 + i * (TOOL_CACHE_TTL_MS + 1_000));
+        expect((await h.get('call_app_tool')!({ app_id: 'hiring', tool: `live_${i}` })).content[0].text).toContain(`live_${i}`);
+      }
+      expect(full).toEqual(['"s1"']);
+      expect(revalidated).toBe(19);
+
+      // The app's tools change: the next revalidation misses and fetches the new list once.
+      stamp = '"s2"';
+      now.mockReturnValue(5_000_000 + 21 * (TOOL_CACHE_TTL_MS + 1_000));
+      await h.get('call_app_tool')!({ app_id: 'hiring', tool: 'live_0' });
+      expect(full).toEqual(['"s1"', '"s2"']);
+
+      // Past TOOL_LIST_MAX_AGE_MS the copy is refetched in full even though the stamp is unchanged.
+      now.mockReturnValue(5_000_000 + 21 * (TOOL_CACHE_TTL_MS + 1_000) + TOOL_LIST_MAX_AGE_MS + 1);
+      await h.get('call_app_tool')!({ app_id: 'hiring', tool: 'live_0' });
+      expect(full).toEqual(['"s1"', '"s2"', '"s2"']);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('call_app_tool runs a query through the platform action executor as the connected user', async () => {

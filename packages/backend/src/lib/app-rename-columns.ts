@@ -96,6 +96,7 @@ export const APP_ID_COLUMNS: readonly AppIdColumn[] = [
   { table: 'app_test_runs', column: 'app_id', kind: 'id' },
   keep('app_test_runs', 'artifacts_prefix', "history: each run's artifacts are read by its own stored prefix (routes/qa.ts) and stay where they are"),
   { table: 'app_tools', column: 'app_id', kind: 'id' },
+  keep('app_tools_stamp', 'app_id', "cache stamp kept by app_tools triggers (#609): rewriting app_tools.app_id writes the new ID's stamp itself"),
   { table: 'app_user_activations', column: 'app_id', kind: 'id' },
   { table: 'app_user_secret_decls', column: 'app_id', kind: 'id' },
   { table: 'app_user_secrets', column: 'app_id', kind: 'id' },

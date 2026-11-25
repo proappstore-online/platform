@@ -521,15 +521,33 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   const stagedOnly = c.req.query('state') === 'staged';
   if (stagedOnly && !teamMember) return c.json({ tools: [] });
 
+  // #609: the signed-out list is the one the MCP caches per isolate. It carries an ETag
+  // from app_tools_stamp (changed by triggers on every app_tools write, migration 0153),
+  // so the MCP revalidates with a 1-row read instead of re-reading the whole manifest.
+  // Visibility is re-read on every revalidation: a private app never gets an ETag or a
+  // 304, and falls through to the refusal below, so the #259 flip bound is unchanged.
+  const signedOut = !c.req.header('Authorization') && !stagedOnly;
+  const etagOf = (row: { stamp?: string | null; visibility_mode?: string | null; visibility_roles?: string | null } | null | undefined) =>
+    signedOut && row?.stamp && visibilityFromRow(row.visibility_mode ?? null, row.visibility_roles ?? null).mode !== 'private' ? `"${row.stamp}"` : null;
+  const ifNoneMatch = signedOut ? c.req.header('If-None-Match') : undefined;
+  if (ifNoneMatch) {
+    const current = etagOf(await c.env.DB.prepare(
+      `SELECT (SELECT stamp FROM app_tools_stamp WHERE app_id = ?1) AS stamp,
+              v.mode AS visibility_mode, v.roles AS visibility_roles
+         FROM (SELECT 1) LEFT JOIN app_visibility v ON v.app_id = ?1`,
+    ).bind(appId).first<{ stamp: string | null; visibility_mode: string | null; visibility_roles: string | null }>());
+    if (current && current === ifNoneMatch) return c.body(null, 304, { ETag: current });
+  }
+
   // `source` tells the console which rows are code (mcp.json) and which are its
   // own endpoints (#155). The console `config` column is never listed here.
   // The app's visibility (#259) rides on the same read: an app with no tools has
   // nothing to list, so the join loses nothing.
   const result = await c.env.DB.prepare(
-    `SELECT t.name, t.manifest, t.updated_at, t.source, t.state, v.mode AS visibility_mode, v.roles AS visibility_roles
+    `SELECT t.name, t.manifest, t.updated_at, t.source, t.state, v.mode AS visibility_mode, v.roles AS visibility_roles${signedOut ? ', (SELECT stamp FROM app_tools_stamp WHERE app_id = ?1) AS stamp' : ''}
        FROM app_tools t LEFT JOIN app_visibility v ON v.app_id = t.app_id
-      WHERE t.app_id = ?${stagedOnly ? " AND t.state = 'staged'" : ''} ORDER BY t.name`,
-  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; state?: string | null; visibility_mode?: string | null; visibility_roles?: string | null }>();
+      WHERE t.app_id = ?1${stagedOnly ? " AND t.state = 'staged'" : ''} ORDER BY t.name`,
+  ).bind(appId).all<{ name: string; manifest: string; updated_at: number; source: ToolSource | null; state?: string | null; visibility_mode?: string | null; visibility_roles?: string | null; stamp?: string | null }>();
 
   // A private app's tool list is part of the app: its team and allowed roles only.
   const first = result.results?.[0];
@@ -558,6 +576,9 @@ toolsRoutes.get('/apps/:appId/tools', async (c) => {
   // The full variant is per-caller, and a private app's list is per-caller too;
   // no cache layer may hand either to anyone else.
   if (teamMember || visibility.mode === 'private') c.header('Cache-Control', 'private, no-store');
+  // The stamp is read by the same statement as the list, so the two cannot disagree.
+  const etag = etagOf(first);
+  if (etag) c.header('ETag', etag);
   return c.json({ tools });
 });
 

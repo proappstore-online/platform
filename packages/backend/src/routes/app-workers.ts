@@ -246,11 +246,12 @@ async function enableAppWorker(c: Context<{ Bindings: Env }>, appId: string, act
   }
   // #428: enabling the worker is the app going live — what is staged becomes callable.
   const [promoted] = await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged'").bind(appId),
+    // RETURNING, not meta.changes: on D1 that also counts the app_tools_stamp trigger's writes (#609).
+    c.env.DB.prepare("UPDATE app_tools SET state = 'live' WHERE app_id = ? AND state = 'staged' RETURNING name").bind(appId),
     // Recorded (#429), so a later deploy registers live even if the worker is disabled again.
     c.env.DB.prepare('INSERT OR IGNORE INTO app_go_live (app_id, went_live_at, went_live_by) VALUES (?, ?, ?)').bind(appId, now, actorId),
   ]);
-  return c.json({ ok: true, enabled: true, promoted: promoted?.meta?.changes ?? 0 });
+  return c.json({ ok: true, enabled: true, promoted: promoted?.results?.length ?? 0 });
 }
 
 appWorkerRoutes.put('/admin/apps/:appId/worker-enabled', async (c) => {
