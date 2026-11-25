@@ -64,8 +64,12 @@ describe('app trigger error codes through the API (#501)', () => {
       .reply(500, { error: 'internal server error' }, { headers: { 'Content-Type': 'application/json', 'X-PAS-Fault': 'tenant', 'X-PAS-Fault-Detail': 'no such column: totl_cents: SQLITE_ERROR' } });
     const res = await callAdd();
     expect(res.status).toBe(500);
-    const body = JSON.stringify(await res.json());
+    const json = await res.json() as { traceId?: string; hint?: string };
+    const body = JSON.stringify(json);
     expect(body).not.toContain('totl_cents');
+    // #561: the 500 says where the owner reads the text: get_action_trace with this traceId.
+    expect(json.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(json.hint).toMatch(/get_action_trace\(app_id, trace_id\)/);
     expect(res.headers.get('X-PAS-Fault-Detail')).toBeNull();
 
     const rows = await waitForRow();
@@ -78,7 +82,10 @@ describe('app trigger error codes through the API (#501)', () => {
     await register();
     dataWorker().intercept({ path: '/execute', method: 'POST' })
       .reply(500, { error: 'internal server error' }, { headers: { 'Content-Type': 'application/json', 'X-PAS-Fault': 'tenant' } });
-    expect((await callAdd()).status).toBe(500);
+    const res = await callAdd();
+    expect(res.status).toBe(500);
+    // Nothing was recorded to read, so no pointer to it.
+    expect(await res.json()).not.toHaveProperty('hint');
     const rows = await waitForRow();
     expect(rows[0]?.message).toBe('data worker returned 500 (tenant fault)');
   });

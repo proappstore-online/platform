@@ -230,8 +230,13 @@ app.onError(async (err, c) => {
   // #394: a data-worker 5xx is that worker's, with its own fault verdict, not the API's.
   const dataFailure = err instanceof DataWorkerFailure ? err : null;
   const errorCode = dataFailure?.code ?? safeErrorCode(status, err instanceof HttpError ? err.message : null);
+  // #561: when the app's own SQL failed and the database's error text was recorded for its owner (#501),
+  // the response says where to read it. A fixed sentence: the SQLite text itself never leaves the log.
+  const hint = dataFailure?.detail && c.req.param('appId')
+    ? { hint: "The app's SQL failed. The app's owner can read the database error for this traceId with the MCP tool get_action_trace(app_id, trace_id), or in the app's operation log (GET /v1/apps/:appId/logs)." }
+    : {};
   const body = err instanceof HttpError
-    ? { ...err.body, error: err.message, errorCode, traceId }
+    ? { ...err.body, error: err.message, errorCode, traceId, ...hint }
     : { error: 'Internal server error', errorCode, traceId };
 
   if (!(err instanceof HttpError)) console.error('Unhandled error:', err);
