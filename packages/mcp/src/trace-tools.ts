@@ -53,7 +53,7 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 export function sqliteErrorClass(message: string): string | null {
   const code = /\bSQLITE_[A-Z_]+/.exec(message)?.[0];
   if (code) return code;
-  return /(no such (?:table|column|function|index)|syntax error|constraint failed|datatype mismatch|has no column|already exists|too many SQL variables)/i.exec(message)?.[1]?.toLowerCase() ?? null;
+  return /(no such (?:table|column|function|index)|syntax error|constraint failed|datatype mismatch|has no column|already exists|too many SQL variables|variable number must be between)/i.exec(message)?.[1]?.toLowerCase() ?? null;
 }
 
 /** The object a SQLite message names (`no such column: totl_cents`, `UNIQUE constraint failed: entries.id`), best effort. */

@@ -7,13 +7,16 @@ const union = (n: number, op = 'UNION ALL') => Array.from({ length: n }, (_, i) 
 const params = (n: number) => `SELECT ${Array.from({ length: n }, (_, i) => `:p${i}`).join(', ')}`;
 
 describe('boundParamCount (#571)', () => {
-  it('counts every :name occurrence, as the executor binds them', () => {
-    expect(boundParamCount('SELECT :a, :a, :__user_id, :__now FROM t WHERE x = :a')).toBe(5);
+  it('counts each distinct :name once and every :__uuid occurrence, as the executor binds them (#575)', () => {
+    expect(boundParamCount('SELECT :a, :a, :__user_id, :__now FROM t WHERE x = :a')).toBe(3);
+    expect(boundParamCount('SELECT :__uuid, :__uuid, :a, :a')).toBe(3);
+    // loopride create_quote (#575): one param repeated 82 times is one bound parameter.
+    expect(boundParamCount(`SELECT ${Array(82).fill(':pickup_lat').join(' + ')}, ${params(99)}`)).toBe(100);
     expect(boundParamCount("SELECT '12:30', ?1, $x FROM t")).toBe(0);
   });
 
   it('counts an occurrence inside a string literal or comment, because the executor binds it there too', () => {
-    expect(boundParamCount("SELECT ':a' -- :b\n/* :c */")).toBe(3);
+    expect(boundParamCount("SELECT ':a' -- :b\n/* :c */ :a")).toBe(3);
   });
 });
 
@@ -63,7 +66,7 @@ describe('maxCompoundTerms (#571)', () => {
 describe('d1LimitError (#571)', () => {
   it('allows 100 parameters and refuses 101, naming the limit and the fix', () => {
     expect(d1LimitError(params(100))).toBeNull();
-    expect(d1LimitError(params(101))).toMatch(/^binds 101 parameters; D1 allows at most 100 per statement \("too many SQL variables"\).*derived table/);
+    expect(d1LimitError(params(101))).toMatch(/^binds 101 parameters; D1 allows at most 100 per statement \("variable number must be between \?1 and \?100"\).*distinct :name is bound once/);
   });
 
   it('allows 5 compound terms and refuses 6, naming the limit and the fix', () => {

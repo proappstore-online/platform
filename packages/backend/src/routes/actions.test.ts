@@ -96,7 +96,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
       }),
     );
     const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { sql: string; params: unknown[] };
-    expect(body.sql).toBe('SELECT * FROM items WHERE user_id = ? LIMIT ?');
+    expect(body.sql).toBe('SELECT * FROM items WHERE user_id = ?1 LIMIT ?2');
     expect(body.params).toEqual(['gh:1', 10]);
   });
 
@@ -167,7 +167,7 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
       }),
     );
     const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { sql: string; params: unknown[] };
-    expect(body.sql).toBe('SELECT id, name, logo_url FROM orgs WHERE slug = ? LIMIT 1');
+    expect(body.sql).toBe('SELECT id, name, logo_url FROM orgs WHERE slug = ?1 LIMIT 1');
     expect(body.params).toEqual(['chessideas']);
   });
 
@@ -506,11 +506,11 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
 
     const [[readPath, readBody], [writePath, writeBody]] = hops(fetchMock) as [[string, { sql: string; params: unknown[] }], [string, { statements: { sql: string; params: unknown[] }[] }]];
     expect(readPath).toBe('/query');
-    expect(readBody).toEqual({ sql: 'SELECT moves FROM games WHERE id = ? AND (white_id = ? OR black_id = ?)', params: ['g1', 'gh:1', 'gh:1'] });
+    expect(readBody).toEqual({ sql: 'SELECT moves FROM games WHERE id = ?1 AND (white_id = ?2 OR black_id = ?2)', params: ['g1', 'gh:1'] });
     expect(writePath).toBe('/batch');
     expect(writeBody.statements).toHaveLength(1);
     // The verdict comes from the verifier, not from the client's params.
-    expect(writeBody.statements[0]!.params).toEqual(['0-1', 'checkmate', expect.any(Number), 'g1', 'gh:1', 'gh:1', true]);
+    expect(writeBody.statements[0]!.params).toEqual(['0-1', 'checkmate', expect.any(Number), 'g1', 'gh:1', true]);
     for (const [, init] of fetchMock.mock.calls) {
       expect((init as RequestInit).headers).toMatchObject({ 'X-Internal-Token': 'internal-secret' });
     }
@@ -525,7 +525,7 @@ describe('verify actions (#148): a trusted, platform-owned execution path', () =
     expect(body.ok).toBe(true);
     expect(body.output).toMatchObject({ over: false, result: null, reason: null, turn: 'w' });
     expect(body.writes).toEqual([{ changes: 0 }]);
-    expect((hops(fetchMock)[1]![1] as { statements: { params: unknown[] }[] }).statements[0]!.params).toEqual([null, null, expect.any(Number), 'g1', 'gh:1', 'gh:1', false]);
+    expect((hops(fetchMock)[1]![1] as { statements: { params: unknown[] }[] }).statements[0]!.params).toEqual([null, null, expect.any(Number), 'g1', 'gh:1', false]);
   });
 
   it('no row (not the caller\'s game, or no such game) → ok:false with the reason, and NOTHING is written', async () => {

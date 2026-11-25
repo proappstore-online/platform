@@ -127,6 +127,7 @@ describe('SQLite error labels', () => {
   it('names the class and the object a message points at, and nothing for text it does not know', () => {
     expect(sqliteErrorClass('D1_ERROR: no such column: x: SQLITE_ERROR')).toBe('SQLITE_ERROR');
     expect(sqliteErrorClass('no such table: entries')).toBe('no such table');
+    expect(sqliteErrorClass('variable number must be between ?1 and ?100')).toBe('variable number must be between'); // #575
     expect(sqliteErrorClass('near "SELEC": syntax error')).toBe('syntax error');
     expect(sqliteErrorClass('something unexpected')).toBeNull();
     expect(sqliteObject('no such column: totl_cents: SQLITE_ERROR')).toBe('totl_cents');

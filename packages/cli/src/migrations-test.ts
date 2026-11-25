@@ -80,14 +80,21 @@ export function sampleParam(schema: NonNullable<ActionManifest['params']>[string
 }
 
 /**
- * The executor's own binding (backend `bindStatement`): `:name` becomes `?` and the values follow in order, with the
- * magic names resolved (`:__user_is_child` is 0 for the sample user, #513). Mirrored here; a parity test holds it equal to the backend's.
+ * The executor's own binding (backend `numberPlaceholders` + `bindStatement`): each distinct `:name` becomes one
+ * numbered `?N` reused at every occurrence, except `:__uuid`, which takes a fresh slot (and UUID) each time (#575);
+ * the magic names are resolved (`:__user_is_child` is 0 for the sample user, #513). Mirrored here; a parity test
+ * holds it equal to the backend's.
  */
 export function bindAction(sql: string, resolved: Record<string, unknown>, userId = 'sample-user', now = Date.now(), isChild = false, callUuid: string = crypto.randomUUID()): { sql: string; params: unknown[] } {
   const names: string[] = [];
+  const slot = new Map<string, number>();
   const bound = sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_m, name: string) => {
-    names.push(name);
-    return '?';
+    let n = name === '__uuid' ? undefined : slot.get(name);
+    if (n === undefined) {
+      n = names.push(name);
+      if (name !== '__uuid') slot.set(name, n);
+    }
+    return `?${n}`;
   });
   const magic: Record<string, () => unknown> = { __user_id: () => userId, __user_is_child: () => (isChild ? 1 : 0), __now: () => now, __uuid: () => crypto.randomUUID(), __call_uuid: () => callUuid };
   const params = names.map((name) => {

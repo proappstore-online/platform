@@ -447,7 +447,7 @@ export interface D1ErrorClass {
 const D1_ERROR_CLASSES: { match: RegExp; cls: D1ErrorClass }[] = [
   { match: /overloaded|requests queued|queued for too long/i, cls: { status: 503, errorCode: 'd1_overloaded', error: 'database overloaded, retry shortly', fault: 'platform', retryAfterSeconds: 5 } },
   { match: /timed out|timeout|exceeded (its )?cpu|cpu time limit|time limit|SQLITE_INTERRUPT|interrupted/i, cls: { status: 503, errorCode: 'd1_timeout', error: 'database query timed out, retry later', fault: 'platform', retryAfterSeconds: 10 } },
-  { match: /too many SQL variables|too many (bound )?parameters/i, cls: { status: 400, errorCode: 'd1_too_many_parameters', error: 'too many bound parameters in one statement (D1 allows 100)', fault: 'tenant' } },
+  { match: /too many SQL variables|too many (bound )?parameters|variable number must be between/i, cls: { status: 400, errorCode: 'd1_too_many_parameters', error: 'too many bound parameters in one statement (D1 allows 100)', fault: 'tenant' } },
   { match: /statement too long|SQLITE_TOOBIG|string or blob too big/i, cls: { status: 413, errorCode: 'd1_statement_too_long', error: 'SQL statement or value exceeds the D1 size limit', fault: 'tenant' } },
   { match: /too many rows|result (set )?(is )?too (large|big)|response size/i, cls: { status: 413, errorCode: 'd1_result_too_large', error: 'query result exceeds the D1 size limit; narrow it or page it', fault: 'tenant' } },
   { match: /too many terms in compound|expression tree is too large|LIKE or GLOB pattern too complex|too many columns/i, cls: { status: 400, errorCode: 'd1_query_too_complex', error: 'query exceeds a D1 complexity limit', fault: 'tenant' } },

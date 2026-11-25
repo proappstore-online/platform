@@ -15,15 +15,27 @@ const manifest: ToolManifest = {
 };
 
 describe('prepareActionQuery', () => {
-  it('injects server-owned magic params and clamps numeric input', () => {
+  it('injects server-owned magic params, and binds each name to one numbered slot (#575)', () => {
     const query = prepareActionQuery(
       manifest,
-      { __user_id: 'attacker', active: 'false', limit: 999 },
+      { __user_id: 'attacker', active: 'false', limit: 50 },
       'gh:1',
     );
 
-    expect(query.sql).toBe('SELECT * FROM items WHERE user_id = ? AND active = ? LIMIT ?');
-    expect(query.params).toEqual(['gh:1', false, 100]);
+    expect(query.sql).toBe('SELECT * FROM items WHERE user_id = ?1 AND active = ?2 LIMIT ?3');
+    expect(query.params).toEqual(['gh:1', false, 50]);
+  });
+
+  it('binds a param repeated many times once, so it counts once against D1\'s 100 (#575)', () => {
+    const repeated: ToolManifest = {
+      ...manifest,
+      sql: `SELECT * FROM quotes WHERE ${Array.from({ length: 82 }, () => 'lat = :pickup_lat').join(' OR ')} AND owner = :__user_id`,
+      params: { pickup_lat: { type: 'number' } },
+    };
+    const query = prepareActionQuery(repeated, { pickup_lat: -33.9 }, 'gh:1');
+    expect(query.params).toEqual([-33.9, 'gh:1']);
+    expect(query.sql.match(/\?1\b/g)).toHaveLength(82);
+    expect(query.sql).toMatch(/AND owner = \?2$/);
   });
 
   it('rejects a negative bounded LIMIT parameter', () => {
@@ -165,13 +177,18 @@ describe('prepareActionBatch', () => {
     const [a, b] = prepareActionBatch(manifest, { __call_uuid: 'attacker' }, 'gh:9');
     const call = a!.params[0];
     expect(call).not.toBe('attacker');
-    expect([a!.params[0], b!.params[0], b!.params[2]]).toEqual([call, call, call]);
+    expect(a!.sql).toBe('INSERT INTO things (id, owner_id, ref) VALUES (?1, ?2, ?3)');
+    // #575: a repeated name reuses its slot; :__uuid takes a fresh one at each occurrence.
+    expect(b!.sql).toBe('INSERT INTO notes (thing_id, id, again) VALUES (?1, ?2, ?1)');
+    expect([a!.params[0], b!.params[0]]).toEqual([call, call]);
     expect(new Set([a!.params[2], b!.params[1], call]).size).toBe(3);
     // a different call gets a different id
     expect(prepareActionBatch(manifest, {}, 'gh:9')[0]!.params[0]).not.toBe(call);
     // a single-statement action binds it too
-    const q = prepareActionQuery({ ...manifest, operation: 'execute', sql: 'SELECT :__call_uuid, :__call_uuid', statements: undefined }, {}, 'gh:9');
-    expect(q.params[0]).toBe(q.params[1]);
+    const q = prepareActionQuery({ ...manifest, operation: 'execute', sql: 'SELECT :__call_uuid, :__call_uuid, :__uuid, :__uuid', statements: undefined }, {}, 'gh:9');
+    expect(q.sql).toBe('SELECT ?1, ?1, ?2, ?3');
+    expect(q.params).toHaveLength(3);
+    expect(q.params[1]).not.toBe(q.params[2]);
   });
 
   it('reads the clock once per batch, so :__now is identical across statements and occurrences', () => {
@@ -187,9 +204,9 @@ describe('prepareActionBatch', () => {
     clock.mockImplementation(() => t++); // every read ticks — the binder must read once
     try {
       const prepared = prepareActionBatch(manifest, { id: 't1' }, 'gh:9');
-      const nows = [prepared[0].params[0], ...prepared[1].params.filter((v, i) => i !== 0 && i !== 3 && typeof v === 'number')];
-      expect(new Set(nows).size).toBe(1);
-      expect(nows).toHaveLength(4);
+      // Every :__now occurrence in the second statement is its one slot ?2.
+      expect(prepared[1].sql).toBe('INSERT INTO audit (thing_id, at, seen_at) SELECT ?1, ?2, ?2 FROM things WHERE id = ?1 AND updated_at = ?2');
+      expect(prepared[0].params[0]).toBe(prepared[1].params[1]);
     } finally {
       clock.mockRestore();
     }
@@ -229,13 +246,13 @@ describe('verify tools (#148)', () => {
 
   it('prepareVerifyInput binds the scoped SELECT with the caller id, never the client one', () => {
     const q = prepareVerifyInput(verifyManifest, { game_id: 'g1', __user_id: 'attacker' }, 'gh:1');
-    expect(q).toEqual({ sql: 'SELECT moves FROM games WHERE id = ? AND (white_id = ? OR black_id = ?)', params: ['g1', 'gh:1', 'gh:1'] });
+    expect(q).toEqual({ sql: 'SELECT moves FROM games WHERE id = ?1 AND (white_id = ?2 OR black_id = ?2)', params: ['g1', 'gh:1'] });
   });
 
   it('prepareVerifyWrites binds :__verify_<output> from the verdict, shares :__now, and keeps :__uuid per occurrence', () => {
     const writes = prepareVerifyWrites(verifyManifest, { game_id: 'g1' }, 'gh:1', { over: true, result: '0-1', reason: 'checkmate' });
     expect(writes).toHaveLength(2);
-    expect(writes[0]!.sql).toBe("UPDATE games SET status = 'finished', result = ?, end_reason = ?, finished_at = ? WHERE id = ? AND status = 'active' AND ? = 1");
+    expect(writes[0]!.sql).toBe("UPDATE games SET status = 'finished', result = ?1, end_reason = ?2, finished_at = ?3 WHERE id = ?4 AND status = 'active' AND ?5 = 1");
     expect(writes[0]!.params).toEqual(['0-1', 'checkmate', expect.any(Number), 'g1', true]);
     expect(typeof writes[1]!.params[0]).toBe('string'); // :__uuid (the file stubs randomUUID)
     expect(writes[1]!.params[2]).toBe(writes[0]!.params[2]); // one clock reading for the whole write set
@@ -298,20 +315,24 @@ describe('batchPayload (#565)', () => {
   });
 });
 
-describe('D1 parameter count parity (#571)', () => {
+describe('D1 parameter count parity (#571, #575)', () => {
   // The registration lint (`@proappstore/compliance` lib/d1-limits.ts) counts bound parameters with its own copy of the
-  // executor's pattern. This pins the two together: the lint's 100 is exactly the number of values the executor binds.
+  // executor's pattern. This pins the two together: the lint's 100 is exactly the number of values the executor binds:
+  // one per distinct name, one per :__uuid occurrence, and an occurrence in a string or comment is bound too.
   const tricky = (n: number) => {
-    const fixed = ":a, :__user_id, :__now, ':a in a string' /* :a */";
-    const occurrences = 5; // `:a` ×3 (twice in a string or comment), `:__user_id`, `:__now`
-    return `SELECT ${fixed}, ${Array.from({ length: n - occurrences }, () => ':a').join(', ')} FROM t`;
+    const fixed = ":a, :a, :__user_id, :__now, ':a in a string' /* :a */, :__uuid, :__uuid";
+    const slots = 5; // :a, :__user_id, :__now, and :__uuid twice
+    return `SELECT ${fixed}, ${Array.from({ length: n - slots }, (_, i) => `:p${i}`).join(', ')} FROM t`;
   };
-  const tool = (sql: string): ToolManifest => ({ name: 'q', description: 'q', operation: 'query', sql, params: { a: { type: 'string' } }, requires_auth: true });
+  const tool = (n: number): ToolManifest => ({
+    name: 'q', description: 'q', operation: 'query', sql: tricky(n), requires_auth: true,
+    params: Object.fromEntries([['a', { type: 'string' }], ...Array.from({ length: n }, (_, i) => [`p${i}`, { type: 'string', default: 'v' }])]),
+  });
 
   it('binds exactly as many values as the lint counts, at the boundary', () => {
-    expect(prepareActionQuery(tool(tricky(100)), { a: 'x' }, 'u1').params).toHaveLength(100);
-    expect(actionD1LimitError(tool(tricky(100)))).toBeNull();
-    expect(prepareActionQuery(tool(tricky(101)), { a: 'x' }, 'u1').params).toHaveLength(101);
-    expect(actionD1LimitError(tool(tricky(101)))).toMatch(/binds 101 parameters/);
+    expect(prepareActionQuery(tool(100), { a: 'x' }, 'u1').params).toHaveLength(100);
+    expect(actionD1LimitError(tool(100))).toBeNull();
+    expect(prepareActionQuery(tool(101), { a: 'x' }, 'u1').params).toHaveLength(101);
+    expect(actionD1LimitError(tool(101))).toMatch(/binds 101 parameters/);
   });
 });

@@ -31,7 +31,7 @@ describe('what `pas migrations test` mirrors (#503)', () => {
   it("binds an action's SQL exactly as the backend executor does", () => {
     const query = {
       name: 'q', operation: 'query', requires_auth: true, params: { limit: { type: 'integer', max: 50 }, q: { type: 'string' } },
-      sql: 'SELECT * FROM t WHERE user_id = :__user_id AND body LIKE :q LIMIT :limit',
+      sql: 'SELECT * FROM t WHERE user_id = :__user_id AND (body LIKE :q OR title LIKE :q) LIMIT :limit', // :q twice: one slot (#575)
     } as unknown as ToolManifest;
     const resolved = { limit: 5, q: 'x' };
     const theirs = prepareActionQuery(query, resolved, 'u1');

@@ -15,7 +15,7 @@ describe('checkMcpD1Limits (#571)', () => {
   });
 
   it('warns, never fails, naming each action over a limit', async () => {
-    const binds101 = `SELECT ${Array.from({ length: 101 }, () => ':a').join(', ')}`;
+    const binds101 = `SELECT ${Array.from({ length: 101 }, (_, i) => `:a${i}`).join(', ')}`;
     const result = await run({ tools: [{ name: 'report', sql: union(6) }, { name: 'save', statements: ['SELECT 1', binds101] }, 'junk'] });
     expect(result.status).toBe('warn');
     expect(result.detail).toMatch(/action "report" sql has a compound SELECT of 6 terms.*; action "save" statements\[1\] binds 101 parameters/);

@@ -1671,7 +1671,7 @@ describe('verify tools (#148)', () => {
     const seen: ValStmt[] = [];
     validateResults = (stmts) => { seen.push(...stmts); return stmts.map((s) => ({ id: s.id, ok: true })); };
     expect((await put(claim)).status).toBe(200);
-    expect(seen.map((s) => [s.id, s.paramCount])).toEqual([['claim_game_over#0', 3], ['claim_game_over#1', 6]]);
+    expect(seen.map((s) => [s.id, s.paramCount])).toEqual([['claim_game_over#0', 2], ['claim_game_over#1', 5]]); // one per distinct name (#575)
     validateResults = (stmts) => stmts.map((s) => ({ id: s.id, ok: s.id.endsWith('#0'), error: 'no such column: end_reason' }));
     const drift = await put(claim);
     expect(drift.status).toBe(422);
@@ -2144,7 +2144,8 @@ describe('D1 per-statement limits (#571)', () => {
     name: 'save', description: 'Save', operation: 'batch', requires_auth: true, params: { v: { type: 'string' } },
     statements: [
       'INSERT INTO t (id, user_id) VALUES (:__uuid, :__user_id)',
-      `UPDATE t SET v = coalesce(${Array.from({ length: n - 1 }, () => ':v').join(', ')}) WHERE user_id = :__user_id`,
+      // :__uuid is the one name bound at every occurrence (#575), so n - 1 of them plus :__user_id bind n.
+      `UPDATE t SET v = coalesce(:v, ${Array.from({ length: n - 2 }, () => ':__uuid').join(', ')}) WHERE user_id = :__user_id`,
     ],
   });
 

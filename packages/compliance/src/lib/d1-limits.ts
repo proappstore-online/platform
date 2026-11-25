@@ -9,10 +9,12 @@
  * call. Measured on Miniflare's D1 (miniflare 4.20250906.0):
  *
  * - **100 bound parameters per statement.** 100 run; 101 fail with `too many SQL
- *   variables`. The executor turns every `:name` occurrence into its own `?`
- *   (backend `lib/action-sql.ts` bindStatement), so a repeated `:name` counts
- *   once per occurrence. This counts with the executor's own pattern, over the
- *   raw text, exactly as it binds.
+ *   variables`, or with numbered slots `variable number must be between ?1 and ?100`
+ *   (Miniflare, 2026-11-25). The executor binds each distinct `:name` once as a numbered `?N`
+ *   (backend `lib/action-sql.ts` numberPlaceholders, #575), so a repeated `:name`
+ *   counts once; only `:__uuid`, a fresh value at every occurrence, counts per
+ *   occurrence. This counts with the executor's own pattern, over the raw text,
+ *   exactly as it binds.
  * - **5 terms per compound SELECT.** 5 run; 6 fail with `too many terms in
  *   compound SELECT`, for `UNION`, `UNION ALL`, `INTERSECT` and `EXCEPT` alike.
  *   The limit is per compound chain: a chain inside parentheses (a subquery, a
@@ -32,9 +34,10 @@ const PLACEHOLDER = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
 
 const COMPOUND_OPERATORS = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
 
-/** How many parameters the executor binds for this statement: one per `:name` occurrence. */
+/** How many parameters the executor binds for this statement: one per distinct `:name`, plus one per `:__uuid` occurrence. */
 export function boundParamCount(sql: string): number {
-  return [...sql.matchAll(PLACEHOLDER)].length;
+  const names = [...sql.matchAll(PLACEHOLDER)].map((m) => m[1]!);
+  return new Set(names.filter((n) => n !== '__uuid')).size + names.filter((n) => n === '__uuid').length;
 }
 
 /**
@@ -89,9 +92,8 @@ export function maxCompoundTerms(sql: string): number {
 export function d1LimitError(sql: string): string | null {
   const params = boundParamCount(sql);
   if (params > D1_MAX_BOUND_PARAMS) {
-    return `binds ${params} parameters; D1 allows at most ${D1_MAX_BOUND_PARAMS} per statement ("too many SQL variables"). ` +
-      'Every :name occurrence is bound separately: repeat fewer, e.g. bind each value once in a one-row derived table ' +
-      '(JOIN (SELECT :from AS d_from, :to AS d_to) p) and refer to p.d_from, or split the statement';
+    return `binds ${params} parameters; D1 allows at most ${D1_MAX_BOUND_PARAMS} per statement ("variable number must be between ?1 and ?100"). ` +
+      'Each distinct :name is bound once (each :__uuid separately): use fewer distinct parameters, or split the statement';
   }
   const terms = maxCompoundTerms(sql);
   if (terms > D1_MAX_COMPOUND_TERMS) {

@@ -186,7 +186,7 @@ describe('actions as system:worker (#254)', () => {
     expect(out).toMatchObject({ meta: { changes: 1 } });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.url).toBe('https://pas-data-t.test.workers.dev/execute');
-    expect(sent[0]!.body).toEqual({ sql: 'INSERT INTO t (id, by) VALUES (?, ?)', params: ['r1', SYSTEM_WORKER_USER] });
+    expect(sent[0]!.body).toEqual({ sql: 'INSERT INTO t (id, by) VALUES (?1, ?2)', params: ['r1', SYSTEM_WORKER_USER] });
   });
 
   it('refuses default-callers, scheduled, role-gated, verify and unknown actions before any SQL', async () => {
@@ -307,7 +307,7 @@ describe('actions as the caller of an http request (#260)', () => {
     userTool('my_notes');
     const pas = new AppWorkerApi({ props: { appId: 't' } } as never, env);
     await pas.actions.call('my_notes', {}, ctx({ as: await grant() }));
-    expect(sent[0]!.body).toEqual({ sql: 'SELECT id FROM notes WHERE owner = ? LIMIT 10', params: ['gh:42'] });
+    expect(sent[0]!.body).toEqual({ sql: 'SELECT id FROM notes WHERE owner = ?1 LIMIT 10', params: ['gh:42'] });
   });
 
   it('applies the action\'s role gate as the user, and records the role-gated success audit', async () => {

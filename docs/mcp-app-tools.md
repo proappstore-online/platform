@@ -331,7 +331,7 @@ Registration checks both for each `sql` and `statements[]` entry (#571,
 
 | Limit | D1 error | Counted |
 |---|---|---|
-| **100 bound parameters** per statement | `too many SQL variables` | every `:name` occurrence, magic params included: the executor binds each one as its own `?`, so `:from` used 3 times counts 3 |
+| **100 bound parameters** per statement | `variable number must be between ?1 and ?100` | each distinct `:name` once, magic params included: the executor binds every name to one numbered `?N` and reuses it (#575), so `:from` used 3 times counts 1. Only `:__uuid` counts at every occurrence, since each is a fresh value |
 | **5 terms** per compound SELECT | `too many terms in compound SELECT` | `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`, per chain. A chain inside parentheses (subquery, CTE body, `IN (…)`, `WITH RECURSIVE` body) counts on its own. Multi-row `VALUES` is not counted |
 
 Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live
@@ -344,9 +344,8 @@ D1 refused 10 terms and ran 4.
 - `pas check` runs the same count as the `mcp-d1-limits` check (warn-only, since
   it cannot see what is registered).
 
-To stay within them, bind a repeated value once in a one-row derived table
-(`JOIN (SELECT :from AS d_from, :to AS d_to) p`, then `p.d_from`), and nest a long
-union in groups of at most 5:
+To stay within them, use fewer distinct parameters (or split the statement), and
+nest a long union in groups of at most 5:
 `SELECT * FROM (a UNION ALL b UNION ALL c) UNION ALL SELECT * FROM (d UNION ALL e)`.
 
 Static checks cover the two known limits. To catch the next D1-only difference,

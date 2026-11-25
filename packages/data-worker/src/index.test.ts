@@ -708,6 +708,8 @@ describe("fault verdict and trace context (#394)", () => {
     ["D1_ERROR: D1 DB storage operation exceeded timeout which caused object to be reset", 503, "d1_timeout", "platform", "10"],
     ["Worker exceeded CPU time limit", 503, "d1_timeout", "platform", "10"],
     ["D1_ERROR: too many SQL variables at offset 52: SQLITE_ERROR", 400, "d1_too_many_parameters", "tenant", null],
+    // #575: numbered ?N slots report the limit in these words instead.
+    ["D1_ERROR: variable number must be between ?1 and ?100: SQLITE_ERROR", 400, "d1_too_many_parameters", "tenant", null],
     ["D1_ERROR: statement too long: SQLITE_TOOBIG", 413, "d1_statement_too_long", "tenant", null],
     ["D1_ERROR: Maximum response size exceeded: too many rows", 413, "d1_result_too_large", "tenant", null],
     ["D1_ERROR: LIKE or GLOB pattern too complex: SQLITE_ERROR", 400, "d1_query_too_complex", "tenant", null],

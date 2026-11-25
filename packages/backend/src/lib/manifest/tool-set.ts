@@ -1,6 +1,6 @@
 import { writesReservedTable } from '../../../../data-worker/src/reserved-tables.js';
 import type { Env } from '../../types.js';
-import { actionCallers, type ToolManifest } from '../action-sql.js';
+import { actionCallers, numberPlaceholders, type ToolManifest } from '../action-sql.js';
 import { nativeRelayActionError } from '../native-companion.js';
 import { dataWorkerUrl } from '../data-worker-url.js';
 import { MAX_SCHEDULED_ACTIONS_PER_APP, validateManifest, type ToolSource } from './tool.js';
@@ -36,9 +36,9 @@ export async function checkSchemaCoherence(
   for (const tool of tools) {
     const raws = toolStatements(tool);
     raws.forEach((raw, i) => {
-      let paramCount = 0;
-      const sql = raw.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, () => { paramCount += 1; return '?'; });
-      statements.push({ id: `${tool.name}#${i}`, tool: tool.name, sql, paramCount });
+      // Bound exactly as the executor binds it (#575), so validation sees the statement D1 will run.
+      const { sql, slots } = numberPlaceholders(raw);
+      statements.push({ id: `${tool.name}#${i}`, tool: tool.name, sql, paramCount: slots.length });
     });
   }
   if (statements.length === 0) return [];

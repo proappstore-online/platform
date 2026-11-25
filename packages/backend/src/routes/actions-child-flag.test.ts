@@ -54,7 +54,7 @@ const bound = () => sent.at(-1)!.body.params!;
 describe(':__user_is_child in a registered action (#513)', () => {
   it('a child credential session binds 1', async () => {
     expect((await call('register_family', 'cred:kid')).status).toBe(200);
-    expect(sent.at(-1)!.body.sql).toContain('WHERE ? = 0');
+    expect(sent.at(-1)!.body.sql).toContain('WHERE ?3 = 0');
     expect(bound()).toEqual(['f1', 'cred:kid', 1]);
   });
 

@@ -35,6 +35,20 @@ describe('migration chain on a fresh D1 (#503)', () => {
     expect(r.ok).toBe(true);
   });
 
+  // #575: each distinct :name is one numbered slot, so loopride's create_quote (:pickup_lat x82, 127 placeholders)
+  // runs on D1. 101 distinct names are still 101 parameters, and D1 still refuses them.
+  it('binds a repeated param once, so 150 occurrences run on D1; 101 distinct params still fail', async () => {
+    const repeated: ActionManifest = { name: 'repeated', operation: 'query', params: { lat: { type: 'number', default: 1.5 } }, sql: `SELECT 1 AS hit WHERE :lat IN (${Array(149).fill(':lat').join(', ')})` };
+    const distinct: ActionManifest = {
+      name: 'distinct_101', operation: 'query',
+      params: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`p${i}`, { type: 'integer', default: i }])),
+      sql: `SELECT 1 AS hit WHERE 0 IN (${Array.from({ length: 101 }, (_, i) => `:p${i}`).join(', ')})`,
+    };
+    const r = await run([NOTES], [repeated, distinct]);
+    expect(outcomes(r).repeated).toBe('ok');
+    expect(r.actions.find((a) => a.name === 'distinct_101')?.detail).toMatch(/variable number must be between \?1 and \?100/);
+  });
+
   it('fails the run on a migration statement D1 refuses, names it, and does not go on', async () => {
     const r = await run([NOTES, { name: '0002_bad', sql: 'CREATE TABLE ok (id TEXT); CREATE INDEX nope ON missing_table (x);' }, { name: '0003_after', sql: 'CREATE TABLE after (id TEXT)' }], [listNotes]);
     expect(r.ok).toBe(false);

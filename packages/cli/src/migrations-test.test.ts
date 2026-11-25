@@ -32,8 +32,10 @@ describe('binding', () => {
   });
 
   it('binds :__call_uuid to one value for the whole call (#562)', () => {
-    const { params } = bindAction('INSERT INTO t VALUES (:__call_uuid, :__call_uuid)', {});
-    expect(params[0]).toBe(params[1]);
+    const { sql, params } = bindAction('INSERT INTO t VALUES (:__call_uuid, :__call_uuid)', {});
+    // #575: one name, one numbered slot, as the executor binds it.
+    expect(sql).toBe('INSERT INTO t VALUES (?1, ?1)');
+    expect(params).toHaveLength(1);
     expect(bindAction('SELECT :__call_uuid', {}, 'u', 1, false, 'fixed').params).toEqual(['fixed']);
   });
 

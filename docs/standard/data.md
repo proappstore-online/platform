@@ -878,13 +878,13 @@ web/src/**/*.test.ts: renders, formats dates — no test touches mcp.json
 
 **Severity:** High · **Verification:** Automated · **Enforcement:** automated — registration (`PUT /v1/apps/:id/tools`) refuses a new or changed action whose `sql` or any `statements[]` entry binds more than 100 parameters or has more than 5 terms in one compound SELECT, and warns for one registered unchanged; compliance check *Actions fit D1 limits* (`mcp-d1-limits`, warn-only) · **Since:** 1.13
 
-**Rule.** Every statement of a registered action MUST bind at most **100** parameters, counting each `:name` occurrence (the executor binds every occurrence as its own `?`, magic params such as `:__user_id` included), and MUST have at most **5** terms in any one compound SELECT (`UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`). The app SHOULD run its registered statements against Miniflare's D1 in its tests.
+**Rule.** Every statement of a registered action MUST bind at most **100** parameters, counting each distinct `:name` once (the executor binds every name to one numbered `?N` and reuses it, magic params such as `:__user_id` included), and each `:__uuid` occurrence separately, and MUST have at most **5** terms in any one compound SELECT (`UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`). The app SHOULD run its registered statements against Miniflare's D1 in its tests.
 
 **Applicability.** Apps with registered actions.
 
-**Rationale.** D1 refuses these statements at parse time (`too many SQL variables`, `too many terms in compound SELECT`), so every call to such an action fails with a 500. Local SQLite (`node:sqlite`) allows 32,766 parameters and 500 terms, so contract and browser tests that use it pass. The limit applies to one compound chain: a chain inside parentheses (a subquery, a CTE body, an `IN (…)` list, a `WITH RECURSIVE` body) is counted on its own, so nested groups of up to 5 terms run any number of terms. Multi-row `VALUES` is not a compound and is not limited. Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live D1 refused 10 terms and ran 4.
+**Rationale.** D1 refuses these statements at parse time (`variable number must be between ?1 and ?100`, `too many terms in compound SELECT`), so every call to such an action fails with a 500. Local SQLite (`node:sqlite`) allows 32,766 parameters and 500 terms, so contract and browser tests that use it pass. The limit applies to one compound chain: a chain inside parentheses (a subquery, a CTE body, an `IN (…)` list, a `WITH RECURSIVE` body) is counted on its own, so nested groups of up to 5 terms run any number of terms. Multi-row `VALUES` is not a compound and is not limited. Measured on Miniflare's D1: 100 parameters and 5 terms run, 101 and 6 fail. Live D1 refused 10 terms and ran 4.
 
-**Recommended implementation.** Bind a value used many times once, in a one-row derived table: `JOIN (SELECT :from AS d_from, :to AS d_to) p` and refer to `p.d_from`. Nest a long union in parenthesised groups of at most 5 terms. In the app's tests, apply `migrations.json` to Miniflare's D1 and run every registered statement with the executor's binding (`:name` → `?`), as [smsf's `tests/actions-d1.test.mjs`](https://github.com/proappstore-online/smsf/blob/main/tests/actions-d1.test.mjs) (a private org repo) does. That also catches the next D1-only difference.
+**Recommended implementation.** Keep the number of distinct parameters at 100 or fewer (repeating one is free, #575), or split the statement. Nest a long union in parenthesised groups of at most 5 terms. In the app's tests, apply `migrations.json` to Miniflare's D1 and run every registered statement with the executor's binding (each distinct `:name` → one `?N`; `pas migrations test` does this), as [smsf's `tests/actions-d1.test.mjs`](https://github.com/proappstore-online/smsf/blob/main/tests/actions-d1.test.mjs) (a private org repo) does. That also catches the next D1-only difference.
 
 **Conforming example.**
 
@@ -903,7 +903,7 @@ SELECT 'a', … UNION ALL SELECT 'b', … UNION ALL SELECT 'c', … UNION ALL SE
 
 **Evidence.** Configuration: each statement in `mcp.json`; the `mcp-d1-limits` result of `pas check`; registration warnings in the deploy log.
 
-**Remediation.** Rewrite the statement with fewer bound occurrences or nested unions; add a Miniflare D1 test that runs it; deploy and confirm the registration warning is gone.
+**Remediation.** Rewrite the statement with fewer distinct parameters or nested unions; add a Miniflare D1 test that runs it; deploy and confirm the registration warning is gone.
 
 **Tests.** The app's Miniflare D1 test runs every registered statement without a D1 error; `pas check` reports *Actions fit D1 limits* as passed.
 

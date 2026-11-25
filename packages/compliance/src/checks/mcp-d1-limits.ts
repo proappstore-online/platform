@@ -5,7 +5,7 @@ import type { CheckResult } from '../types.js';
 const NAME = 'Actions fit D1 limits';
 
 /**
- * #571 (PAS-DATA-023): every statement in `mcp.json` binds at most 100 parameters
+ * #571 (PAS-DATA-023): every statement in `mcp.json` binds at most 100 parameters (distinct names, #575)
  * and has at most 5 terms in any one compound SELECT, the limits D1 enforces and
  * local SQLite does not.
  *
@@ -34,7 +34,7 @@ export async function checkMcpD1Limits(source: FileSource): Promise<CheckResult>
     status: 'warn',
     detail: `${errors.join('; ')}. Registration refuses a new or changed action like this; D1 refuses every call to one already registered`,
     suggestions: [
-      'Bind each repeated value once, e.g. JOIN (SELECT :from AS d_from) p, and refer to p.d_from.',
+      'Use at most 100 distinct parameters per statement (a repeated :name counts once), or split the statement.',
       `Nest a long UNION in parenthesised groups of at most ${D1_MAX_COMPOUND_TERMS} terms.`,
       'Run every registered statement against Miniflare\'s D1 in the app\'s tests: local SQLite allows 32,766 parameters and 500 terms.',
     ],

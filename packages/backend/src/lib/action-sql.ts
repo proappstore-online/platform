@@ -218,6 +218,28 @@ export function prepareVerifyWrites(
   return manifest.statements.map((sql) => bindStatement(sql, resolved, userId, now, magic, isChild));
 }
 
+/**
+ * Rewrite an action statement's `:name` placeholders to numbered `?N` (#575): each
+ * distinct name takes one slot, reused at every occurrence, so a statement that repeats
+ * `:pickup_lat` 82 times binds it once and stays under D1's 100-parameter limit.
+ * `:__uuid` is the exception: every occurrence is a fresh UUID, so each gets its own
+ * slot. `slots[i]` is the name bound at `?{i + 1}`. Keep the pattern equal to
+ * compliance `lib/d1-limits.ts`, which counts slots the same way.
+ */
+export function numberPlaceholders(rawSql: string): { sql: string; slots: string[] } {
+  const slots: string[] = [];
+  const index = new Map<string, number>();
+  const sql = rawSql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => {
+    let slot = name === '__uuid' ? undefined : index.get(name);
+    if (slot === undefined) {
+      slot = slots.push(name);
+      if (name !== '__uuid') index.set(name, slot);
+    }
+    return `?${slot}`;
+  });
+  return { sql, slots };
+}
+
 function bindStatement(
   rawSql: string,
   resolved: Record<string, unknown>,
@@ -236,13 +258,8 @@ function bindStatement(
   };
   for (const [name, value] of Object.entries(extraMagic)) magicValues[name] = () => value;
 
-  const names: string[] = [];
-  const sql = rawSql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, name: string) => {
-    names.push(name);
-    return '?';
-  });
-
-  const params = names.map((name) => {
+  const { sql, slots } = numberPlaceholders(rawSql);
+  const params = slots.map((name) => {
     if (name in magicValues) return magicValues[name]!();
     if (name in resolved) return resolved[name];
     throw new Error(`Unresolved parameter: ${name}`);

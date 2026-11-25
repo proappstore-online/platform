@@ -45,7 +45,7 @@ describe('deliverHook → action (#256)', () => {
     const sent: unknown[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { sent.push([url, JSON.parse(String(init.body))]); return Response.json({ meta: { changes: 1 } }); }));
     expect(await deliverHook(envWithManifest(hookAction), delivery())).toBeNull();
-    expect(sent).toEqual([['https://pas-data-t.test.workers.dev/execute', { sql: 'INSERT INTO pings (source, by) VALUES (?, ?)', params: ['ci', SYSTEM_HOOK_USER] }]]);
+    expect(sent).toEqual([['https://pas-data-t.test.workers.dev/execute', { sql: 'INSERT INTO pings (source, by) VALUES (?1, ?2)', params: ['ci', SYSTEM_HOOK_USER] }]]);
   });
   it('fails a non-JSON body, an action that is no longer a hook action, and a data-worker error', async () => {
     expect(await deliverHook(envWithManifest(hookAction), delivery({ body: new Uint8Array([0xff]) }))).toMatch(/not JSON/);
