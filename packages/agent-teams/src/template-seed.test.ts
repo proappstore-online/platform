@@ -47,19 +47,27 @@ describe('seedFiles — platform owns CI, seed carries no workflow', () => {
 /**
  * Drift detection: the seed's index.html must match the canonical template-app
  * on every <meta> tag that affects mobile behavior, PWA, SEO, and theming.
- * The template (pas/templates/template-app/web/index.html) is the source of
- * truth. If this test fails, update template-seed.ts to match the template —
- * never the other way around.
+ * The template (GitHub proappstore-online/template-app, web/index.html) is the
+ * source of truth. If this test fails, update template-seed.ts to match the
+ * template — never the other way around.
+ *
+ * CI clones only this repo, so the template is vendored at
+ * __fixtures__/template-app-index.html and the suite always runs (#583). The
+ * vendored copy is what the seed is checked against: when template-app's
+ * index.html changes, refresh the copy with
+ *   gh api repos/proappstore-online/template-app/contents/web/index.html --jq .content | base64 -d > packages/agent-teams/src/__fixtures__/template-app-index.html
+ * Where the sibling checkout (pas/templates/template-app) exists, a further test
+ * fails when the vendored copy has fallen behind it.
  */
-// The template lives in the sibling `templates/` repo, checked out next to
-// `platform` locally but NOT in CI (which only clones this repo). Skip the
-// drift suite when it's absent rather than erroring the whole run.
-const templatePath = resolve(__dirname, '../../../../templates/template-app/web/index.html');
-const templateAvailable = existsSync(templatePath);
+const vendoredPath = resolve(__dirname, '__fixtures__/template-app-index.html');
+const siblingPath = resolve(__dirname, '../../../../templates/template-app/web/index.html');
 
-describe.skipIf(!templateAvailable)('seedFiles — index.html matches template-app (drift detection)', () => {
-  // Guarded so collection doesn't throw when skipped (file absent in CI).
-  const templateHtml = templateAvailable ? readFileSync(templatePath, 'utf8') : '';
+it.skipIf(!existsSync(siblingPath))('the vendored template-app index.html equals the sibling template-app checkout', () => {
+  expect(readFileSync(vendoredPath, 'utf8')).toBe(readFileSync(siblingPath, 'utf8'));
+});
+
+describe('seedFiles — index.html matches template-app (drift detection)', () => {
+  const templateHtml = readFileSync(vendoredPath, 'utf8');
   const seedHtml = seedFiles('demo-app').get('index.html')!;
 
   /** Extract the content="" value of a <meta> tag by name or property. */

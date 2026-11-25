@@ -906,7 +906,7 @@ describe("deploy workflow build gate fails closed (#204)", { timeout: 30_000 }, 
     const bin = join(dir, ".bin");
     mkdirSync(bin);
     const log = join(dir, "calls.log");
-    writeFileSync(join(bin, "pnpm"), `#!/bin/bash\necho "pnpm $*" >> "${log}"\n[ "$1" = build ] && exec bash -c "$(jq -r '.scripts.build' package.json)"\nexit 0\n`);
+    writeFileSync(join(bin, "pnpm"), `#!/bin/bash\necho "pnpm $*" >> "${log}"\n[ "$1" = build ] && exec bash -c "$(node -p "require('./package.json').scripts.build")"\nexit 0\n`);
     writeFileSync(join(bin, "npx"), `#!/bin/bash\necho "npx $* (in $(basename "$PWD"))" >> "${log}"\n`);
     chmodSync(join(bin, "pnpm"), 0o755);
     chmodSync(join(bin, "npx"), 0o755);
