@@ -49,6 +49,6 @@ describe('verify actions in the Workers runtime', () => {
       output: { legal: true, over: true, result: '1-0', reason: 'checkmate', ply: 7, turn: 'b', in_check: true },
       writes: [{ changes: 1, last_row_id: 0 }],
     });
-    expect(written!.statements[0]!.params).toEqual(['1-0', 'checkmate', expect.any(Number), 'g1', 'gh:1', 'gh:1', true]);
+    expect(written!.statements[0]!.params).toEqual(['1-0', 'checkmate', expect.any(Number), 'g1', 'gh:1', true]); // :__user_id twice is one slot (#575)
   });
 });
