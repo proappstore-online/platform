@@ -187,7 +187,7 @@ export function registerProjectTools(
       });
       if (!planned.ok) return errText(`Refused: ${planned.error}`);
       const blocker = planned.plan.blockers[0];
-      if (blocker) return errText(mcpRefusal(blocker.code, app_id) ?? `Error: ${blocker.message}`);
+      if (blocker) return errText((planned.plan.repository.exists ? mcpRefusal(blocker.code, app_id) : null) ?? `Error: ${blocker.message}`);
 
       const outcome = await workflow.executePlan(user, planned.plan, {
         privateRepo: private_repo !== false,

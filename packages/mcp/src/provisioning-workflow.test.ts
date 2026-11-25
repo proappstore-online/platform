@@ -319,6 +319,33 @@ describe('provenance: proven or unknown, never today\'s head for an existing rep
   });
 });
 
+describe('#570: a missing repo still reads the app record', () => {
+  it('no record: create, and the record-state read was made', async () => {
+    const p = await plan();
+    expect(p).toMatchObject({ action: 'create', appRecord: 'none', blockers: [] });
+    expect(calls.map((c) => c.detail)).toContain(`/v1/apps/${APP}/record-state`);
+    expect(p.changes.join('\n')).toContain(`D1 database pas-data-${APP}, data worker and PAS app record`);
+  });
+
+  it("the caller's own record: create the repo, and say the existing D1 and data worker are reused", async () => {
+    world.record = 'owner';
+    const p = await plan();
+    expect(p).toMatchObject({ action: 'create', appRecord: 'owner', blockers: [] });
+    expect(p.changes.join('\n')).toContain(`reusing its D1 database pas-data-${APP} and data worker`);
+    expect(writes()).toEqual([]);
+  });
+
+  it("another account's record: refused, and confirming it creates nothing", async () => {
+    world.record = 'other';
+    const p = await plan();
+    expect(p).toMatchObject({ action: 'refused', appRecord: 'other', changes: [] });
+    expect(p.blockers.map((b) => b.code)).toEqual(['owned_by_another_account']);
+    expect(p.template.revision).toBeNull();
+    expect((await confirm(p)).kind).toBe('plan_blocked');
+    expect(writes()).toEqual([]);
+  });
+});
+
 describe('confirmPlan executes exactly the reviewed plan', () => {
   it('create: one copy at the planned visibility, the planned revision to /v1/provision, normal compliance', async () => {
     const p = await plan();

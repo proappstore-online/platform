@@ -358,7 +358,7 @@ describe('provision_pas_app', () => {
       { initIfEmpty: false },
     );
     expect(withPlaceholder(repo)).toEqual([]);
-    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
+    expect(JSON.parse(mockFetch.mock.calls.find((c) => String(c[0]).endsWith('/v1/provision'))![1].body)).toMatchObject({
       appId: 'school-clubs',
       skipCompliance: false,
       repoOwner: 'test-org',
@@ -429,7 +429,8 @@ describe('provision_pas_app', () => {
     expect(getText(result)).toContain(`Provisioning status: ${status}`);
     expect(result.isError === true).toBe(status === 'failed');
     expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
+    // #570: the plan reads the app record even for a missing repo; nothing else is called.
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).toEqual(['https://api.test.com/v1/apps/school-clubs/record-state']);
   });
 
   describe('template placeholders (#205)', () => {
@@ -507,6 +508,19 @@ describe('provision_pas_app', () => {
     expect(out).toContain('owned by another account');
     expect(out).toContain('choose a different app id');
     expect(mockGh.setRepoVariable).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
+  });
+
+  it('#570: refuses to create a missing repo whose app record belongs to another account', async () => {
+    mockGh.repoExists.mockResolvedValue(false);
+    mockFetch.mockImplementation(async (url: string) => String(url).includes('/record-state')
+      ? recordState('other')
+      : { ok: false, status: 403, text: () => Promise.resolve('not the app owner') });
+
+    const out = getText(await runProvisionPas({ app_id: 'manual-repo' }));
+
+    expect(out).toContain('test-org/manual-repo does not exist, but its PAS app record is owned by another account');
+    expect(mockGh.createRepoFromTemplate).not.toHaveBeenCalled();
     expect(mockFetch.mock.calls.map((c) => String(c[0]))).not.toContainEqual(expect.stringContaining('/v1/provision'));
   });
 

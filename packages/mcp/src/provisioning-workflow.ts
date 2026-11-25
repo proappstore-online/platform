@@ -635,8 +635,14 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     }
 
     if (!exists) {
+      // #570: an app record can outlive a missing repo (e.g. `pas publish` without one).
+      const state = await appRecordState(appId, user.token);
+      plan.appRecord = state;
+      if (state === "other" && !isAdmin) {
+        blockers.push({ code: "owned_by_another_account", message: `${org}/${appId} does not exist, but its PAS app record is owned by another account. Sign in as that account, or choose a different app id.` });
+        return { ok: true, plan };
+      }
       plan.action = "create";
-      plan.appRecord = "none";
       plan.repository.private = opts.privateRepo !== false;
       const head = await templateCommit(templateRepo, templateRef);
       if (head) {
@@ -751,7 +757,9 @@ export function createProvisioningWorkflow(env: WorkflowEnv, gh: GitHub) {
     changes.push(plan.compliance.required
       ? "run the required compliance checks; a failure stops before any infrastructure"
       : "skip compliance (platform admin request)");
-    changes.push(`provision the R2 route, D1 database pas-data-${plan.appId}, data worker and PAS app record (template ${plan.template.id}${rev})`);
+    changes.push(plan.action === "create" && plan.appRecord === "owner"
+      ? `provision the R2 route and update your existing PAS app record, reusing its D1 database pas-data-${plan.appId} and data worker (template ${plan.template.id}${rev})`
+      : `provision the R2 route, D1 database pas-data-${plan.appId}, data worker and PAS app record (template ${plan.template.id}${rev})`);
     changes.push("verify the repository, provisioning result, deploy status and host");
     return changes;
   }
