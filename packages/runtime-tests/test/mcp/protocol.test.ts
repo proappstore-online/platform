@@ -151,6 +151,15 @@ describe("PAS MCP with real HTTP transport and durable OAuth storage", () => {
       expect(tool.inputSchema.properties).not.toHaveProperty("token");
       expect(tool.annotations.readOnlyHint).toBe(true);
     }
+    // #578: the managed test-principal and scoped OIDC grant tools (#475, #577) are part of the
+    // published inventory, so a count that happens to match cannot hide one of them going missing.
+    const published = new Map(body.result.tools.map((t: { name: string; annotations: { readOnlyHint: boolean } }) => [t.name, t.annotations.readOnlyHint]));
+    const reads = ["list_oidc_session_grants", "read_oidc_session_grant", "list_test_principals", "read_test_principal",
+      "list_principal_grants", "list_test_principal_events", "preview_principal_grant"];
+    const writes = ["create_oidc_session_grant", "revoke_oidc_session_grant", "create_test_principal", "update_test_principal",
+      "disable_test_principal", "enable_test_principal", "create_principal_grant", "revoke_principal_grant"];
+    for (const name of reads) expect(published.get(name), name).toBe(true);
+    for (const name of writes) expect(published.get(name), name).toBe(false);
     const apps = await rpc(await access("gh:1"), "tools/call", { name: "list_apps", arguments: {} });
     expect(apps.body.result.isError).not.toBe(true);
     expect(apps.body.result.content[0].text).toContain("Example");
