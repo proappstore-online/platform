@@ -189,6 +189,14 @@ describe('actions as system:worker (#254)', () => {
     expect(sent[0]!.body).toEqual({ sql: 'INSERT INTO t (id, by) VALUES (?1, ?2)', params: ['r1', SYSTEM_WORKER_USER] });
   });
 
+  // #600: a worker's misnamed param is refused, naming it, rather than dropped.
+  it('refuses a param the action does not declare, before any SQL', async () => {
+    workerTool('add_row');
+    await expect(workerActionCall(env, 't', 'add_row', { id: 'r1', idd: 'typo' })).rejects.toThrow(/"add_row": Unknown parameter: idd\. This action takes: id/);
+    expect(await code(workerActionCall(env, 't', 'add_row', { id: 'r1', idd: 'typo' }))).toBe('BadRequest');
+    expect(sent).toHaveLength(0);
+  });
+
   it('refuses default-callers, scheduled, role-gated, verify and unknown actions before any SQL', async () => {
     workerTool('user_only', { callers: undefined });
     workerTool('sched', { callers: undefined, schedule: { cron: '*/5 * * * *', params: {} } });

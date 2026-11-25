@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { actionD1LimitError } from '@proappstore/compliance';
-import { batchPayload, prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, type ToolManifest } from './action-sql.js';
+import { batchPayload, prepareActionBatch, prepareActionQuery, prepareVerifyInput, prepareVerifyWrites, referencesChildFlag, unknownParamsError, type ToolManifest } from './action-sql.js';
 
 const manifest: ToolManifest = {
   name: 'list_mine',
@@ -43,14 +43,15 @@ describe('prepareActionQuery', () => {
       .toThrow('limit must be >= 0');
   });
 
-  it('keeps bounded numeric input in range and clamps it at the maximum', () => {
+  it('refuses a value over the maximum, naming the param and its limit, instead of clamping it (#600)', () => {
     const bounded = {
       ...manifest,
-      params: { ...manifest.params, limit: { type: 'integer', max: 10 } },
-    };
+      params: { ...manifest.params, limit: { type: 'integer', max: 10 }, ratio: { type: 'number', max: 1.5 } },
+    } as ToolManifest;
 
-    expect(prepareActionQuery(bounded, { active: true, limit: 5 }, 'gh:1').params).toEqual(['gh:1', true, 5]);
-    expect(prepareActionQuery(bounded, { active: true, limit: 15 }, 'gh:1').params).toEqual(['gh:1', true, 10]);
+    expect(prepareActionQuery(bounded, { active: true, limit: 10, ratio: 1.5 }, 'gh:1').params).toEqual(['gh:1', true, 10]);
+    expect(() => prepareActionQuery(bounded, { active: true, limit: 11, ratio: 1 }, 'gh:1')).toThrow('limit must be <= 10');
+    expect(() => prepareActionQuery(bounded, { active: true, limit: 1, ratio: 1.6 }, 'gh:1')).toThrow('ratio must be <= 1.5');
   });
 
   it('rejects unresolved SQL params', () => {
@@ -334,5 +335,30 @@ describe('D1 parameter count parity (#571, #575)', () => {
     expect(actionD1LimitError(tool(100))).toBeNull();
     expect(prepareActionQuery(tool(101), { a: 'x' }, 'u1').params).toHaveLength(101);
     expect(actionD1LimitError(tool(101))).toMatch(/binds 101 parameters/);
+  });
+});
+
+// #600: an agent sent `email` to an action that takes `invitee_email`; the key was dropped and the
+// invite was created without an email. A key the action does not declare is now named and refused.
+describe('unknownParamsError (#600)', () => {
+  const invite: ToolManifest = {
+    name: 'create_candidate_invite', description: 'Invite', operation: 'execute', requires_auth: true,
+    sql: 'INSERT INTO invites (email, by) VALUES (:invitee_email, :__user_id)',
+    params: { invitee_email: { type: 'string' }, note: { type: 'string', optional: true } },
+  };
+
+  it('names each undeclared key and what the action takes', () => {
+    expect(unknownParamsError(invite, { email: 'a@b.c' })).toBe('Unknown parameter: email. This action takes: invitee_email, note');
+    expect(unknownParamsError(invite, { email: 'a@b.c', name: 'x', note: 'n' })).toBe('Unknown parameters: email, name. This action takes: invitee_email, note');
+    expect(unknownParamsError({ params: {} }, { x: 1 })).toBe('Unknown parameter: x. This action takes no parameters');
+  });
+
+  it('accepts declared keys, an empty input, and the magic names the platform resolves itself', () => {
+    expect(unknownParamsError(invite, { invitee_email: 'a@b.c', note: null })).toBeNull();
+    expect(unknownParamsError(invite, {})).toBeNull();
+    expect(unknownParamsError({ params: undefined } as unknown as ToolManifest, {})).toBeNull();
+    expect(unknownParamsError(invite, { invitee_email: 'a@b.c', __user_id: 'attacker', __now: 1 })).toBeNull();
+    // An inherited property name is not a declared param.
+    expect(unknownParamsError(invite, { toString: 'x' })).toMatch(/^Unknown parameter: toString/);
   });
 });

@@ -17,6 +17,7 @@ import {
   prepareVerifyWrites,
   referencesChildFlag,
   resolveToolParams,
+  unknownParamsError,
   type ActionState,
   type ToolManifest,
 } from '../lib/action-sql.js';
@@ -198,6 +199,8 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
         ? body.params
         : null;
   if (!input) throw new HttpError('params must be an object', 400);
+  const unknownParams = unknownParamsError(manifest, input);
+  if (unknownParams) throw new HttpError(unknownParams, 400);
   // #579: a worker action is always audited (actor, time, outcome), role-gated or not. The audit row never holds params or a response.
   if (manifest.operation === 'worker' && caller && !roleGrants.has(c.req.raw)) roleGrants.set(c.req.raw, { actorId: caller.id, role: '' });
   const dryRun = body.dry_run === true;

@@ -12,7 +12,7 @@
  */
 import { MAX_WORKER_OBJECT_BYTES } from './app-worker-http.js';
 import type { Env } from '../types.js';
-import { actionCallers, prepareActionBatch, prepareActionQuery, referencesChildFlag, type ToolManifest } from './action-sql.js';
+import { actionCallers, prepareActionBatch, prepareActionQuery, referencesChildFlag, unknownParamsError, type ToolManifest } from './action-sql.js';
 import { isChildAccount } from './user-flags.js';
 import { activeAppWorker } from './app-worker-host.js';
 import { sha256Hex } from './app-tokens.js';
@@ -175,6 +175,8 @@ async function prepareWorkerCall(
     }
   }
   const input = (params ?? {}) as Record<string, unknown>;
+  const unknownParams = unknownParamsError(manifest, input);
+  if (unknownParams) throw new WorkerCallError('BadRequest', `"${name}": ${unknownParams}`);
   const userId = caller?.id ?? SYSTEM_WORKER_USER;
   // #513: a worker acting for a user binds that user's child flag; system:worker is not a person.
   const isChild = caller && referencesChildFlag(manifest) ? await isChildAccount(env.DB, caller.id) : false;

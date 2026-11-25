@@ -268,6 +268,21 @@ function bindStatement(
   return { sql, params };
 }
 
+/**
+ * #600: the keys of a caller's input that the action does not declare, as the error to refuse the
+ * call with, or null. Dropping them silently let an agent send `email` for `invitee_email` and get a
+ * "successful" invite with no email. `__`-prefixed names are the platform's magic params: resolved by
+ * the platform and never read from input (#513), so sending one is not refused.
+ */
+export function unknownParamsError(manifest: Pick<ToolManifest, 'params'>, input: Record<string, unknown>): string | null {
+  const declared = manifest.params ?? {};
+  const unknown = Object.keys(input).filter((key) => !Object.hasOwn(declared, key) && !key.startsWith('__'));
+  if (!unknown.length) return null;
+  const names = Object.keys(declared);
+  return `Unknown parameter${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
+    (names.length ? `This action takes: ${names.join(', ')}` : 'This action takes no parameters');
+}
+
 /** Resolve and type-check an action input. Registration uses this for the
  * schedule's fixed params; runtime preparation uses the exact same rules. */
 export function resolveToolParams(
@@ -294,7 +309,8 @@ export function resolveToolParams(
           value = Number(value);
           if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
           if (schema.max !== undefined && (value as number) < 0) throw new Error(`${name} must be >= 0`);
-          if (schema.max !== undefined && (value as number) > schema.max) value = schema.max;
+          // #600: refused, not clamped: a 0/1 flag sent 2 must not run as 1 and report success.
+          if (schema.max !== undefined && (value as number) > schema.max) throw new Error(`${name} must be <= ${schema.max}`);
           break;
         case 'timestamp_ms': {
           const ms = Number(value);
@@ -312,7 +328,7 @@ export function resolveToolParams(
           value = Number(value);
           if (Number.isNaN(value)) throw new Error(`${name} must be a number`);
           if (schema.max !== undefined && (value as number) < 0) throw new Error(`${name} must be >= 0`);
-          if (schema.max !== undefined && (value as number) > schema.max) value = schema.max;
+          if (schema.max !== undefined && (value as number) > schema.max) throw new Error(`${name} must be <= ${schema.max}`);
           break;
         case 'boolean':
           if (typeof value === 'string') {

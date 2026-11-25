@@ -100,6 +100,25 @@ describe('POST /v1/apps/:appId/actions/:name', () => {
     expect(body.params).toEqual(['gh:1', 10]);
   });
 
+  // #600: a key the action does not declare used to be dropped, so a misnamed param ran the action
+  // without it and reported success. It is refused before anything reaches the data worker.
+  it('refuses a param the action does not declare, naming it, without calling the data worker', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request(
+      '/v1/apps/interns/actions/list_mine',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: { limit: 10, lmit: 5 } }),
+      },
+      env(db(stmt({ first: { manifest: manifest() } }))),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/^Unknown parameter: lmit\. This action takes: /);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('omits X-Internal-Token when INTERNAL_TOKEN is not configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ rows: [] }));
     vi.stubGlobal('fetch', fetchMock);
