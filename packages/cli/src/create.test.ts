@@ -150,6 +150,27 @@ describe('pas create provisioning', () => {
     expect(html).toContain('https://door-drop.proappstore.online/');
     expect(html).not.toContain('APPNAME');
   });
+
+  it('never creates a GitHub repo itself, and points at the platform workflow for proappstore-online/<id> (#569)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/catalogue.json')) {
+        return Response.json({ templates: [{
+          id: 'template-app', repo: 'proappstore-online/template-app', ref: 'main', status: 'approved', default: true, deprecation: null,
+        }] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    await createApp('door-drop', { skipInstall: true, skipProvision: true });
+
+    expect(childProcess.spawn.mock.calls.map(([cmd]) => cmd)).not.toContain('gh');
+    const out = vi.mocked(process.stdout.write).mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('Create proappstore-online/door-drop through the platform: the provision_pas_app');
+    expect(out).toContain('Console publish');
+    expect(out).toContain('git remote add origin https://github.com/proappstore-online/door-drop.git');
+    expect(out).not.toContain('your own account');
+    expect(out).not.toContain('gh repo create');
+  });
 });
 
 describe('withDisplayTitle (#499)', async () => {

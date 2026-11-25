@@ -25,7 +25,6 @@ pas logout                          # clear session
 
 # Create
 pas create <app-id>                 # scaffold a new Pro app from the template
-pas create <app-id> --repo org/name # scaffold + create GitHub repo + push
 pas create <app-id> --with-worker   # also add worker/ — an app worker (see App workers)
 
 # Develop
@@ -95,19 +94,20 @@ with two starter screens, Home and About. Its navigation, gates and resilience
 layer work from the first render. Add screens to `NAV`; see
 [Getting Started](./getting-started.md#build-your-app-inside-appshell).
 
-The `--repo` flag creates a GitHub repo and pushes in one step:
-
-```bash
-pas create flights --repo Flights-Stays/flights
-```
-
-Without `--repo`, you create the repo manually:
+`pas create` does not create a GitHub repository. An app deploys only from
+`proappstore-online/<app-id>` (keyless deploy authorizes that repo and no
+other), and that repo is created by the platform's provisioning workflow: the
+`provision_pas_app` MCP tool (see [MCP Provisioning](#mcp-provisioning)) or
+Console publish. A repo in your own account or org can never deploy, and
+`gh repo create` bypasses the workflow (#569).
 
 ```bash
 pas create flights
 cd flights && pnpm dev
-# When ready:
-gh repo create my-org/flights --private --source . --remote origin --push
+# When ready: create proappstore-online/flights with provision_pas_app or Console publish, then
+git remote add origin https://github.com/proappstore-online/flights.git
+git fetch origin && git reset --soft origin/main && git commit -m "Flights"
+git push origin main
 pas publish
 ```
 

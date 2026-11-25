@@ -20,11 +20,17 @@ npm i -g @proappstore/cli
 pas login
 
 # Create a new app
-pas create my-app --repo my-org/my-app
+pas create my-app
 
 # Develop
 cd my-app
 pnpm dev
+
+# Create proappstore-online/my-app through the platform (the provision_pas_app
+# MCP tool, or Console publish), then put your code on top of it
+git remote add origin https://github.com/proappstore-online/my-app.git
+git fetch origin && git reset --soft origin/main && git commit -m "My App"
+git push origin main
 
 # Publish to the platform
 pas publish --name "My App" --category productivity

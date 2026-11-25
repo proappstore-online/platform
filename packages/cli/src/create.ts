@@ -67,7 +67,6 @@ interface CreateOptions {
   skipGit?: boolean;
   skipProvision?: boolean;
   token?: string;
-  repo?: string;
   /** #261: add `worker/` (an app worker, ADR-009) to the workspace. */
   withWorker?: boolean;
 }
@@ -131,20 +130,6 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     await run('git', ['init', '-q', '-b', 'main'], targetDir);
     await run('git', ['add', '-A'], targetDir);
     await run('git', ['commit', '-q', '-m', 'Initial commit from pas create'], targetDir);
-
-    // Optional: create GitHub repo and push
-    if (opts.repo) {
-      try {
-        process.stdout.write(`  Creating GitHub repo ${opts.repo}...\n`);
-        await run('gh', ['repo', 'create', opts.repo, '--private', '--source', '.', '--remote', 'origin', '--push'], targetDir);
-        process.stdout.write(`  [+] Repo created and pushed to ${opts.repo}\n`);
-      } catch {
-        process.stdout.write(`  [!] Failed to create repo. Create it manually:\n`);
-        process.stdout.write(`      gh repo create ${opts.repo} --private\n`);
-        process.stdout.write(`      git remote add origin https://github.com/${opts.repo}.git\n`);
-        process.stdout.write(`      git push -u origin main\n`);
-      }
-    }
   }
 
   if (!opts.skipProvision) {
@@ -192,24 +177,23 @@ export async function createApp(appId: string, opts: CreateOptions = {}): Promis
     process.stdout.write(`  [4/4] Skipping provision (--skip-provision)\n`);
   }
 
-  const hasRemote = opts.repo && !opts.skipGit;
+  // #569: keyless deploy authorizes proappstore-online/<appId> and nothing else,
+  // and that repo is created only by the platform's provisioning workflow.
   process.stdout.write(`
   Done! Replaced APPNAME in ${substitutionCount} files.
 
   Next steps:
     cd ${appId}
     pnpm dev
-${hasRemote ? `
+
   When ready to deploy:
-    git push origin main
-    pas publish
-` : `
-  When ready to deploy:
-    1. Create a GitHub repo in your own account/org
-    2. git remote add origin <your-repo-url>
-    3. git push -u origin main
-    4. pas publish
-`}
+    1. Create proappstore-online/${appId} through the platform: the provision_pas_app
+       MCP tool, or Console publish (https://console.proappstore.online)
+    2. git remote add origin https://github.com/proappstore-online/${appId}.git
+    3. git fetch origin && git reset --soft origin/main && git commit -m "${appName}"
+    4. git push origin main
+    5. pas publish
+
   Docs:    https://docs.proappstore.online/
   Standard: https://docs.proappstore.online/standard/   (how to build + audit; set authMode: 'platform-cookie')
   Console: https://console.proappstore.online

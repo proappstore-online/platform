@@ -44,10 +44,9 @@ program
   .option('--skip-git', 'Skip git init')
   .option('--skip-provision', 'Skip D1 + platform provisioning')
   .option('--token <token>', 'Session token (or set PAS_SESSION_TOKEN env var)')
-  .option('--repo <owner/name>', 'Create a GitHub repo and push (e.g. my-org/my-app)')
   .option('--template <id>', 'Approved template id from https://docs.proappstore.online/templates/ (default: template-app)')
   .option('--with-worker', 'Add worker/ — an app worker for schedules, webhooks and server routes (enabled per app by a platform admin)')
-  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string; repo?: string; template?: string; withWorker?: boolean }) => {
+  .action(async (appId: string, opts: { skipInstall?: boolean; skipGit?: boolean; skipProvision?: boolean; token?: string; template?: string; withWorker?: boolean }) => {
     await createApp(appId, opts);
   });
 
