@@ -24,6 +24,10 @@ pnpm --filter @proappstore/runtime-tests test:host
 pnpm --filter @proappstore/runtime-tests test:admin
 ```
 
+`test` runs every suite through `scripts/run-all.mjs` (#580): each config in its own process, a failing
+suite never stops the ones after it, a summary names every suite that failed, and the run exits non-zero
+if any did. A `vitest.*.ts` config the script does not list fails the run.
+
 The backend project runs as three sequential batches, each in its own vitest and workerd process
 (`scripts/run-backend-batches.mjs`, #543): two general batches and one holding the Room / WebSocket
 Durable Object files. Every file runs exactly once; a failing batch does not stop the others, there is no
