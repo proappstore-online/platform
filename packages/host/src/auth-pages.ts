@@ -175,16 +175,43 @@ function normaliseCode(raw: string | null): string | null {
 }
 
 /** Display name of the session's user, or null when there is no valid session. */
+/** Sign-in method by account id prefix (#601): someone who picked another method than the owner's has a second account. */
+const SIGN_IN_METHOD: Record<string, string> = { gh: "GitHub", google: "Google", cred: "email" };
+
 async function signedInAs(env: Env, token: string): Promise<string | null> {
   try {
     const me = await fetchMe(env, token);
     if (!me.ok) return null;
     const user = JSON.parse(me.body) as { login?: unknown; name?: unknown; email?: unknown; id?: unknown };
-    for (const v of [user.login, user.name, user.email, user.id]) if (typeof v === "string" && v) return v;
+    const method = typeof user.id === "string" ? SIGN_IN_METHOD[user.id.split(":")[0]!] : undefined;
+    for (const v of [user.login, user.name, user.email, user.id]) if (typeof v === "string" && v) return method ? `${v} (${method})` : v;
     return "your account";
   } catch {
     return null;
   }
+}
+
+/**
+ * #601: what a signed-in visitor sees when a private app refuses their navigation. Still a 403 and
+ * no-store; it says the app is private, which account is signed in, and offers a way to switch
+ * (sign out, then the platform sign-in page) instead of a bare "Forbidden".
+ */
+export async function privateAppRefusalPage(request: Request, env: Env, token: string): Promise<Response> {
+  const url = new URL(request.url);
+  const who = await signedInAs(env, token);
+  const signIn = `${AUTH_PREFIX}/signin?${new URLSearchParams({ return_to: `${url.pathname}${url.search}` })}`;
+  const body = `<h1>This app is private</h1>
+<p class="lede">Access is by invitation from its owner.</p>
+${who ? `<p class="fine">You are signed in as <strong>${esc(who)}</strong>.</p>` : ""}
+<button class="btn primary" type="button" id="switch">Sign in with a different account</button>`;
+  const script = `
+document.getElementById("switch").addEventListener("click", async () => {
+  await fetch("${AUTH_PREFIX}/logout", { method: "POST", credentials: "same-origin" }).catch(() => null);
+  location.assign(${jsonForScript(signIn)});
+});`;
+  const res = page("Private app", body, script, 403);
+  res.headers.set("X-PAS-Visibility", "private");
+  return res;
 }
 
 function page(title: string, body: string, script = "", status = 200): Response {

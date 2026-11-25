@@ -74,4 +74,30 @@ describe("host visibility gate: allow cache", () => {
     expect(join!.headers.get("Location")).toBe("https://diary.proappstore.online/.pas/auth/join?code=AB23CD");
     expect((await refuseUnlessVisible(nav("/notes"), env, "diary"))!.status).toBe(403);
   });
+
+  // #601: a refused navigation used to be a bare text "Forbidden". It is still a 403, but a page that
+  // says the app is private, which account is signed in (and how), and offers another account.
+  it("a signed-in caller refused on a navigation gets a private-app page naming the account; an asset keeps the plain 403", async () => {
+    const fetch = vi.fn(async (req: Request) => new URL(req.url).pathname === "/v1/auth/me"
+      ? Response.json({ id: "google:123", login: "Sam <Lee>" })
+      : Response.json({ mode: "private", allowed: false }));
+    const env = { API: { fetch } } as unknown as Env;
+    const nav = new Request("https://diary.proappstore.online/notes?x=1", { headers: { Cookie: "__Host-pas_session=t", "Sec-Fetch-Mode": "navigate" } });
+    const page = (await refuseUnlessVisible(nav, env, "diary"))!;
+    expect(page.status).toBe(403);
+    expect(page.headers.get("Content-Type")).toContain("text/html");
+    expect(page.headers.get("Cache-Control")).toBe("no-store");
+    expect(page.headers.get("X-PAS-Visibility")).toBe("private");
+    const html = await page.text();
+    expect(html).toContain("This app is private");
+    expect(html).toContain("Access is by invitation from its owner.");
+    expect(html).toContain("You are signed in as <strong>Sam &lt;Lee&gt; (Google)</strong>.");
+    expect(html).toContain('id="switch"');
+    expect(html).toContain("/.pas/auth/logout");
+    expect(html).toContain('"/.pas/auth/signin?return_to=%2Fnotes%3Fx%3D1"');
+
+    const asset = (await refuseUnlessVisible(request("t"), env, "diary"))!;
+    expect(asset.status).toBe(403);
+    expect(await asset.text()).toBe("Forbidden");
+  });
 });

@@ -44,6 +44,7 @@
  * isolate's entry at once.
  */
 import { clearSessionCookie, readCookie, SESSION_COOKIE_NAME } from "./auth-handler.js";
+import { privateAppRefusalPage } from "./auth-pages.js";
 import type { Env } from "./env.js";
 
 const API_BASE = "https://api.proappstore.online";
@@ -51,8 +52,9 @@ const API_BASE = "https://api.proappstore.online";
 /**
  * Null when the caller may use the private app; otherwise the refusal. No
  * session (or one the backend rejects) sends a navigation to sign-in and
- * anything else a 403; a signed-in caller who is not allowed gets 403; a failed
- * lookup is a 503, never an allow.
+ * anything else a 403; a signed-in caller who is not allowed gets 403 (on a
+ * navigation, a page saying why, as whom, and how to switch account, #601); a
+ * failed lookup is a 503, never an allow.
  */
 export async function refuseUnlessVisible(request: Request, env: Env, appId: string): Promise<Response | null> {
   const token = readCookie(request.headers.get("Cookie"), SESSION_COOKIE_NAME);
@@ -71,6 +73,8 @@ export async function refuseUnlessVisible(request: Request, env: Env, appId: str
   // redeem the code — the app's own /join page is behind this very gate.
   const invite = isNavigation(request) ? inviteCodeFromPath(new URL(request.url).pathname) : null;
   if (invite) return redirectTo(request, "/.pas/auth/join", { code: invite });
+  // #601: a navigation gets a page that explains the refusal and offers another account; anything else keeps the plain 403.
+  if (isNavigation(request)) return privateAppRefusalPage(request, env, token);
   return refusal(403, "Forbidden");
 }
 
