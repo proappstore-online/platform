@@ -213,7 +213,7 @@ describe('a hook mapped to an action (#256)', () => {
     expect(res.status).toBe(202);
     const id = (await env.DB.prepare("SELECT delivery_id FROM app_hook_deliveries WHERE hook = 'ping'").first<{ delivery_id: string }>())!.delivery_id;
     expect(await settled(id)).toMatchObject({ status: 'delivered' });
-    expect(seen).toEqual([{ sql: 'INSERT INTO pings (source, by) VALUES (?, ?)', params: ['uptime-robot', SYSTEM_HOOK_USER] }]);
+    expect(seen).toEqual([{ sql: 'INSERT INTO pings (source, by) VALUES (?1, ?2)', params: ['uptime-robot', SYSTEM_HOOK_USER] }]);
   });
 
   it('a hook-only action is refused over HTTP to a signed-in user', async () => {

@@ -182,7 +182,7 @@ describe('actions run as the grant\'s user (#260)', () => {
     fetchMock.get(`https://pas-data-t.${env.DATA_WORKER_HOST}`).intercept({ path: '/query', method: 'POST' })
       .reply(200, (req) => { queried.push(JSON.parse(String(req.body))); return { rows: [], meta: {} }; }).times(2);
     await pas.actions.call('my_rows', {}, { token: tok, invocation: INVOCATION, as: grant });
-    expect(queried[0]).toEqual({ sql: 'SELECT id FROM rows WHERE owner = ? LIMIT 10', params: ['gh:42'] });
+    expect(queried[0]).toEqual({ sql: 'SELECT id FROM rows WHERE owner = ?1 LIMIT 10', params: ['gh:42'] });
     await expect(pas.actions.call('mod_rows', {}, { token: tok, invocation: INVOCATION, as: grant })).rejects.toThrow(/^Forbidden:/);
     await env.DB.prepare("INSERT INTO app_roles (app_id, user_id, role_name) VALUES ('t', 'gh:42', 'moderator')").run();
     await pas.actions.call('mod_rows', {}, { token: tok, invocation: INVOCATION, as: grant });

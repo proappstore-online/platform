@@ -84,7 +84,7 @@ describe('PAS actions as system:worker (#254)', () => {
   it('actions.call runs a worker action on the data worker with :__user_id = system:worker', async () => {
     answers('/execute', () => ({ meta: { changes: 1 } }));
     expect(await pas({ appId: 't' }).actions.call('add_row', { id: 'r1' }, ctx())).toMatchObject({ meta: { changes: 1 } });
-    expect(queried[0]!.body).toEqual({ sql: 'INSERT INTO rows (id, by) VALUES (?, ?)', params: ['r1', SYSTEM_WORKER_USER] });
+    expect(queried[0]!.body).toEqual({ sql: 'INSERT INTO rows (id, by) VALUES (?1, ?2)', params: ['r1', SYSTEM_WORKER_USER] });
   });
 
   it('a worker-only action is refused over HTTP with a valid session; a default action is refused to the worker', async () => {
