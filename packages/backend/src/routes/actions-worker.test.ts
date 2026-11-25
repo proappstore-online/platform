@@ -116,7 +116,7 @@ describe('worker actions (#579)', () => {
     expect((await call({ manifest: worker({ auth: undefined, step_up: true }), token }, TOKEN).res).status).toBe(403);
   });
 
-  it('validates params with the SQL-action rules: 400 on a missing one, undeclared ones dropped', async () => {
+  it('validates params with the SQL-action rules: 400 on a missing one or an undeclared one (#600); only declared ones reach the worker', async () => {
     const invoke = stubWorker(reply(200, {}));
     const missing = await call({ roles: ['manager'] }, MANAGER, { params: {} }).res;
     expect(missing.status).toBe(400);
@@ -124,7 +124,12 @@ describe('worker actions (#579)', () => {
     expect((await call({ roles: ['manager'] }, MANAGER, { params: 'x' }).res).status).toBe(400);
     expect(invoke).not.toHaveBeenCalled();
 
-    await call({ roles: ['manager'] }, MANAGER, { params: { org_id: 'o1', extra: 'x' } }).res;
+    const undeclared = await call({ roles: ['manager'] }, MANAGER, { params: { org_id: 'o1', extra: 'x' } }).res;
+    expect(undeclared.status).toBe(400);
+    expect(((await undeclared.json()) as { error: string }).error).toMatch(/^Unknown parameter: extra\./);
+    expect(invoke).not.toHaveBeenCalled();
+
+    await call({ roles: ['manager'] }, MANAGER, { params: { org_id: 'o1' } }).res;
     const envelope = invoke.mock.calls[0]![1] as unknown as { payload: { body: string } };
     expect(JSON.parse(envelope.payload.body).params).toEqual({ org_id: 'o1', note: null });
   });
