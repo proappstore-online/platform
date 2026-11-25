@@ -136,6 +136,9 @@ interface PreparedCall {
 async function prepareWorkerCall(
   env: Pick<Env, 'DB'>, appId: string, name: unknown, params: unknown, caller: CallerIdentity | null = null,
   manifests?: Map<string, Promise<ToolManifest>>,
+  // #600: the app's worker supplies its params, so an undeclared one is refused. The platform's own callers
+  // (queryAsUser for room access) pass a fixed set an action may only partly declare, and opt out.
+  strictParams = true,
 ): Promise<PreparedCall> {
   if (typeof name !== 'string' || !name) throw new WorkerCallError('BadRequest', 'action name is required');
   if (params !== undefined && (params === null || typeof params !== 'object' || Array.isArray(params))) {
@@ -175,7 +178,7 @@ async function prepareWorkerCall(
     }
   }
   const input = (params ?? {}) as Record<string, unknown>;
-  const unknownParams = unknownParamsError(manifest, input);
+  const unknownParams = strictParams ? unknownParamsError(manifest, input) : null;
   if (unknownParams) throw new WorkerCallError('BadRequest', `"${name}": ${unknownParams}`);
   const userId = caller?.id ?? SYSTEM_WORKER_USER;
   // #513: a worker acting for a user binds that user's child flag; system:worker is not a person.
@@ -214,7 +217,8 @@ async function dataWorker(env: Env, appId: string, endpoint: string, payload: un
  * peers every minute and would otherwise fill the trail.
  */
 export async function queryAsUser(env: Env, appId: string, name: string, params: Record<string, unknown>, user: CallerIdentity): Promise<unknown[]> {
-  const call = await prepareWorkerCall(env, appId, name, params, user);
+  // Room access (#351) sends `room` and `key`; an authorize action may declare either.
+  const call = await prepareWorkerCall(env, appId, name, params, user, undefined, false);
   if (call.endpoint !== 'query') throw new WorkerCallError('Forbidden', `"${name}" must be a query action`);
   const answer = await dataWorker(env, appId, 'query', call.statements[0]) as { rows?: unknown };
   return Array.isArray(answer.rows) ? answer.rows : [];

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_BATCH_STATEMENTS, MAX_PAS_CALLS_PER_INVOCATION, SYSTEM_WORKER_USER, WorkerCallError,
-  authorizeWorkerCall, workerActionBatch, workerActionCall, workerLog, workerSecretGet, workerStorageGet,
+  authorizeWorkerCall, queryAsUser, workerActionBatch, workerActionCall, workerLog, workerSecretGet, workerStorageGet,
   workerStorageKey, workerStoragePut,
 } from './app-worker-calls.js';
 import { AppWorkerApi } from '../rpc/app-worker-api.js';
@@ -310,6 +310,14 @@ describe('actions as the caller of an http request (#260)', () => {
   });
   // Minted for envelope e1, attempt 1: the invocation ctx() names (#318).
   const grant = (over: Row = {}) => mintCallerGrant(env, 't', { id: 'gh:42', roles: ['user'] }, { id: 'e1', attempt: 1 }).then((g) => ({ ...g, ...over }));
+
+  // #600 is for input the app's worker supplies. Room access (#351) calls a room's authorize action with
+  // the fixed { room, key }, and the action may declare only one of them, as the rooms docs allow.
+  it('queryAsUser runs an authorize action that declares only `key`, though `room` is sent too', async () => {
+    userTool('can_join', { params: { key: { type: 'string' } }, sql: 'SELECT 1 AS ok FROM members WHERE campaign = :key AND user_id = :__user_id LIMIT 1' });
+    await queryAsUser(env, 't', 'can_join', { room: 'doors:c1', key: 'c1' }, { id: 'gh:42', roles: ['user'] });
+    expect(sent[0]!.body).toEqual({ sql: 'SELECT 1 AS ok FROM members WHERE campaign = ?1 AND user_id = ?2 LIMIT 1', params: ['c1', 'gh:42'] });
+  });
 
   it('runs a user action with :__user_id = the grant\'s user', async () => {
     userTool('my_notes');
