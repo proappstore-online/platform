@@ -193,6 +193,26 @@ describe('POST /v1/provision', () => {
     expect(stepNames).not.toContain('DNS');
   });
 
+  it('#568: a missing repo is reported as a non-ok repository step naming the supported way to create it', async () => {
+    globalThis.fetch = multiFetch({
+      'api.github.com/repos/proappstore-online/myapp/git/trees': { status: 404, body: { message: 'Not Found' } },
+      'd1/database': { status: 200, body: { success: true, result: { uuid: 'db-uuid-123' } } },
+    });
+    const res = await app.request('/v1/provision', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOK}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'myapp' }),
+    }, makeEnv({}, mockD1()));
+
+    const data = await res.json() as { steps: { name: string; status: string; detail: string }[] };
+    const repo = data.steps.find((s) => s.name === 'repository');
+    expect(repo).toMatchObject({ status: 'skip' });
+    expect(repo!.detail).toMatch(/^missing — proappstore-online\/myapp does not exist/);
+    expect(repo!.detail).toContain('provision_pas_app');
+    expect(repo!.detail).not.toContain('gh repo create');
+    expect(data.steps.map((s) => s.name)).not.toContain('compliance');
+  });
+
   it('handles D1 already exists (idempotent)', async () => {
     const db = mockD1();
     let d1CallCount = 0;

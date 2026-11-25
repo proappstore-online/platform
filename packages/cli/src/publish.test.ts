@@ -115,3 +115,38 @@ describe('pas publish applies migrations.json before registering tools (#459)', 
     expect(calls).toEqual(['migrate', 'tools']);
   });
 });
+
+// #568: with no proappstore-online/<appId>, nothing deploys the frontend. The
+// backend reports a non-ok `repository` step; the CLI must not call that a publish.
+describe('pas publish with no repository (#568)', () => {
+  const stderr = () => vi.mocked(process.stderr.write).mock.calls.map((c) => String(c[0])).join('');
+  const stdout = () => vi.mocked(process.stdout.write).mock.calls.map((c) => String(c[0])).join('');
+
+  it('exits non-zero and names the supported way to create the repo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/v1/provision')) {
+        return Response.json({
+          appId: 'repos', dataWorkerUrl: '', appUrl: '', success: true,
+          steps: [{ name: 'repository', status: 'skip', detail: 'missing — proappstore-online/repos does not exist' }],
+        });
+      }
+      if (url.endsWith('/v1/apps/repos/tools')) {
+        registered.push(JSON.parse(String(init.body)));
+        return Response.json({ registered: 1 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    await expect(publishApp({ token: 'tok' } as never)).rejects.toThrow('exit 1');
+    expect(stderr()).toContain('Incomplete: proappstore-online/repos does not exist');
+    expect(stderr()).toContain('provision_pas_app');
+    expect(stderr()).toContain('Console publish');
+    expect(stderr()).not.toContain('gh repo create');
+    expect(stdout()).not.toContain('Published.');
+  });
+
+  it('a publish with the repo present still succeeds', async () => {
+    await publishApp({ token: 'tok' } as never);
+    expect(stdout()).toContain('Published.');
+  });
+});

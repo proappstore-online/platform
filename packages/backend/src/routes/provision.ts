@@ -572,7 +572,13 @@ export async function provisionApp(c: Context<{ Bindings: Env }>, body: Provisio
     } catch (e) {
       const msg = (e as Error).message;
       if (/\(404\)/.test(msg)) {
-        steps.push({ name: 'compliance', status: 'skip', detail: 'Repo not found — first publish; compliance runs via CI on push' });
+        // #568: without the repo nothing ever deploys the frontend, and nothing
+        // later notices. A non-ok `repository` step the CLI treats as incomplete.
+        steps.push({
+          name: 'repository',
+          status: 'skip',
+          detail: `missing — ${loc.owner}/${loc.repo} does not exist, so nothing will deploy the app. Create it with the provision_pas_app MCP tool or Console publish, then re-run.`,
+        });
       } else {
         steps.push({ name: 'compliance', status: 'fail', detail: `Compliance check error: ${msg}` });
         return c.json({ appId, steps, dataWorkerUrl: '', appUrl: '', success: false }, 412);

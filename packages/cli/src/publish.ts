@@ -209,6 +209,17 @@ export async function publishApp(opts: PublishOptions): Promise<void> {
     }
   }
 
+  // #568: the data plane is provisioned, but with no proappstore-online/<appId>
+  // nothing ever deploys the frontend. That is not a successful publish.
+  if (data.success && data.steps.some((s) => s.name === 'repository' && s.status !== 'ok')) {
+    process.stderr.write(
+      `\n  Incomplete: proappstore-online/${appId} does not exist, so nothing will deploy the app.\n` +
+        `  Create it through the platform — the provision_pas_app MCP tool, or Console publish —\n` +
+        `  then push your code to it and re-run pas publish (it is idempotent).\n`,
+    );
+    process.exit(1);
+  }
+
   if (data.success) {
     process.stdout.write(`\n  Published. Push your code to deploy:\n`);
     process.stdout.write(`    git push origin main\n\n`);

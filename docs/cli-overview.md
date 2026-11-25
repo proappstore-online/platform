@@ -189,6 +189,12 @@ canonical deploy workflow mints scoped R2 credentials through GitHub OIDC
 
 Idempotent — re-running fills in only missing pieces.
 
+`pas publish` needs the repository `proappstore-online/<app-id>`: keyless deploy
+only authorizes that repo. When it does not exist, the backend reports a
+`repository: missing` step and `pas publish` exits non-zero, because nothing
+would ever deploy the app (#568). Create the repo with the `provision_pas_app`
+MCP tool (below) or Console publish, never `gh repo create`.
+
 ## MCP Provisioning
 
 The ProAppStore MCP server exposes the same first-time provisioning path for
