@@ -7,6 +7,15 @@ import { BASE, goLive, json, mockNetwork, resetTables, seedApp, seedUser, sessio
 
 const env = providedEnv as unknown as Env;
 
+/**
+ * The uids the Room Durable Object is holding a socket for (#581). The route refuses a caller before the
+ * object is reached, and the re-check removes a peer before closing its socket, so membership here is a
+ * positive, timing-free proof that a socket is still open — unlike racing its close against a timer.
+ */
+const peersIn = (appId: string, roomId: string) =>
+  runInDurableObject(env.ROOM.get(env.ROOM.idFromName(roomObjectName(appId, roomId))), (room) =>
+    [...(room as unknown as { peers: Map<WebSocket, { uid: string }> }).peers.values()].map((p) => p.uid).sort());
+
 // #259 (part of #251): a private app — declared in mcp.json, stored in
 // app_visibility — is usable only by its team and the declared app roles:
 // visibility/me, its actions, its tool list and the storefront all agree. Real
@@ -345,8 +354,7 @@ describe('private apps: public storage, counters and rooms (#259 review)', () =>
     const refused = await join('gh:3');
     expect(await refused.closed).toEqual({ code: 4401, reason: 'app_private' });
     const allowed = await join('gh:2');
-    const outcome = await Promise.race([allowed.closed, new Promise((r) => setTimeout(() => r('open'), 50))]);
-    expect(outcome).toBe('open');
+    expect(await peersIn('diary', 'lobby')).toEqual(['gh:2']);
     allowed.ws.close();
   });
 });
@@ -425,12 +433,12 @@ describe('private apps residuals: per-user KV/storage and open room sockets (#27
 
     // Still allowed: the tick closes nothing.
     expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect(await Promise.race([viewer.closed, new Promise((r) => setTimeout(() => r('open'), 50))])).toBe('open');
+    expect(await peersIn('diary', 'revoke')).toEqual(['gh:1', 'gh:2']);
 
     await env.DB.prepare("DELETE FROM app_roles WHERE app_id = 'diary' AND user_id = 'gh:2'").run();
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await viewer.closed).toEqual({ code: 4401, reason: 'app_private' });
-    expect(await Promise.race([owner.closed, new Promise((r) => setTimeout(() => r('open'), 50))])).toBe('open');
+    expect(await peersIn('diary', 'revoke')).toEqual(['gh:1']);
     owner.ws.close();
   });
 

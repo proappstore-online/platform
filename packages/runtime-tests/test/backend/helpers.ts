@@ -45,7 +45,9 @@ export async function goLive(appId: string): Promise<void> {
 }
 
 export async function resetTables(): Promise<void> {
-  for (const t of ['app_logs', 'app_log_usage', 'app_roles', 'app_tools', 'app_endpoint_audit', 'user_app_tokens', 'team_members', 'apps', 'users']) {
+  // app_test_runs and app_alerts too (#581): a deferred QA deploy nudge or an alert evaluation left over from
+  // another file must not decide what alerts.test.ts sees.
+  for (const t of ['app_test_runs', 'app_alerts', 'app_logs', 'app_log_usage', 'app_roles', 'app_tools', 'app_endpoint_audit', 'user_app_tokens', 'team_members', 'apps', 'users']) {
     await env.DB.prepare(`DELETE FROM ${t}`).run();
   }
 }
