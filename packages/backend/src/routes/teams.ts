@@ -4,12 +4,45 @@ import { HttpError, isAdminId, requireUser, requireAppAccess, requireAppOwner, T
 import { wrap, privateNoStore } from '../lib/route-wrap.js';
 import { sendEmail, type EmailConfig } from '../lib/email.js';
 import { hideProfile, moderationView, parseProfileInput, readOwnProfile, saveOwnProfile, withdrawOwnProfile } from '../lib/public-team.js';
+import { ownContributorReputation } from '../lib/contributor-reputation.js';
+import { readRecruitment, saveRecruitment } from '../lib/team-recruitment.js';
 
 export const teamRoutes = new Hono<{ Bindings: Env }>();
 // #378: owner-only reads are never cached.
 teamRoutes.use('/apps/:appId/team', privateNoStore);
 teamRoutes.use('/apps/:appId/team/public', privateNoStore);
 teamRoutes.use('/apps/:appId/team/public/*', privateNoStore);
+teamRoutes.use('/me/developer-reputation', privateNoStore);
+teamRoutes.use('/apps/:appId/team/recruitment', async (c, next) => {
+  c.header('Cache-Control', 'private, no-store');
+  await next();
+});
+
+async function recruitmentOwner(c: Parameters<typeof requireUser>[0], appId: string) {
+  const user = await requireAppOwner(c, appId);
+  if (user.via || user.credentialContext?.kind !== 'first_party_session') throw new HttpError('sign in as yourself to manage recruitment', 403);
+  return user;
+}
+
+teamRoutes.get('/apps/:appId/team/recruitment', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const user = await recruitmentOwner(c, appId);
+  return c.json(await readRecruitment(c.env.DB, appId, user));
+}));
+
+teamRoutes.put('/apps/:appId/team/recruitment', wrap(async (c) => {
+  const appId = c.req.param('appId')!;
+  const user = await recruitmentOwner(c, appId);
+  const body = await jsonBody<{ accepting_requests?: unknown }>(c.req.raw);
+  if (typeof body.accepting_requests !== 'boolean') throw new HttpError('accepting_requests must be a boolean', 400);
+  return c.json(await saveRecruitment(c.env.DB, appId, user, body.accepting_requests, Date.now()));
+}));
+
+teamRoutes.get('/me/developer-reputation', wrap(async (c) => {
+  const user = await requireUser(c);
+  if (user.via || user.credentialContext?.kind !== 'first_party_session') throw new HttpError('sign in as yourself to read your contribution profile', 403);
+  return c.json(await ownContributorReputation(c.env.DB, user.id, Date.now()));
+}));
 
 /** Resolve a GitHub username to a gh:<id> user ID. Returns null on failure. */
 async function resolveGitHubUser(username: string, ghToken?: string): Promise<string | null> {

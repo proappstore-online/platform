@@ -42,7 +42,13 @@ describe('authorization', () => {
   });
 
   it('a stranger is refused, even for a public app, and gets no figures', async () => {
-    for (const p of ['/apps/shop/contributions', '/apps/shop/contributions/people']) expect((await get(p, STRANGER)).status).toBe(403);
+    gh.history = [commit()];
+    await read();
+    for (const p of ['/apps/shop/contributions', '/apps/shop/contributions/people']) {
+      const denied = await get(p, STRANGER);
+      expect(denied.status).toBe(403);
+      expect(await denied.r.text()).not.toMatch(/repository|freshness|github_repo_id|walk_head_sha|walk_page/);
+    }
   });
 
   it('a team viewer and the owner can read; an unknown app is 404', async () => {
@@ -66,14 +72,22 @@ describe('authorization', () => {
     gh.history = [commit()];
     await read();
     const { body } = await get('/apps/shop/contributions?repo=evil/other&repository=evil/other&github_repo_id=7');
-    expect(body.repository.full_name).toBe('proappstore-online/shop');
+    expect(body.repository).toMatchObject({ full_name: 'proappstore-online/shop', github_repo_id: gh.repo.id });
   });
 });
 
 describe('distinct states, never a false zero', () => {
+  it.each(['running', 'incomplete'])('a %s refresh is partial even when the previous backfill is complete and fresh', async (state) => {
+    gh.history = [commit({ adds: 4 })];
+    await read({ now: Date.now() });
+    await db.prepare("UPDATE project_contribution_sync SET state = ?1, walk_id = 'replacement-walk', rewrite_detected_at = ?2 WHERE app_id = 'shop'").bind(state, Date.now()).run();
+    for (const path of ['/apps/shop/contributions', '/apps/shop/contributions/people']) {
+      expect((await get(path)).body).toMatchObject({ state: 'partial', complete: false });
+    }
+  });
   it('unavailable before the first read', async () => {
     const { body } = await get('/apps/shop/contributions');
-    expect(body).toMatchObject({ state: 'unavailable', complete: false, totals: { additions: 0, commits: 0 } });
+    expect(body).toMatchObject({ state: 'unavailable', complete: false, repository: null, freshness: { sync_state: null, walk_head_sha: null, walk_page: null }, totals: { additions: 0, commits: 0 } });
     expect(body.state_reason).toMatch(/not been read/);
     expect((await get('/apps/shop/contributions/people')).body).toMatchObject({ state: 'unavailable', people: [], next: null });
   });
@@ -82,14 +96,14 @@ describe('distinct states, never a false zero', () => {
     gh.history = Array.from({ length: 6 }, () => commit({ adds: 2 }));
     await read({ pageSize: 2, budget: 3 });
     const { body } = await get('/apps/shop/contributions');
-    expect(body).toMatchObject({ state: 'partial', complete: false });
+    expect(body).toMatchObject({ state: 'partial', complete: false, repository: { github_repo_id: gh.repo.id }, freshness: { sync_state: 'incomplete', walk_head_sha: gh.history[0]!.sha, walk_page: 2 } });
     expect(body.totals.additions).toBe(6);
   });
 
   it('ok when complete and fresh', async () => {
     gh.history = [commit({ adds: 4 })];
     await read({ now: Date.now() });
-    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'ok', complete: true });
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'ok', complete: true, freshness: { sync_state: 'complete', walk_head_sha: null, walk_page: 1, head_sha: gh.history[0]!.sha } });
   });
 
   it('empty only after the whole history was read and holds nothing eligible', async () => {
@@ -121,9 +135,10 @@ describe('distinct states, never a false zero', () => {
   it('unavailable when the repository identity changed', async () => {
     gh.history = [commit()];
     await read();
+    const boundId = gh.repo.id;
     gh.repo = { ...gh.repo, id: 4242 };
     await read({ now: NOW + 1 });
-    expect((await get('/apps/shop/contributions')).body.state).toBe('unavailable');
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'unavailable', repository: { github_repo_id: boundId, status: 'identity_changed' } });
   });
 
   it('reports a rate limit without an error message from GitHub', async () => {

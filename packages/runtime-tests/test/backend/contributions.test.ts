@@ -100,12 +100,12 @@ describe('project contributions on D1 (#544)', () => {
     gh.history = Array.from({ length: 45 }, () => commit({ adds: 2 }));
     const head = gh.history[0]!.sha;
     expect(await runContributionTick(env.DB, gh, NOW)).toMatchObject({ refreshed: [{ outcome: 'budget_exhausted' }] });
-    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'partial', complete: false, totals: { additions: 80 } });
-    expect(await env.DB.prepare("SELECT walk_head_sha, backfill_complete FROM project_contribution_sync WHERE app_id = 'shop'").first()).toEqual({ walk_head_sha: head, backfill_complete: 0 });
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ state: 'partial', complete: false, repository: { github_repo_id: gh.repo.id }, totals: { additions: 80 }, freshness: { sync_state: 'incomplete', walk_head_sha: head, walk_page: 1, backfill_complete: false } });
+    expect((await get('/apps/shop/contributions/people')).body.freshness).toMatchObject({ sync_state: 'incomplete', walk_head_sha: head, walk_page: 1 });
     gh.history.unshift(commit({ adds: 7 }));
     expect(await runContributionTick(env.DB, gh, NOW + 5 * 60_000)).toMatchObject({ refreshed: [{ appId: 'shop', outcome: 'complete' }] });
     expect(await env.DB.prepare("SELECT COUNT(*) AS total, COUNT(DISTINCT sha) AS distinct_shas FROM project_commits WHERE app_id = 'shop'").first()).toEqual({ total: 45, distinct_shas: 45 });
-    expect((await get('/apps/shop/contributions')).body).toMatchObject({ complete: true, totals: { additions: 90 }, freshness: { head_sha: head } });
+    expect((await get('/apps/shop/contributions')).body).toMatchObject({ complete: true, totals: { additions: 90 }, freshness: { sync_state: 'complete', walk_head_sha: null, walk_page: 1, head_sha: head } });
     await runContributionTick(env.DB, gh, NOW + 20 * 60_000);
     expect((await get('/apps/shop/contributions')).body).toMatchObject({ complete: true, totals: { additions: 97 }, freshness: { head_sha: gh.history[0]!.sha } });
     expect(gh.calls.getCommitFiles).toBe(46);

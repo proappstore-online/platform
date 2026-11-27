@@ -86,6 +86,14 @@ stay private. A signed-in non-member gets `403`, an unknown app `404`. Responses
 (default 25). `cursor` is opaque (`rank.additions.id`) and is returned as `next.cursor` until the last page (`next:
 null`). Bad values are `400`.
 
+The authorized summary includes `repository.github_repo_id`, the immutable id recorded by ingestion (null until
+verified). It remains the original bound id when `repository.status` is `identity_changed`; it never adopts the
+replacement repository's id. Both summary and people responses expose `freshness.sync_state`, `walk_head_sha` and
+`walk_page` alongside the existing attempt/success times and completed `head_sha`. These are persisted scheduler
+checkpoints, not a progress percentage. Before enrollment all three are null; a paused walk retains its pinned head
+and page; completion clears the walk head and resets the page to 1. Reads do not enqueue or refresh ingestion.
+These diagnostics use the same private, app-authorized routes as the figures and expose no credentials or raw errors.
+
 ### States
 
 Every response says what it is, with `state` and a plain `state_reason`:

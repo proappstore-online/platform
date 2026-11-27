@@ -25,7 +25,7 @@
 import { Hono, type Context } from 'hono';
 import { HttpError, requireAppOwner } from '../lib/auth.js';
 import { privateNoStore } from '../lib/route-wrap.js';
-import { getAppVisibility } from '../lib/visibility.js';
+import { teamRequestsOpen, teamRequestsOpenCondition } from '../lib/team-recruitment.js';
 import type { Env } from '../types.js';
 
 export const ENQUIRY_IP_LIMIT = 5;
@@ -222,7 +222,8 @@ function teamJoinProblem(name: string, email: string, message: string): string |
 }
 
 /**
- * Only a public app takes a team_join enquiry; a private or missing app is answered identically (404).
+ * Only a listed public app with open recruitment takes a team_join enquiry;
+ * unavailable apps are answered identically (404 for JSON, fixed 303 for native about-site forms).
  * The request must come from the app's own about- site or the storefront (exact origins); the
  * contact endpoint above keeps its stricter about--only check. Honeypot, size, shape and the atomic
  * rate limits are those of the contact form, shared with it: a join request cannot add capacity.
@@ -232,20 +233,28 @@ function teamJoinProblem(name: string, email: string, message: string): string |
 enquiryRoutes.post('/storefront/apps/:appId/enquiries/team-join', async (c) => {
   const appId = c.req.param('appId')!;
   c.header('Cache-Control', 'no-store');
-  if (!/^[a-z][a-z0-9-]{0,56}$/.test(appId) || !(await c.env.DB.prepare('SELECT 1 FROM apps WHERE id = ?').bind(appId).first())
-    || (await getAppVisibility(c.env.DB, appId)).mode === 'private') {
-    return c.text('not found', 404);
-  }
+  if (!/^[a-z][a-z0-9-]{0,56}$/.test(appId)) return c.text('not found', 404);
   const origin = c.req.header('Origin');
+  const isForm = /^application\/x-www-form-urlencoded(?:\s*;|$)/i.test(c.req.header('Content-Type') ?? '');
+  const redirectForm = isForm && origin === aboutOrigin(appId);
+  const answer = (outcome: Outcome | 'unavailable', status: 201 | 400 | 404 | 429, extra: Record<string, unknown> = {}) =>
+    redirectForm ? c.redirect(`${aboutOrigin(appId)}/?team_join=${outcome}#team-join-${outcome}`, 303)
+      : outcome === 'unavailable' ? c.text('not found', 404)
+        : c.json({ ok: outcome === 'sent', ...(outcome === 'sent' ? {} : { error: outcome }), ...extra }, status);
+  if (!(await teamRequestsOpen(c.env.DB, appId))) return answer('unavailable', 404);
   if (origin !== aboutOrigin(appId) && origin !== STOREFRONT_ORIGIN) throw new HttpError("team requests are accepted from the app's about- site or the storefront only", 403);
+  if (isForm && !redirectForm) throw new HttpError("team request forms are accepted from the app's about- site only; send JSON from the storefront", 415);
   if (Number(c.req.header('Content-Length') ?? 0) > MAX_BODY_BYTES) throw new HttpError('request too large', 413);
-  if (!/application\/json/i.test(c.req.header('Content-Type') ?? '')) throw new HttpError('send JSON', 415);
+  if (!isForm && !/application\/json/i.test(c.req.header('Content-Type') ?? '')) throw new HttpError('send JSON or an encoded form', 415);
 
-  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-  const invalid = (detail: string) => c.json({ ok: false, error: 'invalid', detail }, 400);
+  const raw = await c.req.text();
+  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) throw new HttpError('request too large', 413);
+  let body: Record<string, unknown> | null = null;
+  try { body = isForm ? Object.fromEntries(new URLSearchParams(raw)) : JSON.parse(raw); } catch { /* invalid below */ }
+  const invalid = (detail: string) => answer('invalid', 400, { detail });
   if (!body || typeof body !== 'object' || Array.isArray(body)) return invalid('unreadable body');
   // Honeypot: answer exactly like a success, store nothing.
-  if (typeof body[ENQUIRY_HONEYPOT] === 'string' && (body[ENQUIRY_HONEYPOT] as string).trim() !== '') return c.json({ ok: true }, 201);
+  if (typeof body[ENQUIRY_HONEYPOT] === 'string' && (body[ENQUIRY_HONEYPOT] as string).trim() !== '') return answer('sent', 201);
 
   const name = field(body, 'name', MAX_NAME);
   const email = field(body, 'email', MAX_EMAIL);
@@ -261,14 +270,16 @@ enquiryRoutes.post('/storefront/apps/:appId/enquiries/team-join', async (c) => {
   const stored = await c.env.DB.prepare(
     `INSERT INTO app_enquiries (id, app_id, name, email, message, status, ip_hash, created_at, type)
      SELECT ?1, ?2, ?3, ?4, ?5, 'new', ?6, ?7, 'team_join'
-      WHERE (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND ip_hash = ?6 AND created_at > ?8) < ?10
+      WHERE ${teamRequestsOpenCondition('?2')}
+        AND (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND ip_hash = ?6 AND created_at > ?8) < ?10
         AND (SELECT COUNT(*) FROM app_enquiries WHERE app_id = ?2 AND created_at > ?9) < ?11
         AND NOT EXISTS (SELECT 1 FROM app_enquiries WHERE app_id = ?2 AND type = 'team_join' AND status = 'new' AND lower(email) = lower(?4))`,
   ).bind(id, appId, name, email, message, ipHash, now, now - HOUR_MS, now - DAY_MS, ENQUIRY_IP_LIMIT, ENQUIRY_APP_DAILY_LIMIT).run();
-  if (stored.meta?.changes) return c.json({ ok: true, id }, 201);
+  if (stored.meta?.changes) return answer('sent', 201, { id });
 
+  if (!(await teamRequestsOpen(c.env.DB, appId))) return answer('unavailable', 404);
   const repeat = await c.env.DB.prepare("SELECT 1 FROM app_enquiries WHERE app_id = ? AND type = 'team_join' AND status = 'new' AND lower(email) = lower(?)").bind(appId, email).first();
-  if (repeat) return c.json({ ok: true }, 201);
+  if (repeat) return answer('sent', 201);
   c.header('Retry-After', '3600');
-  return c.json({ ok: false, error: 'rate-limited' }, 429);
+  return answer('rate-limited', 429);
 });

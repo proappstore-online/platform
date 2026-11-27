@@ -26,6 +26,7 @@ beforeEach(async () => {
   await resetTables();
   for (const uid of ['gh:1', 'gh:2', 'gh:3']) await seedUser(uid);
   await seedApp('shop', 'gh:1'); await seedApp('other', 'gh:3');
+  await env.DB.prepare("INSERT INTO app_storefront_publication(app_id,listed,updated_at) VALUES('shop',1,0),('other',1,0)").run();
   await env.DB.prepare("INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',1),('shop','gh:2','developer',1)").run();
 });
 

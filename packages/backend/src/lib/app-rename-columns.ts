@@ -92,6 +92,7 @@ export const APP_ID_COLUMNS: readonly AppIdColumn[] = [
   { table: 'app_storage_config', column: 'app_id', kind: 'id' },
   { table: 'app_storefront_publication', column: 'app_id', kind: 'id' },
   { table: 'app_team_public_profiles', column: 'app_id', kind: 'id' },
+  { table: 'app_team_recruitment', column: 'app_id', kind: 'id' },
   { table: 'app_test_flows', column: 'app_id', kind: 'id' },
   { table: 'app_test_runs', column: 'app_id', kind: 'id' },
   keep('app_test_runs', 'artifacts_prefix', "history: each run's artifacts are read by its own stored prefix (routes/qa.ts) and stay where they are"),

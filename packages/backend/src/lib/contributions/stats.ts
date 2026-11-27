@@ -26,25 +26,25 @@ const SHARE_BASIS = "This person's added lines divided by all eligible added lin
 
 export type DataState = 'unavailable' | 'error' | 'partial' | 'stale' | 'empty' | 'ok';
 
-interface Status {
+export interface ContributionStatus {
   repository: { full_name: string; github_repo_id: number | null; status: string; default_branch: string | null; verified_at: number | null } | null;
-  sync: { state: string; backfill_complete: boolean; head_sha: string | null; last_attempt_at: number | null; last_success_at: number | null; error: string | null; error_count: number; rate_limited_until: number | null; rewrite_detected_at: number | null; next_refresh_at: number; policy_version: number } | null;
+  sync: { state: string; walk_id: string | null; walk_head_sha?: string | null; walk_page?: number; backfill_complete: boolean; head_sha: string | null; last_attempt_at: number | null; last_success_at: number | null; error: string | null; error_count: number; rate_limited_until: number | null; rewrite_detected_at: number | null; next_refresh_at: number; policy_version: number } | null;
 }
 
 interface RepoRow { full_name: string; github_repo_id: number | null; status: string; default_branch: string | null; verified_at: number | null }
-interface SyncRow { state: string; backfill_complete: number; head_sha: string | null; last_attempt_at: number | null; last_success_at: number | null; last_error: string | null; error_count: number; rate_limited_until: number | null; rewrite_detected_at: number | null; next_refresh_at: number; policy_version: number }
+interface SyncRow { state: string; walk_id: string | null; walk_head_sha: string | null; walk_page: number; backfill_complete: number; head_sha: string | null; last_attempt_at: number | null; last_success_at: number | null; last_error: string | null; error_count: number; rate_limited_until: number | null; rewrite_detected_at: number | null; next_refresh_at: number; policy_version: number }
 
-async function status(db: D1Database, appId: string): Promise<Status> {
+async function status(db: D1Database, appId: string): Promise<ContributionStatus> {
   const repo = await db.prepare('SELECT full_name, github_repo_id, status, default_branch, verified_at FROM project_repositories WHERE app_id = ?1').bind(appId).first<RepoRow>();
-  const s = await db.prepare('SELECT state, backfill_complete, head_sha, last_attempt_at, last_success_at, last_error, error_count, rate_limited_until, rewrite_detected_at, next_refresh_at, policy_version FROM project_contribution_sync WHERE app_id = ?1').bind(appId).first<SyncRow>();
+  const s = await db.prepare('SELECT state, walk_id, walk_head_sha, walk_page, backfill_complete, head_sha, last_attempt_at, last_success_at, last_error, error_count, rate_limited_until, rewrite_detected_at, next_refresh_at, policy_version FROM project_contribution_sync WHERE app_id = ?1').bind(appId).first<SyncRow>();
   return {
     repository: repo,
-    sync: s && { state: s.state, backfill_complete: s.backfill_complete === 1, head_sha: s.head_sha, last_attempt_at: s.last_attempt_at, last_success_at: s.last_success_at, error: s.last_error ? s.last_error.split(':')[0]! : null, error_count: s.error_count, rate_limited_until: s.rate_limited_until, rewrite_detected_at: s.rewrite_detected_at, next_refresh_at: s.next_refresh_at, policy_version: s.policy_version },
+    sync: s && { state: s.state, walk_id: s.walk_id, walk_head_sha: s.walk_head_sha, walk_page: s.walk_page, backfill_complete: s.backfill_complete === 1, head_sha: s.head_sha, last_attempt_at: s.last_attempt_at, last_success_at: s.last_success_at, error: s.last_error ? s.last_error.split(':')[0]! : null, error_count: s.error_count, rate_limited_until: s.rate_limited_until, rewrite_detected_at: s.rewrite_detected_at, next_refresh_at: s.next_refresh_at, policy_version: s.policy_version },
   };
 }
 
 /** Distinct, never-false states. "No commits" is only ever `empty` once the whole history has been read. */
-function dataState(st: Status, commitsInPeriod: number, now: number): { state: DataState; reason: string } {
+export function contributionDataState(st: ContributionStatus, commitsInPeriod: number, now: number): { state: DataState; reason: string } {
   if (!st.repository || !st.sync || st.sync.last_attempt_at === null) return { state: 'unavailable', reason: 'The repository has not been read yet.' };
   if (st.repository.status === 'identity_changed') return { state: 'unavailable', reason: 'The repository name now points at a different repository; reading stopped.' };
   if (st.sync.last_success_at === null) {
@@ -52,6 +52,9 @@ function dataState(st: Status, commitsInPeriod: number, now: number): { state: D
     if (st.sync.error === 'rate_limited') return { state: 'error', reason: 'Nothing has been read yet: GitHub rate-limited the read. It is retried automatically.' };
     return st.sync.error ? { state: 'error', reason: `The repository could not be read (${st.sync.error}).` } : { state: 'partial', reason: 'History is still being read; totals are incomplete.' };
   }
+  // A refresh/rewrite can retain the previous backfill flag while replacing reachable facts.
+  // Until its walk finishes, the current generation is not a complete snapshot (#544).
+  if (st.sync.state === 'running' || st.sync.state === 'incomplete' || st.sync.walk_id !== null) return { state: 'partial', reason: 'Repository history is being reconciled; this generation is not complete.' };
   if (!st.sync.backfill_complete) return { state: 'partial', reason: 'History is still being read; totals are incomplete.' };
   if (st.repository.status === 'access_lost' || st.sync.error !== null || now - st.sync.last_success_at > STALE_AFTER_MS) {
     return { state: 'stale', reason: st.sync.error ? `The last refresh failed (${st.sync.error}); figures are from the last successful read.` : 'The last successful read is older than expected.' };
@@ -71,9 +74,12 @@ export interface Period { from: number | null; to: number | null }
 const IN_PERIOD = '(?3 IS NULL OR c.authored_at >= ?3) AND (?4 IS NULL OR c.authored_at < ?4)';
 const periodView = (p: Period) => ({ from: p.from, to: p.to, from_iso: iso(p.from), to_iso: iso(p.to), rule: 'from <= commit author date (UTC) < to' });
 
-function freshness(st: Status, now: number) {
+function freshness(st: ContributionStatus, now: number) {
   return {
     refresh_mode: REFRESH_MODE,
+    sync_state: st.sync?.state ?? null,
+    walk_head_sha: st.sync?.walk_head_sha ?? null,
+    walk_page: st.sync?.walk_page ?? null,
     last_success_at: st.sync?.last_success_at ?? null, last_success_iso: iso(st.sync?.last_success_at ?? null),
     last_attempt_at: st.sync?.last_attempt_at ?? null,
     next_refresh_at: st.sync ? Math.max(st.sync.next_refresh_at, 0) : null,
@@ -124,13 +130,13 @@ export async function projectSummary(db: D1Database, appId: string, period: Peri
   const t = repoId === null ? empty : await totals(db, appId, repoId, period);
   const excluded = repoId === null ? { unreachable_commits: 0, merge_commits_not_counted: 0 } : await skipped(db, appId, repoId, period);
   const people = repoId === null ? 0 : Number((await db.prepare(`SELECT COUNT(DISTINCT c.author_github_id) AS n FROM project_commits c WHERE c.app_id = ?1 AND c.github_repo_id = ?2 AND c.reachable = 1 AND c.counted = 1 AND c.files_counted > 0 AND c.author_kind = 'user' AND ${IN_PERIOD}`).bind(appId, repoId, period.from, period.to).first<{ n: number }>())?.n ?? 0);
-  const verdict = dataState(st, t.commits, now);
+  const verdict = contributionDataState(st, t.commits, now);
   return {
     app_id: appId,
     state: verdict.state, state_reason: verdict.reason,
     // Only a fully read history may be called complete; `ok` and `empty` are the only states that say "this is the answer".
-    complete: st.sync?.backfill_complete === true,
-    repository: st.repository && { full_name: st.repository.full_name, status: st.repository.status, default_branch: st.repository.default_branch, verified_at: st.repository.verified_at },
+    complete: st.sync?.backfill_complete === true && verdict.state !== 'partial',
+    repository: st.repository && { full_name: st.repository.full_name, github_repo_id: st.repository.github_repo_id, status: st.repository.status, default_branch: st.repository.default_branch, verified_at: st.repository.verified_at },
     period: periodView(period),
     policy: POLICY_DESCRIPTION,
     policy_version: POLICY_VERSION,
@@ -167,12 +173,12 @@ interface PersonRow { id: number; additions: number; deletions: number; commits:
 export async function projectPeople(db: D1Database, appId: string, period: Period, q: PeopleQuery, now: number) {
   const st = await status(db, appId);
   const repoId = st.repository?.github_repo_id ?? null;
-  const verdict = dataState(st, 0, now);
+  const verdict = contributionDataState(st, 0, now);
   const base = { app_id: appId, period: periodView(period), policy_version: POLICY_VERSION, share_basis: SHARE_BASIS, tie_order: 'additions descending, then GitHub account id ascending' };
   if (repoId === null) return { ...base, state: verdict.state, state_reason: verdict.reason, complete: false, freshness: freshness(st, now), eligible_additions: 0, people: [], next: null };
 
   const t = await totals(db, appId, repoId, period);
-  const state = dataState(st, t.commits, now);
+  const state = contributionDataState(st, t.commits, now);
   const { results } = await db.prepare(
     `SELECT c.author_github_id AS id, SUM(c.additions) AS additions, SUM(c.deletions) AS deletions, COUNT(*) AS commits, MAX(c.authored_at) AS last_commit_at,
             (SELECT p.author_login FROM project_commits p WHERE p.github_repo_id = c.github_repo_id AND p.author_github_id = c.author_github_id AND p.author_login IS NOT NULL ORDER BY p.authored_at DESC, p.sha ASC LIMIT 1) AS github_login,
@@ -200,7 +206,7 @@ export async function projectPeople(db: D1Database, appId: string, period: Perio
   return {
     ...base,
     state: state.state, state_reason: state.reason,
-    complete: st.sync?.backfill_complete === true,
+    complete: st.sync?.backfill_complete === true && state.state !== 'partial',
     freshness: freshness(st, now),
     eligible_additions: t.additions,
     people,

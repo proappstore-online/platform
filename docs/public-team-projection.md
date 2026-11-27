@@ -124,3 +124,40 @@ The response is private/no-store and reading never changes consent or timestamps
 Missing authentication returns 401; app-bound/workload credentials and ineligible
 people return 403. Missing apps and apps the caller cannot access are indistinguishable.
 PUT/DELETE behavior and public projections are unchanged.
+
+## Recruitment controls and native marketing forms (#541)
+
+An app owner can read or update `GET/PUT /v1/apps/:appId/team/recruitment` using
+their first-party person session. PUT accepts `{ "accepting_requests": false }`
+(or `true`). Both return `{ appId, accepting_requests, updated_at }` with private,
+no-store caching. A missing setting means `true`, preserving the existing intake.
+The setting stays with the app on transfer, while each read and write checks the
+current creator, current owner membership, or session administrator, exactly as
+`requireAppOwner` does. App credentials and delegated sessions cannot use it.
+
+Closed, private, missing, unlisted, and unpublished apps all refuse new team enquiries.
+The intake INSERT rechecks these conditions in the same statement, so a close or visibility
+change between validation and insertion cannot admit a request. Closing does not
+delete existing enquiries. The Console Enquiries view exposes the saved setting
+and requires a fresh read after an uncertain write; it never guesses that intake
+is open when the setting endpoint is unavailable. This also corrects the older JSON
+intake's acceptance of public but unlisted apps: `app_storefront_publication.listed`
+must be `1`. A missing recruitment preference remains open only for otherwise
+eligible listed apps. The app-ID rename inventory carries the preference to the new ID.
+
+The existing `/v1/storefront/apps/:appId/enquiries/team-join` endpoint also accepts
+`application/x-www-form-urlencoded` from the **exact app about-site origin only**.
+Native forms use the existing `name`, `email`, `message`, and `website` honeypot
+fields and the same validation, duplicate suppression, and shared intake limits
+as JSON. They receive a fixed 303 to
+`https://about-<appId>.proappstore.online/?team_join=<outcome>#team-join-<outcome>`,
+where the outcome is `sent`, `invalid`, `rate-limited`, or `unavailable`. No return
+URL or personal field is reflected in the destination. JSON clients retain the
+201/400/404/429 contract; forms from the storefront are not accepted. Both declared
+and actual bodies larger than 16 KiB are refused. Origin/media-type/size errors
+remain HTTP errors rather than success redirects.
+
+These requests create only a private owner inbox record, with existing new/handled
+counts. They send no email, grant no membership, and publish no applicant identity.
+The shared marketing template provides the anonymous form; deployment of this
+template does not change already-published apps until those apps adopt it.

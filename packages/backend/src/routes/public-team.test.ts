@@ -34,6 +34,7 @@ beforeEach(async () => {
     INSERT INTO users (id, provider, provider_id, login, created_at, last_login_at) VALUES
       ('gh:1','github','1','owner-login',0,0),('gh:2','github','2','ada-login',0,0),('gh:3','github','3','bob-login',0,0),('gh:9','github','9','stranger',0,0);
     INSERT INTO apps (id, creator_id, created_at) VALUES ('shop','gh:1',0),('other','gh:3',0);
+    INSERT INTO app_storefront_publication(app_id,listed,updated_at) VALUES ('shop',1,0),('other',1,0);
     INSERT INTO team_members (app_id, user_id, role, created_at) VALUES ('shop','gh:1','owner',0),('shop','gh:2','developer',0),('other','gh:3','owner',0);`);
   env = makeEnv({ DB: db }) as Env;
   for (const uid of [OWNER, ADA, BOB, STRANGER]) tokens[uid] = await testToken(uid);
