@@ -76,6 +76,17 @@ describe("dedicated marketing hostname", () => {
     expect(cached.status).toBe(304);
   });
 
+  it("#541: permits native API forms to return home without opening other destinations or fetch", async () => {
+    const { env, ctx } = fixture(active);
+    const response = await worker.fetch(new Request("https://about-chess.proappstore.online/"), env, ctx);
+    const directives = response.headers.get("Content-Security-Policy")!.split("; ");
+    expect(directives).toEqual([
+      "default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:", "font-src 'self'", "connect-src 'self'", "base-uri 'none'",
+      "form-action 'self' https://api.proappstore.online", "frame-ancestors 'none'", "object-src 'none'",
+    ]);
+  });
+
   it("#399: looks up and reads only the hostname's own app", async () => {
     const { env, ctx, get } = fixture(active);
     await worker.fetch(new Request("https://about-rival.proappstore.online/robots.txt"), env, ctx);

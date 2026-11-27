@@ -11,7 +11,7 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /**
  * A static, zero-JS site: tighter than the runnable app's policy. Nothing may
  * frame it or run a script from elsewhere, and a form may post only to the
- * platform API (the enquiry form, #412); the JSON-LD block is
+ * platform API or return to this site (native enquiry redirects, #541); the JSON-LD block is
  * data, not script. Every response revalidates (no edge cache, `max-age=0`),
  * so a revision switch or an unpublish is seen on the very next request.
  */
@@ -23,8 +23,10 @@ const MARKETING_CSP = [
   "font-src 'self'",
   "connect-src 'self'",
   "base-uri 'none'",
-  // #412: the enquiry form posts to the platform API (no JavaScript needed).
-  "form-action https://api.proappstore.online",
+  // Native enquiry forms post to the API and redirect back to this origin. Chromium
+  // checks form-action on redirects too; without self it stores the enquiry but
+  // blocks the outcome page (#541). Keep other destinations and cross-origin fetch blocked.
+  "form-action 'self' https://api.proappstore.online",
   "frame-ancestors 'none'",
   "object-src 'none'",
 ].join("; ");
