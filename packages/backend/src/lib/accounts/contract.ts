@@ -234,6 +234,7 @@ export const GATE_CLASSIFICATION: Readonly<Record<string, GateEntry>> = {
   'packages/backend/src/lib/app-worker-host.ts': live('disableAppWorker persists the administrator kill switch; callers establish owner/admin authority before invoking it'),
   'packages/backend/src/lib/google-calendar-policy.ts': live('reads the publisher identity for the consent snapshot; this grants no publisher-management permission'),
   'packages/backend/src/lib/google-calendar-oauth.ts': live('atomically refuses a pending personal consent request after its publisher changes; this is a lifecycle guard, not an owner-role grant'),
+  'packages/backend/src/lib/held-app-roles.ts': live('#695: creator_id or an owner team_members row implies every role the app declares, for every app-role gate'),
   'packages/backend/src/lib/native-companion.ts': live('invalidates personal native grants when the recipient app changes publisher; grants no publisher-management authority'),
   'packages/backend/src/lib/operation-log.ts': live('owner flag decides who sees an operation'),
   'packages/backend/src/lib/operator-audit-marks.ts': live('wraps requireAppOwner and remembers the owner for the refusal audit'),

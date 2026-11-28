@@ -178,6 +178,51 @@ That metadata is not a substitute for row-level checks. A user can have a
 by `:org_id`. Use role metadata for early rejection and better UX; use SQL
 scoping for the final data permission check.
 
+### Declared roles (`roles`)
+
+An app can declare its roles at the top level of `mcp.json` (#695):
+
+```json
+"roles": [
+  { "id": "ops", "label": "Operations", "description": "Dispatch and trip support" },
+  { "id": "ops_pii", "label": "Rider details", "description": "Sees rider phone numbers", "requires": ["ops"] }
+]
+```
+
+- `id` matches `^[a-z][a-z0-9_-]{0,49}$` (the same rule as a grant), is unique,
+  and is never `owner` or `member`, which the platform manages. `label` is
+  required (at most 80 characters); `description` is optional (at most 500).
+- `requires` names other declared roles a holder must also hold. It may not
+  form a cycle.
+- When `roles` is declared, every role the manifest gates on must be one of
+  them: each action's `auth.app_roles` (the platform's `member` is always
+  allowed there) and the operator view's `admin_access.roles` and
+  `audit.app_roles`. A typo fails registration with a message naming the
+  action or field, instead of locking everyone out.
+
+What declaring them changes:
+
+- **The owner holds every declared role.** The app's creator, or a team member
+  with the `owner` team role, passes every gate on a declared role: actions
+  (and so the operator view), `GET /v1/apps/:appId/roles/check/:role`,
+  `GET /v1/apps/:appId/roles/me` and the operator audit trail, without being
+  granted it. Only declared roles are implied; a platform admin holds none
+  through admin standing. The success audit records the role with
+  `role_via_owner` set when ownership, not a grant, supplied it (a role the
+  owner was also granted is recorded as the grant).
+- **`requires` is enforced on grants.** `POST /v1/apps/:appId/roles` also
+  grants the declared roles the role requires, transitively (`requiredRoles`
+  in the response). `DELETE /v1/apps/:appId/roles` also revokes the declared
+  roles that require it (`dependentRoles`).
+- **The Console can list them.** `GET /v1/apps/:appId/roles/declared` returns
+  `{ roles: [{ id, label, description, requires }] }` in declared order to any
+  team member.
+
+The declaration is replaced with the manifest on every deploy: a manifest
+without `roles` clears it, the owner then holds only what they were granted,
+and role names are free strings again. Grants in `app_roles` are never touched
+by a deploy.
+
 ## The `mcp.json` manifest
 
 ```json
@@ -1302,7 +1347,9 @@ recorded as `(undeclared)`, never as the caller wrote it (#343).
 
 The trail is owner-only; `admin_access` does not open it. An app can require more by declaring
 `"audit": { "app_roles": ["operator"] }` at the top level of `operator_view`:
-the owner must then also hold one of those roles (never `member`).
+the owner must then also hold one of those roles (never `member`). When the app
+declares that role in `roles` (above), the owner holds it already, and the
+trail row shows `role_via_owner: true` for every read the role came from ownership.
 
 ### Authoring tools (MCP)
 
@@ -1384,7 +1431,9 @@ signed-out caller — gets a `403` (`401` when signed out) before anything is re
 
 Admission grants no action by itself: every read and write still runs the
 referenced action under its own `auth.app_roles` and `step_up`, as below, and
-is audited under the admin's own id. Refused attempts by an admitted admin join
+is audited under the admin's own id. The owner is the exception only for the
+roles the app declares in [`roles`](#declared-roles-roles): they hold those
+without a grant. Refused attempts by an admitted admin join
 the audit trail exactly as the owner's do. So list each admin role in the
 `auth.app_roles` of every action its holders should use. Otherwise
 `validate_admin_security` warns `admin_role_grants_nothing`.

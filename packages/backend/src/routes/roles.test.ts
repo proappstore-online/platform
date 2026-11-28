@@ -70,7 +70,9 @@ describe('app roles', () => {
     const upsertStmt = mockStmt();
     const deleteLegacyStmt = mockStmt();
     const insertRoleStmt = mockStmt();
-    const db = mockD1(lookupStmt, upsertStmt, deleteLegacyStmt, insertRoleStmt);
+    // #695: the app's declared roles are read before the grant batch (none declared here).
+    const declaredStmt = mockStmt({ all: { results: [] } });
+    const db = { ...mockD1(lookupStmt, upsertStmt, declaredStmt, deleteLegacyStmt, insertRoleStmt), batch: vi.fn().mockResolvedValue([]) };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: 42,
       login: 'octocat',
@@ -94,7 +96,9 @@ describe('app roles', () => {
       userLogin: 'octocat',
       userAvatarUrl: 'https://avatars.githubusercontent.com/u/42?v=4',
       role: 'moderator',
+      requiredRoles: [],
     });
+    expect(db.batch).toHaveBeenCalledTimes(1);
     expect(deleteLegacyStmt.bind).toHaveBeenCalledWith('service-exchange', 'octocat', 'moderator');
     expect(insertRoleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'moderator', 'gh:1');
   });
@@ -104,7 +108,7 @@ describe('app roles', () => {
       first: { id: 'gh:42', login: 'octocat', avatar_url: null },
     });
     const deleteStmt = mockStmt({ run: { meta: { changes: 1 } } });
-    const db = mockD1(lookupStmt, deleteStmt);
+    const db = mockD1(lookupStmt, mockStmt({ all: { results: [] } }), deleteStmt);
 
     const res = await app.request('/v1/apps/service-exchange/roles', {
       method: 'DELETE',
@@ -113,7 +117,7 @@ describe('app roles', () => {
     }, makeEnv(db));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, revoked: true, userId: 'gh:42', role: 'moderator' });
+    expect(await res.json()).toEqual({ ok: true, revoked: true, userId: 'gh:42', role: 'moderator', dependentRoles: [] });
     // Was previously binding the raw login 'octocat' -> matched nothing since the
     // grant is stored under gh:42. Now matches id OR login.
     expect(deleteStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'octocat', 'moderator');
@@ -126,15 +130,15 @@ describe('app roles', () => {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: 'octocat', role: 'moderator' }),
-    }, makeEnv(mockD1(lookupStmt, deleteStmt)));
+    }, makeEnv(mockD1(lookupStmt, mockStmt({ all: { results: [] } }), deleteStmt)));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, revoked: false, userId: 'gh:42', role: 'moderator' });
+    expect(await res.json()).toEqual({ ok: true, revoked: false, userId: 'gh:42', role: 'moderator', dependentRoles: [] });
   });
 
   it('checks legacy raw-login role rows for signed-in users', async () => {
     const token = await testToken('gh:42', { roles: ['user'], login: 'octocat' });
-    const roleStmt = mockStmt({ first: { 1: 1 } });
+    const roleStmt = mockStmt({ all: { results: [{ role_name: 'moderator', source: 'grant' }] } });
 
     const res = await app.request('/v1/apps/service-exchange/roles/check/moderator', {
       headers: { Authorization: `Bearer ${token}` },
@@ -142,6 +146,6 @@ describe('app roles', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ has: true, source: 'db' });
-    expect(roleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'octocat', 'moderator');
+    expect(roleStmt.bind).toHaveBeenCalledWith('service-exchange', 'gh:42', 'octocat');
   });
 });

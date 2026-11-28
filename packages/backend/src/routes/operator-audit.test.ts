@@ -127,7 +127,7 @@ describe('GET /v1/apps/:appId/operator/audit', () => {
     expect(body.targets_hidden).toBe(true);
     expect(JSON.stringify(body)).not.toMatch(/secret|_review|Bearer/);
     // Reading the trail is itself on the trail.
-    expect(own.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 200, expect.any(Number), 'audit', null);
+    expect(own.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 0, 200, expect.any(Number), 'audit', null);
     expect(inserts(d)).toHaveLength(1);
 
     const revealed = await (await req('stash/operator/audit', db(trail).d, { token: await fresh() })).json() as Body;
@@ -211,14 +211,14 @@ describe('GET /v1/apps/:appId/operator/audit', () => {
     const other = mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null }));
     expect((await req('stash/operator/audit', other)).status).toBe(403);
     expect(inserts(other)).toHaveLength(0); // a stranger's attempt is not written into the trail
-    const noRole = db([], PARENTS_CLUBS, [mockStmt({ first: null })]);
+    const noRole = db([], PARENTS_CLUBS, [mockStmt({ all: { results: [] } })]);
     const refused = await req('parents-clubs/operator/audit', noRole.d);
     expect(refused.status).toBe(403);
     expect(await refused.text()).toContain('requires app role');
     expect(sqls(noRole.d).some((q) => q.includes('FROM app_action_audit a'))).toBe(false);
-    const withRole = db([], PARENTS_CLUBS, [mockStmt({ first: { role_name: 'operator' } })]);
+    const withRole = db([], PARENTS_CLUBS, [mockStmt({ all: { results: [{ role_name: 'operator', source: 'grant' }] } })]);
     expect((await req('parents-clubs/operator/audit', withRole.d)).status).toBe(200);
-    expect(withRole.own.bind).toHaveBeenCalledWith('parents-clubs', '', 'gh:1', 'operator', 200, expect.any(Number), 'audit', null);
+    expect(withRole.own.bind).toHaveBeenCalledWith('parents-clubs', '', 'gh:1', 'operator', 0, 200, expect.any(Number), 'audit', null);
   });
 });
 
@@ -247,7 +247,7 @@ describe('refused operator requests join the trail exactly once', () => {
     d.prepare.mockImplementation(() => mockStmt());
     const res = await req('stash/operator/actions/resolve', d, { method: 'POST', body: JSON.stringify({ row: { report_id: 'r1', status: 'open' } }) });
     expect(res.status).toBe(409);
-    expect(auditBinds(d)).toEqual([['stash', 'op_resolve_report', 'gh:1', 'operator', 409, expect.any(Number), 'resolve', 'r1']]);
+    expect(auditBinds(d)).toEqual([['stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1']]);
   });
 
   it('a step-up refusal on a document is written once, with the record it was for', async () => {
@@ -272,7 +272,7 @@ describe('refused operator requests join the trail exactly once', () => {
     const d = db(PARENTS_CLUBS, 'op_list_parents');
     d.prepare.mockImplementation(() => mockStmt());
     expect((await req('parents-clubs/operator/resources/parents', d)).status).toBe(200);
-    expect(auditBinds(d)).toEqual([['parents-clubs', 'op_list_parents', 'gh:1', 'operator', 200, expect.any(Number), 'read:parents', null]]);
+    expect(auditBinds(d)).toEqual([['parents-clubs', 'op_list_parents', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:parents', null]]);
     const anon = mockD1();
     expect((await req('parents-clubs/operator/resources/parents', anon, { token: null })).status).toBe(401);
     expect(anon.prepare).not.toHaveBeenCalled();

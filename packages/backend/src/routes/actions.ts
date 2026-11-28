@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, optionalUser, requireAppAccess, requireRecentAuth, requireUser, type FasUser } from '../lib/auth.js';
-import { roleSubjects } from '../lib/role-subject.js';
+import { firstHeld, heldAppRoles, type RoleGrant } from '../lib/held-app-roles.js';
 import { sqlFingerprints } from '../lib/sql-fingerprint.js';
 import { DATA_FAULT_DETAIL_HEADER, DATA_FAULT_HEADER, dataFaultOf, dataWorkerUrl, DataWorkerFailure } from '../lib/data-worker-url.js';
 import { downstreamTraceparent, requestTrace } from '../lib/log-ingest.js';
@@ -46,7 +46,7 @@ function mediatedRelyingParty(c: Parameters<typeof requireUser>[0]): string | un
  * never reach the row: they are thrown, answered by onError, and recorded in
  * app_logs by operation-log.ts as before.
  */
-const roleGrants = new WeakMap<Request, { actorId: string; role: string }>();
+const roleGrants = new WeakMap<Request, AuditGrant>();
 
 actionRoutes.use('/apps/:appId/actions/:name', async (c, next) => {
   await next();
@@ -55,18 +55,21 @@ actionRoutes.use('/apps/:appId/actions/:name', async (c, next) => {
   await recordActionSuccess(c.env.DB, c.req.param('appId')!, c.req.param('name')!, grant, c.res.status);
 });
 
+/** Who an audited success ran as, and under which app role ('' for none; #579). */
+export interface AuditGrant extends RoleGrant { actorId: string }
+
 export async function recordActionSuccess(
   db: D1Database,
   appId: string,
   action: string,
-  grant: { actorId: string; role: string },
+  grant: AuditGrant,
   status: number,
   operator?: { operatorAction: string; target: string | null },
 ): Promise<void> {
   try {
     await db.prepare(
-      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(appId, action, grant.actorId, grant.role, status, Date.now(), operator?.operatorAction ?? null, operator?.target ?? null).run();
+      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, role_via_owner, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(appId, action, grant.actorId, grant.role, grant.viaOwner ? 1 : 0, status, Date.now(), operator?.operatorAction ?? null, operator?.target ?? null).run();
   } catch (e) {
     // The action has already run; an audit write failing must not turn its
     // success into an error. Logged so a gap in the trail is visible.
@@ -202,7 +205,7 @@ actionRoutes.post('/apps/:appId/actions/:name', async (c) => {
   const unknownParams = unknownParamsError(manifest, input);
   if (unknownParams) throw new HttpError(unknownParams, 400);
   // #579: a worker action is always audited (actor, time, outcome), role-gated or not. The audit row never holds params or a response.
-  if (manifest.operation === 'worker' && caller && !roleGrants.has(c.req.raw)) roleGrants.set(c.req.raw, { actorId: caller.id, role: '' });
+  if (manifest.operation === 'worker' && caller && !roleGrants.has(c.req.raw)) roleGrants.set(c.req.raw, { actorId: caller.id, role: '', viaOwner: false });
   const dryRun = body.dry_run === true;
   if (body.dry_run !== undefined && typeof body.dry_run !== 'boolean') throw new HttpError('dry_run must be a boolean', 400);
   if (dryRun && !(team ?? await callerIsAppTeam(c, appId))) throw new HttpError("dry_run is for the app's owner and team", 403);
@@ -539,17 +542,21 @@ async function loadManifestWithVisibility(
 }
 
 /** Mark the request for the success audit when an app-role gate granted it. */
-function grantRole(req: Request, user: FasUser, role: string | null): void {
-  if (role) roleGrants.set(req, { actorId: user.id, role });
+function grantRole(req: Request, user: FasUser, grant: RoleGrant | null): void {
+  if (grant) roleGrants.set(req, { actorId: user.id, ...grant });
 }
 
-/** Throws unless `user` passes the action's role gates; returns the app role that granted it, if one did. */
+/**
+ * Throws unless `user` passes the action's role gates; returns the app role that
+ * granted it, if one did, and whether app ownership supplied it (#695: the owner
+ * holds every role the app declares — lib/held-app-roles.ts).
+ */
 export async function enforceActionAuth(
   db: D1Database,
   appId: string,
   manifest: ToolManifest,
   user: FasUser,
-): Promise<string | null> {
+): Promise<RoleGrant | null> {
   const platformRoles = manifest.auth?.platform_roles ?? [];
   if (platformRoles.length > 0 && !platformRoles.some((role) => user.roles.includes(role))) {
     throw new HttpError('requires platform role', 403);
@@ -563,11 +570,7 @@ export async function enforceActionAuth(
   // always the real check. Removed with the claim: authorization reads the
   // table, where a revoked role takes effect immediately rather than lingering
   // for the life of a 30-day token.
-  const rows = await db.prepare('SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)')
-    .bind(appId, ...roleSubjects(user))
-    .all<{ role_name: string }>();
-  const assigned = new Set((rows.results ?? []).map((row) => row.role_name));
-  const granted = appRoles.find((role) => assigned.has(role));
+  const granted = firstHeld(await heldAppRoles(db, appId, user), appRoles);
   if (!granted) {
     throw new HttpError('requires app role', 403);
   }

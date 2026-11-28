@@ -252,6 +252,7 @@ describe('DELETE /v1/apps/:id', () => {
       'DELETE FROM app_connectors WHERE app_id = ?',
       'DELETE FROM app_user_secrets WHERE app_id = ?',
       'DELETE FROM app_user_secret_decls WHERE app_id = ?',
+      'DELETE FROM app_declared_roles WHERE app_id = ?',
       'DELETE FROM apps WHERE id = ?',
     ]);
     expect(db.batch).toHaveBeenCalledTimes(1);

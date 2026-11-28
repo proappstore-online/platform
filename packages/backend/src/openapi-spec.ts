@@ -2172,6 +2172,42 @@ export const openapiSpec: Record<string, unknown> = {
         ]
       }
     },
+    "/v1/apps/{appId}/roles/declared": {
+      "get": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "List declared roles",
+        "description": "The roles the app declares in mcp.json `roles` (#695), in declared order: `{ roles: [{ id, label, description, requires }] }`. Empty when the app declares none. Any team member (viewer and up). The app's owner holds every declared role; granting one also grants the roles it `requires`, and revoking one also revokes the declared roles that require it.",
+        "operationId": "get_v1_apps_appId_roles_declared",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/v1/apps/{appId}/roles/ensure-member": {
       "post": {
         "tags": [
@@ -4424,7 +4460,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "The operator audit trail",
-        "description": "Owner only (#240), plus one of the contract's `audit.app_roles` when declared. 50 rows per page, newest first; `next_cursor` continues. Never tokens, params, document paths or query results; targets of verification reads and document views are hidden until a recent sign-in (`target_hidden`). Reading the trail is recorded.",
+        "description": "Owner only (#240), plus one of the contract's `audit.app_roles` when declared (the owner holds it when the app declares it in mcp.json `roles`, #695). 50 rows per page, newest first; `next_cursor` continues. Never tokens, params, document paths or query results; targets of verification reads and document views are hidden until a recent sign-in (`target_hidden`). Each row's `role_via_owner` is true when the role came from owning the app rather than a grant (#695). Reading the trail is recorded.",
         "operationId": "get_v1_apps_appId_operator_audit",
         "responses": {
           "200": {

@@ -22,6 +22,7 @@ import { connectorConfigured, installationToken } from './github-app.js';
 import { checkWorkerLogQuota } from './app-worker-usage.js';
 import { LEVELS, normalizeEntry, type NormalizedEntry } from './log-ingest.js';
 import { HttpError } from './auth.js';
+import type { RoleGrant } from './held-app-roles.js';
 import { actionRoutes, enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from '../routes/actions.js';
 import { Hono } from 'hono';
 import { verifyCallerGrant } from './caller-grant.js';
@@ -124,8 +125,8 @@ interface PreparedCall {
   /** #565: the batch statement whose physical write count is reported as budget_changes. */
   budgetIndex?: number | undefined;
   statements: { sql: string; params: unknown[] }[];
-  /** The app role a caller-grant call ran under, for the success audit (#232). */
-  role: string | null;
+  /** The app role a caller-grant call ran under, for the success audit (#232, #695). */
+  role: RoleGrant | null;
 }
 
 /**
@@ -155,7 +156,7 @@ async function prepareWorkerCall(
     throw e;
   }
   if (manifest.schedule !== undefined) throw new WorkerCallError('Forbidden', `"${name}" is a scheduled action; only the platform scheduler runs it`);
-  let role: string | null = null;
+  let role: RoleGrant | null = null;
   if (caller) {
     if (!actionCallers(manifest).includes('user')) throw new WorkerCallError('Forbidden', `"${name}" does not list "user" in its callers`);
     // A grant carries no sign-in time, so it can never satisfy a step-up.
@@ -238,7 +239,7 @@ export async function workerActionCall(env: Env, appId: string, name: unknown, p
 /** The role-gated success audit (#232) for actions a grant's user ran — as the HTTP route records it. */
 async function auditAsUser(env: Env, appId: string, calls: PreparedCall[], caller: CallerIdentity | null): Promise<void> {
   if (!caller) return;
-  for (const c of calls) if (c.role) await recordActionSuccess(env.DB, appId, c.name, { actorId: caller.id, role: c.role }, 200);
+  for (const c of calls) if (c.role) await recordActionSuccess(env.DB, appId, c.name, { actorId: caller.id, ...c.role }, 200);
 }
 
 /**

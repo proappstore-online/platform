@@ -233,6 +233,8 @@ appsRoutes.delete('/apps/:id', wrap(async (c) => {
     // #587: every user's own secrets for this app, and the names it accepted.
     c.env.DB.prepare('DELETE FROM app_user_secrets WHERE app_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(id),
+    // #695: the roles it declared, which its owner held by owning it.
+    c.env.DB.prepare('DELETE FROM app_declared_roles WHERE app_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM apps WHERE id = ?').bind(id),
   ]);
   return c.json({ ok: true });

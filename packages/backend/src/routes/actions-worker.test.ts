@@ -86,7 +86,7 @@ describe('worker actions (#579)', () => {
     expect(grant?.id).toBe('gh:2');
     // Audited: actor, role, status — no params, no response.
     expect(audits).toHaveLength(1);
-    expect(audits[0]).toEqual(['interns', 'invite_member', 'gh:2', 'manager', 200, expect.any(Number), null, null]);
+    expect(audits[0]).toEqual(['interns', 'invite_member', 'gh:2', 'manager', 0, 200, expect.any(Number), null, null]);
   });
 
   it('refuses a caller without the app role, before the worker is reached', async () => {
@@ -187,7 +187,7 @@ describe('worker actions (#579)', () => {
     const out = await res;
     expect(await out.json()).toEqual({ tfn: '123 456 782' });
     expect(audits).toHaveLength(1);
-    expect(audits[0]).toEqual(['interns', 'reveal_tfn', 'gh:2', '', 200, expect.any(Number), null, null]);
+    expect(audits[0]).toEqual(['interns', 'reveal_tfn', 'gh:2', '', 0, 200, expect.any(Number), null, null]);
     expect(JSON.stringify([audits, ...logs.map((l) => l.mock.calls)])).not.toMatch(/SECRET-ENTITY|123 456 782/);
   });
 });

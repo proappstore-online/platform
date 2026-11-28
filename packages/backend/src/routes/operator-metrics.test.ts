@@ -54,8 +54,8 @@ describe('GET /v1/apps/:appId/operator/metrics/:id (#240)', () => {
     expect(JSON.stringify(body)).not.toContain('secret');
     expect(calls[0]!.url).toContain('pas-data-stash.');
     expect(calls[0]!.params).toEqual(expect.arrayContaining(['2026-09-01', '2026-09-03']));
-    const [app, action, actor, role, status, , operatorAction, target] = audit.bind.mock.calls[0]!;
-    expect([app, action, actor, role, status, operatorAction, target]).toEqual(['stash', 'op_daily_signups', 'gh:1', 'operator', 200, 'series:growth', '2026-09-01..2026-09-03/day']);
+    const [app, action, actor, role, viaOwner, status, , operatorAction, target] = audit.bind.mock.calls[0]!;
+    expect([app, action, actor, role, viaOwner, status, operatorAction, target]).toEqual(['stash', 'op_daily_signups', 'gh:1', 'operator', 0, 200, 'series:growth', '2026-09-01..2026-09-03/day']);
     expect(JSON.stringify(audit.bind.mock.calls)).not.toMatch(/"5"|,5,|free|pro/);
   });
 

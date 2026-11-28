@@ -26,7 +26,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
-import { roleSubjects } from '../lib/role-subject.js';
+import { firstHeld, heldAppRoles, type RoleGrant } from '../lib/held-app-roles.js';
 import { markAudited, operatorCallerOf, requireOperatorAccess, requireOperatorOwner, wasAudited, wasUndeclared } from '../lib/operator-audit-marks.js';
 import { loadContract } from './operator.js';
 
@@ -50,12 +50,12 @@ export const REFUSAL_WINDOW_MS = 10 * 60_000;
 
 export async function writeRow(
   db: D1Database,
-  row: { appId: string; actorId: string; role: string; status: number; operatorAction: string; target: string | null },
+  row: { appId: string; actorId: string; role: string; viaOwner: boolean; status: number; operatorAction: string; target: string | null },
 ): Promise<void> {
   try {
     await db.prepare(
-      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(row.appId, '', row.actorId, row.role, row.status, Date.now(), row.operatorAction, row.target).run();
+      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, role_via_owner, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(row.appId, '', row.actorId, row.role, row.viaOwner ? 1 : 0, row.status, Date.now(), row.operatorAction, row.target).run();
   } catch (e) {
     console.error('[operator-audit] write failed', { appId: row.appId, operatorAction: row.operatorAction, err: String(e) });
   }
@@ -201,18 +201,20 @@ function filters(q: (name: string) => string | undefined): Clause {
   return { sql: clauses.map((cl) => ` AND ${cl.sql}`).join(''), binds: clauses.flatMap((cl) => cl.binds) };
 }
 
-/** The role that lets `owner` read the trail: '' without an audit declaration, else a declared role they hold. */
-async function trailRole(db: D1Database, appId: string, owner: FasUser, roles: string[] | undefined): Promise<string> {
-  if (!roles?.length) return '';
-  const row = await db.prepare(
-    `SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name IN (${roles.map(() => '?').join(', ')}) LIMIT 1`,
-  ).bind(appId, ...roleSubjects(owner), ...roles).first<{ role_name: string }>();
-  if (!row) throw new HttpError('requires app role', 403);
-  return row.role_name;
+/**
+ * The role that lets `owner` read the trail: none without an audit declaration,
+ * else a declared role they hold — granted, or implied by ownership when the app
+ * declares it in mcp.json `roles` (#695).
+ */
+async function trailRole(db: D1Database, appId: string, owner: FasUser, roles: string[] | undefined): Promise<RoleGrant> {
+  if (!roles?.length) return { role: '', viaOwner: false };
+  const granted = firstHeld(await heldAppRoles(db, appId, owner), roles);
+  if (!granted) throw new HttpError('requires app role', 403);
+  return granted;
 }
 
 interface AuditRow {
-  id: number; created_at: number; actor_id: string; actor_login: string | null; role_name: string;
+  id: number; created_at: number; actor_id: string; actor_login: string | null; role_name: string; role_via_owner: number;
   action_name: string; operator_action: string; target: string | null; status: number;
 }
 
@@ -231,7 +233,7 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
   if (!recent && c.req.query('target')?.trim()) requireRecentAuth(owner, c.env);
 
   const { results } = await c.env.DB.prepare(
-    `SELECT a.id, a.created_at, a.actor_id, u.login AS actor_login, a.role_name, a.action_name, a.operator_action, a.target, a.status
+    `SELECT a.id, a.created_at, a.actor_id, u.login AS actor_login, a.role_name, a.role_via_owner, a.action_name, a.operator_action, a.target, a.status
        FROM app_action_audit a LEFT JOIN users u ON u.id = a.actor_id
       WHERE a.app_id = ? AND a.operator_action IS NOT NULL${where.sql}
       ORDER BY a.id DESC LIMIT ?`,
@@ -250,6 +252,8 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
       at: r.created_at,
       actor: { id: r.actor_id, login: r.actor_login },
       role: r.role_name || null,
+      // #695: the role came from owning the app (a declared role never granted), not an app_roles grant.
+      role_via_owner: r.role_via_owner === 1,
       ...parsed,
       operation: r.operator_action,
       action: r.action_name || null,
@@ -260,7 +264,7 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
     };
   });
 
-  await writeRow(c.env.DB, { appId, actorId: owner.id, role, status: 200, operatorAction: 'audit', target: null });
+  await writeRow(c.env.DB, { appId, actorId: owner.id, ...role, status: 200, operatorAction: 'audit', target: null });
   markAudited(c.req.raw);
   c.header('Cache-Control', 'private, no-store');
   return c.json({

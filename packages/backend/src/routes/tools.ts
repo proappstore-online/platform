@@ -27,6 +27,7 @@ import { validateOperatorGate } from '../lib/manifest/operator.js';
 import { validateVisibility } from '../lib/manifest/visibility.js';
 import { validateWorkerManifest } from '../lib/manifest/worker.js';
 import { validateUserSecrets } from '../lib/manifest/user-secrets.js';
+import { validateRoles } from '../lib/manifest/roles.js';
 import { validateHooks } from '../lib/manifest/hooks.js';
 import { validateConnectors } from '../lib/manifest/connectors.js';
 import { googleContractHash } from '../lib/google-calendar-policy.js';
@@ -207,6 +208,8 @@ export async function replaceAppTools(
   if ('error' in operatorResult) return { status: 400, payload: { error: operatorResult.error } };
   const operatorView = validateOperatorView(tools as ToolManifest[], site.operator_view);
   if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
+  const rolesResult = validateRoles(site.roles, tools as ToolManifest[], operatorView.contract);
+  if ('error' in rolesResult) return { status: 400, payload: { error: rolesResult.error } };
   const visibilityResult = validateVisibility(site.visibility, tools as ToolManifest[]);
   if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
   const workerResult = validateWorkerManifest(site.worker);
@@ -334,6 +337,12 @@ export async function replaceAppTools(
     ...userSecretsResult.userSecrets.map((d) =>
       db.prepare('INSERT INTO app_user_secret_decls (app_id, name, label, description, created_at) VALUES (?, ?, ?, ?, ?)')
         .bind(appId, d.name, d.label, d.description, now)),
+    // Declared app roles (#695), replaced with the manifest. Grants in app_roles stay;
+    // a manifest without `roles` leaves the owner holding only what they were granted.
+    db.prepare('DELETE FROM app_declared_roles WHERE app_id = ?').bind(appId),
+    ...(rolesResult.roles ?? []).map((r, i) =>
+      db.prepare('INSERT INTO app_declared_roles (app_id, role_id, position, label, description, requires, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(appId, r.id, i, r.label, r.description, JSON.stringify(r.requires), now)),
     // Worker schedules (#255) are replaced with the manifest too. Their run
     // history and breaker state live in scheduled_action_runs/_state under
     // 'worker:<name>' (source 'code'), reset by the DELETE above like actions'.
@@ -427,6 +436,7 @@ export async function replaceAppTools(
       visibility: visibilityResult.visibility ?? PUBLIC_VISIBILITY,
       worker: workerResult.worker,
       user_secrets: userSecretsResult.userSecrets.map((d) => d.name),
+      roles: rolesResult.roles?.map((r) => r.id) ?? null,
       hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       connectors: connectorsResult.connectors.map((k) => ({ name: k.name, kind: k.kind, modes: k.modes })),
       rooms: roomsResult.rules.map((r) => ({ pattern: `${r.prefix}*`, authorize: r.authorize })),
@@ -621,7 +631,7 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
   const appId = c.req.param('appId')!;
   await requireAppOwner(c, appId);
   // Code rows only: console endpoints are removed through the audited endpoints route (#155).
-  // Page meta, sitemap, the operator gate, the operator view and the worker section go with the code manifest that declared them (#210, #229, #240, #254).
+  // Page meta, sitemap, the operator gate, the operator view, the worker section and the declared roles go with the code manifest that declared them (#210, #229, #240, #254, #695).
   // Visibility (#259) deliberately does not: removing an app's tools must never
   // make a private app public. Only a registration that omits it does that.
   await c.env.DB.batch([
@@ -637,6 +647,8 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_room_rules WHERE app_id = ?').bind(appId),
     // #587: the declared user-secret names; users' stored values stay theirs.
     c.env.DB.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(appId),
+    // #695: the declared roles; grants in app_roles stay.
+    c.env.DB.prepare('DELETE FROM app_declared_roles WHERE app_id = ?').bind(appId),
   ]);
   return c.json({ ok: true });
 });

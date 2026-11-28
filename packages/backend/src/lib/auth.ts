@@ -169,7 +169,8 @@ export async function optionalUser(c: Context<{ Bindings: Env }>): Promise<FasUs
 //   2. TeamRole     — who may BUILD/operate an app (repo, data, deploy). From
 //      team_members. Check: requireAppAccess()/requireAppOwner().
 //   3. AppRole      — roles within an app's OWN user base (the app author's
-//      RBAC; custom strings allowed). From app_roles. Check: enforceActionAuth
+//      RBAC; custom strings allowed). From app_roles, plus every role the app
+//      declares for its owner (lib/held-app-roles.ts, #695). Check: enforceActionAuth
 //      (backend/routes/actions.ts) + the tool SQL guards.
 // ---------------------------------------------------------------------------
 

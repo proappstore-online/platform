@@ -49,7 +49,7 @@ beforeEach(() => {
   m.actionCallers.mockReturnValue(['user']);
   m.gatedTool.mockReturnValue(undefined);
   m.unguardedStatements.mockReturnValue([]);
-  m.enforceActionAuth.mockResolvedValue('reviewer');
+  m.enforceActionAuth.mockResolvedValue({ role: 'reviewer', viaOwner: false });
   m.prepareActionQuery.mockReturnValue({ sql: 'select 1' });
   m.prepareActionBatch.mockReturnValue([{ sql: 'update 1' }]);
   m.forwardToDataWorker.mockResolvedValue(json({ rows: [{ id: 1 }] }));
@@ -61,7 +61,7 @@ describe('runOperatorQuery / startOperatorQuery', () => {
   it('returns the rows and audits the role-granted success with the operator context', async () => {
     expect(await runOperatorQuery(env, 'a', 'act', { x: 1 }, user, 'tok', audit)).toEqual([{ id: 1 }]);
     expect(m.forwardToDataWorker).toHaveBeenCalledWith(env, 'a', 'query', { sql: 'select 1' }, 'tok');
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer' }, 200, audit);
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer', viaOwner: false }, 200, audit);
     expect(m.markAudited).toHaveBeenCalledWith(request);
   });
 
@@ -81,7 +81,7 @@ describe('runOperatorQuery / startOperatorQuery', () => {
     const read = await startOperatorQuery(env, 'a', 'act', {}, user, 'tok', audit);
     expect(m.recordActionSuccess).not.toHaveBeenCalled();
     await read.finish(404);
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer' }, 404, audit);
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer', viaOwner: false }, 404, audit);
   });
 
   it('requires recent auth on the console relying party when the action is step_up', async () => {
@@ -178,7 +178,7 @@ describe('runOperatorWrite', () => {
     m.forwardToDataWorker.mockResolvedValue(json({ meta: { changes: 1 } }));
     expect(await runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, null)).toBe(1);
     expect(m.forwardToDataWorker).toHaveBeenCalledWith(env, 'a', 'execute', { sql: 'select 1' }, 'tok');
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer' }, 200, audit);
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer', viaOwner: false }, 200, audit);
   });
 
   it('sums changes across a batch', async () => {

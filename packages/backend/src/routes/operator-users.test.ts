@@ -49,7 +49,7 @@ describe('GET /v1/apps/:appId/operator/users (#246)', () => {
     expect(sqlOf(d)[1]).not.toMatch(/email/i);
     expect(JSON.stringify(body)).not.toMatch(/email/i);
     // One audit row: who, which read — no target, no results.
-    expect(audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 200, expect.any(Number), 'read:platform-users', null);
+    expect(audit.bind).toHaveBeenCalledWith('stash', '', 'gh:1', '', 0, 200, expect.any(Number), 'read:platform-users', null);
     expect(audit.bind).toHaveBeenCalledTimes(1);
   });
 

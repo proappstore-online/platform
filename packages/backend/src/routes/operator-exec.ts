@@ -3,13 +3,17 @@
  * or write for the owner-only operator routes under exactly the gates of
  * POST /apps/:appId/actions/:name — the action's platform/app role check from
  * D1, then step_up — and writes the success audit with the operator context.
- * App ownership (checked by the operator route) grants nothing here.
+ * App ownership (checked by the operator route) admits no action by itself: the
+ * owner holds the roles the app DECLARES in mcp.json `roles` (#695), so an action
+ * gated by a declared role runs for them, audited as owner-held; an undeclared
+ * role must still be granted.
  */
 import type { Env } from '../types.js';
 import { HttpError, requireRecentAuth, type FasUser } from '../lib/auth.js';
 import { actionCallers, batchPayload, prepareActionBatch, prepareActionQuery, type ToolManifest } from '../lib/action-sql.js';
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
+import type { RoleGrant } from '../lib/held-app-roles.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
 import { unguardedStatements } from '../lib/operator-contract.js';
 import { gatedTool } from '../lib/operator-contract-shared.js';
@@ -27,7 +31,8 @@ export interface OperatorAudit {
  * (#240) and return its rows. The same gates as POST /apps/:appId/actions/:name
  * for a session caller — platform/app role check from D1, then step_up — and a
  * role-granted success is audited the same way. The caller's app ownership is
- * checked by the operator route before this runs; ownership grants nothing here.
+ * checked by the operator route before this runs; beyond the app's declared roles
+ * (#695, which the owner holds), ownership grants nothing here.
  */
 export async function runOperatorQuery(
   env: Env,
@@ -63,7 +68,7 @@ export async function startOperatorQuery(
   return {
     rows: Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [],
     finish: async (status) => {
-      if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, status, audit); markAudited(audit.request); }
+      if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, ...role }, status, audit); markAudited(audit.request); }
     },
   };
 }
@@ -93,7 +98,7 @@ export async function runOperatorWrite(
     ? result.results.reduce((n, r) => n + Number(r.meta?.changes ?? 0), 0)
     : Number(result.meta?.changes ?? 0);
   const refused = guard !== null && changes === 0;
-  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, role }, refused ? 409 : 200, audit); markAudited(audit.request); }
+  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, ...role }, refused ? 409 : 200, audit); markAudited(audit.request); }
   if (refused) throw new HttpError('the record changed since it was loaded; reload and try again', 409);
   return changes;
 }
@@ -107,7 +112,7 @@ async function runOperatorCall(
   token: string,
   operations: ToolManifest['operation'][],
   guard: string | null = null,
-): Promise<{ body: unknown; role: string | null }> {
+): Promise<{ body: unknown; role: RoleGrant | null }> {
   const manifest = await loadManifest(env.DB, appId, name);
   // The console runs actions as the owner: a worker/hook-only action (#254) is out of reach, like a scheduled one.
   if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined || !actionCallers(manifest).includes('user')) {

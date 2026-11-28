@@ -95,7 +95,7 @@ operatorUsersRoutes.get('/apps/:appId/operator/users', async (c) => {
     activity: activityOf(r.last_seen, now),
   }));
 
-  await writeRow(c.env.DB, { appId, actorId: owner.id, role: '', status: 200, operatorAction: PLATFORM_USERS_READ, target: null });
+  await writeRow(c.env.DB, { appId, actorId: owner.id, role: '', viaOwner: false, status: 200, operatorAction: PLATFORM_USERS_READ, target: null });
   markAudited(c.req.raw);
   c.header('Cache-Control', 'private, no-store');
   return c.json({ users, next_cursor: (results?.length ?? 0) > PAGE ? page[page.length - 1]!.user_id : null });

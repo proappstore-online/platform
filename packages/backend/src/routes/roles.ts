@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireAppAccess, HttpError } from '../lib/auth.js';
 import { roleSubjects } from '../lib/role-subject.js';
+import { declaredAppRoles, heldAppRoles } from '../lib/held-app-roles.js';
+import { APP_ROLE_NAME_RE, dependentRoles, requiredRoles } from '../lib/manifest/roles.js';
 
 /**
  * App-level RBAC endpoints. Vendored from FAS, adapted for PAS auth.
@@ -9,6 +11,11 @@ import { roleSubjects } from '../lib/role-subject.js';
  * Default roles (convention, not enforced at DB level):
  *   owner, member, moderator, editor, viewer
  * Custom roles: devs can assign any string as a role name.
+ *
+ * Declared roles (#695): an app may declare its roles in mcp.json `roles`. The
+ * app's owner then holds every declared role (lib/held-app-roles.ts), granting a
+ * declared role also grants the roles it `requires`, and revoking one also
+ * revokes the declared roles that require it.
  */
 export const rolesRoutes = new Hono<{ Bindings: Env }>();
 
@@ -53,7 +60,17 @@ rolesRoutes.get('/apps/:appId/roles', async (c) => {
   return c.json({ roles });
 });
 
-/** Assign a role to a user. Requires admin-level app access. */
+/** The roles the app declares in mcp.json `roles` (#695), for the Console. Any team member. */
+rolesRoutes.get('/apps/:appId/roles/declared', async (c) => {
+  const appId = c.req.param('appId');
+  await requireAppAccess(c, appId, 'viewer');
+  return c.json({ roles: await declaredAppRoles(c.env.DB, appId) });
+});
+
+/**
+ * Assign a role to a user. Requires admin-level app access. A declared role
+ * also grants the declared roles it requires, transitively (#695).
+ */
 rolesRoutes.post('/apps/:appId/roles', async (c) => {
   const appId = c.req.param('appId');
   const actor = await requireAppAccess(c, appId, 'admin');
@@ -67,7 +84,7 @@ rolesRoutes.post('/apps/:appId/roles', async (c) => {
     return c.json({ error: 'userId and role are required' }, 400);
   }
 
-  if (!/^[a-z][a-z0-9_-]{0,49}$/.test(body.role)) {
+  if (!APP_ROLE_NAME_RE.test(body.role)) {
     return c.json(
       { error: 'role must be lowercase alphanumeric with hyphens/underscores, 1-50 chars' },
       400,
@@ -79,25 +96,26 @@ rolesRoutes.post('/apps/:appId/roles', async (c) => {
   }
 
   const target = await resolveRoleUser(c.env, body.userId);
+  const roles = [body.role, ...requiredRoles(await declaredAppRoles(c.env.DB, appId), body.role)];
 
-  if (target.login && target.login !== target.id) {
-    await c.env.DB.prepare('DELETE FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ?')
-      .bind(appId, target.login, body.role)
-      .run();
-  }
+  await c.env.DB.batch(roles.flatMap((role) => [
+    ...(target.login && target.login !== target.id
+      ? [c.env.DB.prepare('DELETE FROM app_roles WHERE app_id = ? AND user_id = ? AND role_name = ?').bind(appId, target.login, role)]
+      : []),
+    c.env.DB.prepare(
+      `INSERT INTO app_roles (app_id, user_id, role_name, granted_by)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(app_id, user_id, role_name) DO NOTHING`,
+    ).bind(appId, target.id, role, actor.id),
+  ]));
 
-  await c.env.DB.prepare(
-    `INSERT INTO app_roles (app_id, user_id, role_name, granted_by)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(app_id, user_id, role_name) DO NOTHING`,
-  )
-    .bind(appId, target.id, body.role, actor.id)
-    .run();
-
-  return c.json({ ok: true, appId, userId: target.id, userLogin: target.login, userAvatarUrl: target.avatarUrl, role: body.role });
+  return c.json({ ok: true, appId, userId: target.id, userLogin: target.login, userAvatarUrl: target.avatarUrl, role: body.role, requiredRoles: roles.slice(1) });
 });
 
-/** Revoke a role from a user. Requires admin-level app access. */
+/**
+ * Revoke a role from a user. Requires admin-level app access. Declared roles
+ * that require it, transitively, are revoked with it (#695).
+ */
 rolesRoutes.delete('/apps/:appId/roles', async (c) => {
   const appId = c.req.param('appId');
   await requireAppAccess(c, appId, 'admin');
@@ -120,14 +138,16 @@ rolesRoutes.delete('/apps/:appId/roles', async (c) => {
   // matches nothing and the role silently survives. Match id OR login to also
   // clear any legacy login-keyed rows.
   const target = await resolveRoleUser(c.env, body.userId);
+  const dependents = dependentRoles(await declaredAppRoles(c.env.DB, appId), body.role);
+  const roles = [body.role, ...dependents];
   const result = await c.env.DB.prepare(
-    'DELETE FROM app_roles WHERE app_id = ? AND user_id IN (?, ?) AND role_name = ?',
+    `DELETE FROM app_roles WHERE app_id = ? AND user_id IN (?, ?) AND role_name IN (${roles.map(() => '?').join(', ')})`,
   )
-    .bind(appId, target.id, target.login ?? target.id, body.role)
+    .bind(appId, target.id, target.login ?? target.id, ...roles)
     .run();
 
   const revoked = (result.meta.changes ?? 0) > 0;
-  return c.json({ ok: true, revoked, userId: target.id, role: body.role });
+  return c.json({ ok: true, revoked, userId: target.id, role: body.role, dependentRoles: dependents });
 });
 
 /** Check if the caller has a specific role in an app. */
@@ -139,14 +159,9 @@ rolesRoutes.get('/apps/:appId/roles/check/:role', async (c) => {
   // #121: `source: 'token'` used to short-circuit here on a claim that was
   // never populated, so it never fired. The DB is the only authority now — the
   // `source` field is kept in the response for compatibility and always reads
-  // 'db'.
-  const row = await c.env.DB.prepare(
-    'SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name = ? LIMIT 1',
-  )
-    .bind(appId, ...roleSubjects(user), role)
-    .first();
-
-  return c.json({ has: row !== null, source: 'db' });
+  // 'db'. #695: the owner holds every role the app declares.
+  const held = await heldAppRoles(c.env.DB, appId, user);
+  return c.json({ has: held.has(role), source: 'db' });
 });
 
 /** Get the current user's roles in this app. */
@@ -154,13 +169,8 @@ rolesRoutes.get('/apps/:appId/roles/me', async (c) => {
   const user = await requireUser(c);
   const appId = c.req.param('appId');
 
-  const { results } = await c.env.DB.prepare(
-    'SELECT role_name FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?)',
-  )
-    .bind(appId, ...roleSubjects(user))
-    .all<{ role_name: string }>();
-
-  return c.json({ roles: (results ?? []).map((r) => r.role_name) });
+  // #695: granted roles, plus every declared role when the caller owns the app.
+  return c.json({ roles: [...(await heldAppRoles(c.env.DB, appId, user)).keys()] });
 });
 
 /** Ensure the current user has at least 'member' role. Idempotent. */

@@ -45,6 +45,7 @@ export const APP_ID_COLUMNS: readonly AppIdColumn[] = [
   { table: 'app_connector_installations', column: 'app_id', kind: 'id' },
   { table: 'app_connectors', column: 'app_id', kind: 'id' },
   { table: 'app_custom_domains', column: 'app_id', kind: 'id' },
+  { table: 'app_declared_roles', column: 'app_id', kind: 'id' },
   { table: 'app_embed', column: 'app_id', kind: 'id' },
   { table: 'app_endpoint_audit', column: 'app_id', kind: 'id' },
   { table: 'app_enquiries', column: 'app_id', kind: 'id' },

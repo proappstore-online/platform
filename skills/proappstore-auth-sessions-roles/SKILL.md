@@ -53,6 +53,10 @@ every chapter.
    ([PAS-AUTH-013](https://docs.proappstore.online/standard/auth/#pas-auth-013)),
    and `member` means "signed in", never a privilege
    ([PAS-AUTH-014](https://docs.proappstore.online/standard/auth/#pas-auth-014)).
+   Declare the app's roles in the top-level `mcp.json` `roles` block
+   (`{ id, label, description?, requires? }`): registration then refuses a
+   gate naming an undeclared role, the app owner holds every declared role,
+   and granting a role also grants the roles it `requires`.
 3. **The server is the boundary; SQL scoping is the final check.** Every
    action defaults to `requires_auth: true`, declares the narrowest
    `app_roles`, and scopes rows to the caller in SQL. A UI guard, a hidden

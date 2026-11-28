@@ -67,7 +67,8 @@ function fakeDb(): D1Database {
     if (s.startsWith('SELECT secrets FROM app_worker_manifest')) return { first: workerSecrets ? { secrets: JSON.stringify(workerSecrets) } : null };
     if (s.startsWith('SELECT key_ciphertext')) return { first: appSecrets.get(String(args[1])) ?? null };
     if (s.startsWith('UPDATE app_secrets SET last_used_at')) return { changes: 1 };
-    if (s.startsWith('SELECT role_name FROM app_roles')) return { all: (appRoles.get(String(args[1])) ?? []).map((role_name) => ({ role_name })) };
+    // #695: held roles are grants plus the owner's declared roles; this fake app declares none.
+    if (s.startsWith("SELECT role_name, 'grant' AS source FROM app_roles")) return { all: (appRoles.get(String(args[1])) ?? []).map((role_name) => ({ role_name, source: 'grant' })) };
     if (s.startsWith('INSERT INTO app_action_audit')) { audits.push(args); return { changes: 1 }; }
     // #316: worker log lines are metered on app_worker_usage.log_entries. app_log_usage — the counter anonymous
     // ingestion spends — is deliberately unhandled here, so any worker path that touches it fails the test.
