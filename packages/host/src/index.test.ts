@@ -890,9 +890,11 @@ describe("passkey mediation (#230)", () => {
       expect(request.headers.get("Authorization")).toBe("Bearer cookie-token");
       expect(request.headers.get("X-PAS-App")).toBe("meetup");
       expect(request.headers.get("X-PAS-Host")).toBe("meetup.proappstore.online");
+      // #700: the browser's user agent names a new passkey.
+      expect(request.headers.get("User-Agent")).toBe("Mozilla/5.0 (Macintosh) Chrome/131.0");
       return Response.json({ challenge: "c" });
     });
-    const res = await post("register/options", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token", "X-PAS-Host": "other.proappstore.online", "X-PAS-App": "other" }, makeEnv({ apiFetch }));
+    const res = await post("register/options", { ...sameOrigin, Cookie: "__Host-pas_session=cookie-token", "X-PAS-Host": "other.proappstore.online", "X-PAS-App": "other", "User-Agent": "Mozilla/5.0 (Macintosh) Chrome/131.0" }, makeEnv({ apiFetch }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ challenge: "c" });
     expect(res.headers.get("Cache-Control")).toBe("no-store");

@@ -315,6 +315,34 @@ forwards them with the cookie session:
 Attestation is `none`, so this proves the same authenticator was used again, not
 what kind of authenticator it is.
 
+#### Managing your passkeys (#700)
+
+A person lists, names and removes their own passkeys from the Console. These
+routes take the Console bearer session and answer only a direct call whose
+`Origin` is a Console origin: never through an app (the cookie data plane
+carries `X-PAS-App`, so app page JS cannot touch platform passkeys), and never
+with an `app_bound` session (`403 passkeys are managed from the console`). They
+act only on the caller's own credentials; anyone else's id is `404`.
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /v1/auth/passkey/credentials` | — | `{ credentials: [{ id, name, rp_id, transports, created_at, last_used_at }] }`, newest first. Never a public key or counter. |
+| `PATCH /v1/auth/passkey/credentials/:id` | `{ name }` (trimmed, 1–60 characters) | `{ ok: true, id, name }` |
+| `DELETE /v1/auth/passkey/credentials/:id` | — | `{ ok: true, id }`; `403 { code: 'reauth_required' }` unless the session's `auth_time` is within 10 minutes (a fresh sign-in or passkey step-up) |
+
+- `name` is set at registration: `register` takes an optional `name` (same
+  rule), defaulting to one read from the user agent, such as `Mac · Chrome`
+  (the host forwards the browser's `User-Agent`). Credentials from before #700
+  list as `Passkey`. `register` answers `{ ok: true, id, name }`.
+- `transports` is what the browser's `getTransports()` reported at
+  registration (`usb`, `nfc`, `ble`, `smart-card`, `hybrid`, `internal`), sent
+  as `transports` in the `register` body; `[]` when none.
+- `last_used_at` (epoch ms, or `null`) is set on every successful step-up.
+- Every add, rename and remove writes an `account_audit_events` row (`action`
+  `passkey.add` / `passkey.rename` / `passkey.remove`, `target_type` `passkey`,
+  `target_id` the credential id; `app_id` the app a passkey was added through).
+  Never a key or a name.
+
 ### Phase 3: Same-Origin API Mediation
 
 Status: started.

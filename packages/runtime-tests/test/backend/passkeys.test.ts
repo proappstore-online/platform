@@ -1,5 +1,5 @@
 import { SELF, env } from 'cloudflare:test';
-import { mintSession, verifySession } from '@proappstore/build-core';
+import { credentialContext, mintSession, verifySession } from '@proappstore/build-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BASE, viaHostApi } from './helpers';
 import { Authenticator } from './webauthn';
@@ -362,5 +362,119 @@ describe('one passkey for the platform (#699)', () => {
     const opts = await ok(await call('step-up/options', stale, {}, SHOP, 'shop'));
     expect(opts.rpId).toBe(SHOP);
     expect(await audienceOf(await call('step-up', stale, await local.assert(opts.challenge), SHOP, 'shop'))).toBe(SHOP);
+  });
+});
+
+// #700: a person lists, names and removes their own passkeys from the Console.
+// Never a public key or counter, never through an app, never someone else's;
+// removing needs a fresh sign-in or step-up; every change is audited.
+describe('passkey management (#700)', () => {
+  const CONSOLE = 'https://console.proappstore.online';
+  const MAC_CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  const manage = (method: string, path: string, token: string, body?: unknown, headers: Record<string, string> = { Origin: CONSOLE }) =>
+    SELF.fetch(`${BASE}/v1/auth/passkey/credentials${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const list = async (token: string) => ((await (await manage('GET', '', token)).json()) as { credentials: Record<string, unknown>[] }).credentials;
+  const audits = (id: string) => env.DB.prepare("SELECT action, actor_id, target_type, app_id FROM account_audit_events WHERE target_id = ?1 ORDER BY created_at, action").bind(id).all().then((r) => r.results);
+  /** Register on the Console with `extra` body fields. */
+  const enrollOnConsole = async (token: string, extra: Record<string, unknown> = {}) => {
+    const auth = await Authenticator.create(RP, CONSOLE);
+    const opts = (await (await SELF.fetch(`${BASE}/v1/auth/passkey/register/options`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: CONSOLE }, body: '{}' })).json()) as { challenge: string };
+    return { auth, res: await SELF.fetch(`${BASE}/v1/auth/passkey/register`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: CONSOLE }, body: JSON.stringify({ ...(await auth.attest(opts.challenge)), ...extra }) }) };
+  };
+
+  it('registration takes a name and transports, or names the passkey from the user agent; the list shows only safe fields', async () => {
+    const token = await signIn({ authTime: now() });
+    const { auth: named, res } = await enrollOnConsole(token, { name: '  Work laptop  ', transports: ['internal', 'hybrid', 'bogus'] });
+    expect(await res.json()).toMatchObject({ ok: true, name: 'Work laptop' });
+
+    // Through an app, with no name: the host forwards the browser's user agent.
+    const app = await Authenticator.create(RP, `https://${HOST}`);
+    const viaApp = (path: string, body: unknown = {}) => viaHostApi(`${BASE}/v1/auth/passkey/${path}`, {
+      method: 'POST', body: JSON.stringify(body),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-PAS-App': 'demo', 'X-PAS-Host': HOST, 'User-Agent': MAC_CHROME },
+    });
+    // A second passkey needs a step-up on this surface first.
+    const up = await viaApp('step-up', await named.assert(((await (await viaApp('step-up/options')).json()) as { challenge: string }).challenge, { origin: `https://${HOST}` }));
+    const stepped = ((await up.json()) as { token: string }).token;
+    const reg = await viaHostApi(`${BASE}/v1/auth/passkey/register`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${stepped}`, 'Content-Type': 'application/json', 'X-PAS-App': 'demo', 'X-PAS-Host': HOST, 'User-Agent': MAC_CHROME },
+      body: JSON.stringify(await app.attest(((await (await viaHostApi(`${BASE}/v1/auth/passkey/register/options`, { method: 'POST', headers: { Authorization: `Bearer ${stepped}`, 'Content-Type': 'application/json', 'X-PAS-App': 'demo', 'X-PAS-Host': HOST }, body: '{}' })).json()) as { challenge: string }).challenge)),
+    });
+    expect(await reg.json()).toMatchObject({ ok: true, name: 'Mac · Chrome' });
+
+    const creds = await list(token);
+    expect(creds).toHaveLength(2);
+    for (const c of creds) expect(Object.keys(c).sort()).toEqual(['created_at', 'id', 'last_used_at', 'name', 'rp_id', 'transports']);
+    const byName = Object.fromEntries(creds.map((c) => [c.name, c]));
+    expect(byName['Work laptop']).toMatchObject({ rp_id: RP, transports: ['internal', 'hybrid'] });
+    expect(byName['Work laptop']!.last_used_at).toBeGreaterThan(0); // the step-up above used it
+    expect(byName['Mac · Chrome']).toMatchObject({ rp_id: RP, transports: [], last_used_at: null });
+    expect(await audits(byName['Mac · Chrome']!.id as string)).toEqual([{ action: 'passkey.add', actor_id: UID, target_type: 'passkey', app_id: 'demo' }]);
+    expect(await audits(byName['Work laptop']!.id as string)).toEqual([{ action: 'passkey.add', actor_id: UID, target_type: 'passkey', app_id: null }]);
+  });
+
+  it('refuses a bad name at registration and on rename', async () => {
+    const token = await signIn({ authTime: now() });
+    expect((await enrollOnConsole(token, { name: 'x'.repeat(61) })).res.status).toBe(400);
+    const { res } = await enrollOnConsole(token);
+    const { id } = (await res.json()) as { id: string };
+    for (const name of ['   ', 'x'.repeat(61), 42]) expect((await manage('PATCH', `/${id}`, token, { name })).status, String(name)).toBe(400);
+    expect((await list(token))[0]!.name).toBe('Passkey'); // no user agent sent
+  });
+
+  it('renames only your own passkey, and audits it', async () => {
+    const token = await signIn({ authTime: now() });
+    const { id } = (await (await enrollOnConsole(token)).res.json()) as { id: string };
+    const res = await manage('PATCH', `/${id}`, token, { name: ' Phone ' });
+    expect(await res.json()).toEqual({ ok: true, id, name: 'Phone' });
+    expect((await list(token))[0]!.name).toBe('Phone');
+
+    const stranger = await mintSession({ uid: 'gh:8', login: 'x', avatarUrl: null, roles: ['user'], auth_time: now(), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+    expect((await manage('PATCH', `/${id}`, stranger, { name: 'mine' })).status).toBe(404);
+    expect(await list(stranger)).toEqual([]);
+    expect((await audits(id)).map((a) => a.action)).toEqual(['passkey.add', 'passkey.rename']);
+  });
+
+  it('removing needs a fresh sign-in or passkey step-up, and only removes your own', async () => {
+    const fresh = await signIn({ authTime: now() });
+    const { auth, res } = await enrollOnConsole(fresh);
+    const { id } = (await res.json()) as { id: string };
+
+    const stale = await signIn({ authTime: now() - 3600 });
+    const refused = await manage('DELETE', `/${id}`, stale);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'reauth_required' });
+    const stranger = await mintSession({ uid: 'gh:8', login: 'x', avatarUrl: null, roles: ['user'], auth_time: now(), auth_method: 'github' }, env.SESSION_SIGNING_KEY);
+    expect((await manage('DELETE', `/${id}`, stranger)).status).toBe(404);
+
+    // A Console passkey step-up from the stale session is fresh enough.
+    const opts = (await (await SELF.fetch(`${BASE}/v1/auth/passkey/step-up/options`, { method: 'POST', headers: { Authorization: `Bearer ${stale}`, 'Content-Type': 'application/json', Origin: CONSOLE }, body: '{}' })).json()) as { challenge: string };
+    const up = await SELF.fetch(`${BASE}/v1/auth/passkey/step-up`, { method: 'POST', headers: { Authorization: `Bearer ${stale}`, 'Content-Type': 'application/json', Origin: CONSOLE }, body: JSON.stringify(await auth.assert(opts.challenge)) });
+    const stepped = ((await up.json()) as { token: string }).token;
+    expect(await (await manage('DELETE', `/${id}`, stepped)).json()).toEqual({ ok: true, id });
+    expect(await list(fresh)).toEqual([]);
+    expect((await manage('DELETE', `/${id}`, fresh)).status).toBe(404);
+    expect((await audits(id)).map((a) => a.action)).toEqual(['passkey.add', 'passkey.remove']);
+  });
+
+  it('is only reachable from the Console: never through an app, another origin or an app-bound session', async () => {
+    const token = await signIn({ authTime: now() });
+    const { id } = (await (await enrollOnConsole(token)).res.json()) as { id: string };
+    // The cookie data plane: X-PAS-App, no X-PAS-Host; and a full app mediation.
+    for (const headers of [{ 'X-PAS-App': 'demo' }, { 'X-PAS-App': 'demo', 'X-PAS-Host': HOST }] as Record<string, string>[]) {
+      const res = await viaHostApi(`${BASE}/v1/auth/passkey/credentials/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, Origin: CONSOLE, ...headers } });
+      expect(res.status, JSON.stringify(headers)).toBe(403);
+    }
+    for (const headers of [{}, { Origin: `https://${HOST}` }, { Origin: 'https://evil.example' }] as Record<string, string>[]) {
+      expect((await manage('GET', '', token, undefined, headers)).status, JSON.stringify(headers)).toBe(403);
+    }
+    const appBound = await mintSession({ uid: UID, login: 'op', avatarUrl: null, roles: ['user'], auth_time: now(), auth_method: 'github', cred: credentialContext('app_bound', 'demo') } as never, env.SESSION_SIGNING_KEY);
+    expect((await manage('DELETE', `/${id}`, appBound)).status).toBe(403);
+    expect(await list(token)).toHaveLength(1);
   });
 });

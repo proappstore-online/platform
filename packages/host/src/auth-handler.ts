@@ -199,6 +199,8 @@ async function authPasskey(request: Request, env: Env, route: Route, op: string)
         "Content-Type": "application/json",
         "X-PAS-App": route.slug,
         "X-PAS-Host": new URL(request.url).hostname,
+        // #700: a new passkey's default name ("Mac · Chrome") comes from the browser's user agent.
+        "User-Agent": request.headers.get("User-Agent") ?? "",
       },
       body: await request.text(),
     }),

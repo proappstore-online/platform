@@ -18,18 +18,26 @@
  * returns the token to the console page, which holds it in memory for
  * step-up-guarded reads.
  *
+ * A person manages their own passkeys from the Console (#700): list, rename
+ * and remove (remove needs a fresh sign-in or step-up), each audited in
+ * account_audit_events. Registration takes an optional `name`, defaulting to
+ * one read from the user agent.
+ *
  * Registration uses `attestation: 'none'`. The browser sends the SPKI public key
  * (`AuthenticatorAttestationResponse.getPublicKey()`), so there is no CBOR to
  * parse. That key is only trusted because the registering session is freshly
  * authenticated (see requireFreshForRegistration): a stolen long-lived cookie
  * must not be able to enroll the thief's own passkey and then step up with it.
  */
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { mintSession, type NewSession, type SessionClaims } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
+import { parseCredentialContext } from '../lib/accounts/credential-context.js';
+import { newId } from '../lib/accounts/operations.js';
+import { APP_CONTEXT_HEADER } from '../lib/app-context.js';
 import { timingSafeEqual } from '../lib/bytes.js';
-import { passkeyRelyingParty, type RelyingParty } from '../lib/relying-party.js';
+import { consoleOrigin, passkeyRelyingParty, type RelyingParty } from '../lib/relying-party.js';
 import { requireClaims } from './auth.js';
 
 export const passkeyRoutes = new Hono<{ Bindings: Env }>();
@@ -44,6 +52,11 @@ const TIMEOUT_MS = 5 * 60 * 1000;
 /** COSE algorithm ids we verify. */
 const ES256 = -7;
 const RS256 = -257;
+
+/** Longest passkey name (#700). */
+const NAME_MAX = 60;
+/** The WebAuthn transports we keep as a device hint (#700). */
+const TRANSPORTS: ReadonlySet<string> = new Set(['usb', 'nfc', 'ble', 'smart-card', 'hybrid', 'internal']);
 
 const FLAG_UP = 0x01; // user present
 const FLAG_UV = 0x04; // user verified (PIN / biometric) — the second factor
@@ -80,6 +93,60 @@ async function credentialIds(db: D1Database, userId: string, rpId: string): Prom
   return (results ?? []).map((r) => r.id);
 }
 
+function isFresh(claims: SessionClaims): boolean {
+  return typeof claims.auth_time === 'number' && nowSeconds() - claims.auth_time <= FRESH_AUTH_SECONDS;
+}
+
+/** A readable default name from the user agent, e.g. "Mac · Chrome" (#700). */
+function deviceName(userAgent: string | undefined): string {
+  const ua = userAgent ?? '';
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /CrOS/.test(ua) ? 'ChromeOS'
+    : /Macintosh|Mac OS X/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : null;
+  const browser = /Edg(A|iOS)?\//.test(ua) ? 'Edge' : /Firefox\/|FxiOS/.test(ua) ? 'Firefox' : /OPR\//.test(ua) ? 'Opera'
+    : /Chrome\/|CriOS/.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : null;
+  return [os, browser].filter(Boolean).join(' · ') || 'Passkey';
+}
+
+/** A name from a request body: trimmed, 1–60 characters. */
+function parseName(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError('name must be a string', 400);
+  const name = value.trim();
+  if (!name || name.length > NAME_MAX) throw new HttpError(`name must be 1-${NAME_MAX} characters`, 400);
+  return name;
+}
+
+/** The known transports the browser reported, as stored JSON, or null. */
+function parseTransports(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const known = [...new Set(value.filter((t): t is string => typeof t === 'string' && TRANSPORTS.has(t)))];
+  return known.length ? JSON.stringify(known) : null;
+}
+
+/**
+ * The audit row for an add, rename or remove (#700), written only when the
+ * statement before it in the same batch changed a row. Never the key or name.
+ */
+function auditStatement(db: D1Database, claims: SessionClaims, action: 'passkey.add' | 'passkey.rename' | 'passkey.remove', credentialId: string, details: Record<string, unknown>, appId: string | null = null): D1PreparedStatement {
+  return db.prepare(
+    `INSERT INTO account_audit_events (id, account_id, app_id, actor_id, credential, action, target_type, target_id, details, created_at)
+     SELECT ?1, NULL, ?2, ?3, ?4, ?5, 'passkey', ?6, ?7, ?8 WHERE changes() > 0`,
+  ).bind(newId('aud'), appId, claims.uid, parseCredentialContext(claims.cred)?.kind ?? 'unverified', action, credentialId, JSON.stringify(details), Date.now());
+}
+
+/**
+ * Passkey management is the person's own account surface: only a direct call
+ * from a Console origin, never through an app (the cookie data plane carries
+ * X-PAS-App, so app page JS cannot list or remove platform passkeys), and never
+ * with an app-bound session.
+ */
+async function requireAccountClaims(c: Context<{ Bindings: Env }>): Promise<SessionClaims> {
+  const claims = await requireClaims(c);
+  if (!consoleOrigin(c) || parseCredentialContext(claims.cred)?.kind === 'app_bound') {
+    throw new HttpError('passkeys are managed from the console', 403);
+  }
+  return claims;
+}
+
 /**
  * Registering needs a recent sign-in; once the user has a passkey for this
  * credential RP id, adding another needs a recent passkey step-up on this same
@@ -87,7 +154,7 @@ async function credentialIds(db: D1Database, userId: string, rpId: string): Prom
  * never fresh.
  */
 function reauthRequired(claims: SessionClaims, hasPasskey: boolean, rp: RelyingParty): string | null {
-  const fresh = typeof claims.auth_time === 'number' && nowSeconds() - claims.auth_time <= FRESH_AUTH_SECONDS;
+  const fresh = isFresh(claims);
   if (hasPasskey) return fresh && claims.auth_method === 'passkey' && claims.step_up_rp_id === rp.audience ? null : 'adding another passkey requires a passkey step-up here first';
   return fresh ? null : 'sign in again to add a passkey';
 }
@@ -226,15 +293,18 @@ passkeyRoutes.post('/auth/passkey/register', async (c) => {
   }
 
   const id = toB64url(credentialId);
-  const inserted = await c.env.DB
-    .prepare(
-      `INSERT INTO passkey_credentials (id, user_id, rp_id, public_key, alg, sign_count, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id) DO NOTHING`,
-    )
-    .bind(id, claims.uid, rpId, publicKey as string, alg, signCount, Date.now())
-    .run();
-  if (!inserted.meta.changes) return c.json({ error: 'this passkey is already registered' }, 409);
-  return c.json({ ok: true, id });
+  const name = body.name === undefined || body.name === null ? deviceName(c.req.header('User-Agent')) : parseName(body.name);
+  const [inserted] = await c.env.DB.batch([
+    c.env.DB
+      .prepare(
+        `INSERT INTO passkey_credentials (id, user_id, rp_id, public_key, alg, sign_count, created_at, name, transports)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO NOTHING`,
+      )
+      .bind(id, claims.uid, rpId, publicKey as string, alg, signCount, Date.now(), name, parseTransports(body.transports)),
+    auditStatement(c.env.DB, claims, 'passkey.add', id, { rp_id: rpId, audience: rp.audience }, c.req.header(APP_CONTEXT_HEADER) ?? null),
+  ]);
+  if (!inserted!.meta.changes) return c.json({ error: 'this passkey is already registered' }, 409);
+  return c.json({ ok: true, id, name });
 });
 
 // ── step-up ──────────────────────────────────────────────────────
@@ -292,4 +362,53 @@ passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
   const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey', step_up_rp_id: rp.audience };
   const token = await mintSession(next, c.env.SESSION_SIGNING_KEY, STEP_UP_SESSION_TTL_SECONDS);
   return c.json({ token, auth_time: authTime, expires_at: authTime + STEP_UP_SESSION_TTL_SECONDS });
+});
+
+// ── management (#700) ────────────────────────────────────────────
+
+interface CredentialRow { id: string; name: string | null; rp_id: string; transports: string | null; created_at: number; last_used_at: number | null }
+
+/** The caller's own passkeys, newest first. Never a public key or counter. */
+passkeyRoutes.get('/auth/passkey/credentials', async (c) => {
+  const claims = await requireAccountClaims(c);
+  const { results } = await c.env.DB
+    .prepare('SELECT id, name, rp_id, transports, created_at, last_used_at FROM passkey_credentials WHERE user_id = ?1 ORDER BY created_at DESC, id')
+    .bind(claims.uid)
+    .all<CredentialRow>();
+  return c.json({
+    credentials: (results ?? []).map((r) => ({
+      id: r.id,
+      name: r.name ?? 'Passkey',
+      rp_id: r.rp_id,
+      transports: r.transports ? (JSON.parse(r.transports) as string[]) : [],
+      created_at: r.created_at,
+      last_used_at: r.last_used_at,
+    })),
+  });
+});
+
+passkeyRoutes.patch('/auth/passkey/credentials/:id', async (c) => {
+  const claims = await requireAccountClaims(c);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const name = parseName(body.name);
+  const id = c.req.param('id');
+  const [updated] = await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE passkey_credentials SET name = ?1 WHERE id = ?2 AND user_id = ?3').bind(name, id, claims.uid),
+    auditStatement(c.env.DB, claims, 'passkey.rename', id, {}),
+  ]);
+  if (!updated!.meta.changes) return c.json({ error: 'unknown passkey' }, 404);
+  return c.json({ ok: true, id, name });
+});
+
+/** Removing needs a recent sign-in or passkey step-up, so a stolen long-lived session cannot strip someone's passkeys. */
+passkeyRoutes.delete('/auth/passkey/credentials/:id', async (c) => {
+  const claims = await requireAccountClaims(c);
+  if (!isFresh(claims)) return c.json({ error: 'sign in again or verify with a passkey to remove a passkey', code: 'reauth_required' }, 403);
+  const id = c.req.param('id');
+  const [deleted] = await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM passkey_credentials WHERE id = ?1 AND user_id = ?2').bind(id, claims.uid),
+    auditStatement(c.env.DB, claims, 'passkey.remove', id, {}),
+  ]);
+  if (!deleted!.meta.changes) return c.json({ error: 'unknown passkey' }, 404);
+  return c.json({ ok: true, id });
 });

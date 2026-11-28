@@ -84,6 +84,17 @@ export function mediatedRelyingParty(c: Context<{ Bindings: Env }>): string | un
 }
 
 /**
+ * The Console origin of a direct call from the Console, or undefined: no host
+ * context header (so never the cookie data plane or a mediated app request)
+ * and a browser `Origin` that is exactly a Console origin (#334).
+ */
+export function consoleOrigin(c: Context<{ Bindings: Env }>): string | undefined {
+  const origin = c.req.header('Origin');
+  if (c.req.header(APP_CONTEXT_HEADER) || c.req.header(APP_HOST_HEADER) || !origin || !CONSOLE_ORIGINS.has(origin)) return undefined;
+  return origin;
+}
+
+/**
  * The relying party of a passkey ceremony request: the mediated app hostname,
  * or — for a direct call from a Console origin, which carries neither host
  * header — the Console. A mediated request always carries X-PAS-App, so the
@@ -102,10 +113,8 @@ export function mediatedRelyingParty(c: Context<{ Bindings: Env }>): string | un
  */
 export function passkeyRelyingParty(c: Context<{ Bindings: Env }>): RelyingParty {
   const appId = c.req.header(APP_CONTEXT_HEADER);
-  const origin = c.req.header('Origin');
-  if (!appId && !c.req.header(APP_HOST_HEADER) && origin && CONSOLE_ORIGINS.has(origin)) {
-    return { name: 'ProAppStore', id: PLATFORM_RP_ID, audience: CONSOLE_STEP_UP_AUDIENCE, origin };
-  }
+  const origin = consoleOrigin(c);
+  if (origin) return { name: 'ProAppStore', id: PLATFORM_RP_ID, audience: CONSOLE_STEP_UP_AUDIENCE, origin };
   const host = mediatedRelyingParty(c);
   if (!appId || !host) throw new HttpError('passkeys are only available on an app origin or the console', 400);
   const id = appCredentialRpId(host);
