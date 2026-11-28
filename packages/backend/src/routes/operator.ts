@@ -23,7 +23,7 @@ import { runOperatorQuery, runOperatorWrite, startOperatorQuery } from './operat
 import { REVIEW_CONTENT_TYPES, holdsReviewRole, recordReviewAccess } from '../lib/review-access.js';
 import { isSensitiveField } from '../lib/sensitive-fields.js';
 import { textParam } from '../lib/text-param.js';
-import { CONSOLE_RP_ID } from './passkeys.js';
+import { CONSOLE_RP_ID } from '../lib/relying-party.js';
 import { ROLE_HOLDERS_CTE } from '../lib/role-subject.js';
 
 export const operatorRoutes = new Hono<{ Bindings: Env }>();

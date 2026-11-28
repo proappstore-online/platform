@@ -356,7 +356,7 @@ describe('operator reports & suspensions (#240)', () => {
     }));
   }
   afterEach(() => vi.unstubAllGlobals());
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, TEST_SK);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'proappstore.online' } as never, TEST_SK);
   const act = (appId: string, id: string, row: unknown, d: ReturnType<typeof mockD1>, token: string = OWNER) =>
     app.request(`/v1/apps/${appId}/operator/actions/${id}`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ row }),
@@ -501,7 +501,7 @@ describe('operator ID verification (#240)', () => {
     if (!('contract' in r)) throw new Error(r.error);
     return JSON.stringify(r.contract);
   };
-  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, TEST_SK);
+  const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'proappstore.online' } as never, TEST_SK);
   let calls: string[] = [];
   function dataWorker(rows: Record<string, unknown>[], changes = 1) {
     calls = [];
@@ -583,10 +583,18 @@ describe('operator ID verification (#240)', () => {
     expect(bucket.get).not.toHaveBeenCalled();
   });
 
-  it('a document needs a recent PASSKEY step-up (#244): a fresh OAuth sign-in or a stale passkey is refused before any read', async () => {
+  it('a document needs a recent Console PASSKEY step-up (#244, #698): a fresh OAuth sign-in, a stale passkey or another audience is refused before any read', async () => {
     const recentGithub = await mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'github' } as never, TEST_SK);
     const stalePasskey = await mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 3600, auth_method: 'passkey' } as never, TEST_SK);
-    for (const [name, token] of [['recent github sign-in', recentGithub], ['stale passkey', stalePasskey]] as const) {
+    // A fresh passkey for another audience: an app's relying party (#331), or the
+    // Console's before #698 moved it to the parent domain — fail closed, step up again.
+    const passkeyFor = (rpId: string) => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: rpId } as never, TEST_SK);
+    for (const [name, token] of [
+      ['recent github sign-in', recentGithub],
+      ['stale passkey', stalePasskey],
+      ['app passkey', await passkeyFor('stash.proappstore.online')],
+      ['pre-#698 console passkey', await passkeyFor('console.proappstore.online')],
+    ] as const) {
       dataWorker([kycRow]);
       const bucket = storage();
       const { d, access } = db(STASH, 'op_kyc_detail', { evidence: true });

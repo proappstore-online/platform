@@ -88,7 +88,7 @@ describe('runOperatorQuery / startOperatorQuery', () => {
   it('requires recent auth on the console relying party when the action is step_up', async () => {
     m.loadManifest.mockResolvedValue(manifest({ step_up: true }));
     await runOperatorQuery(env, 'a', 'act', {}, user, 'tok', audit);
-    expect(m.requireRecentAuth).toHaveBeenCalledWith(user, env, expect.objectContaining({ rpId: expect.any(String) }));
+    expect(m.requireRecentAuth).toHaveBeenCalledWith(user, env, expect.objectContaining({ rpId: 'proappstore.online' }));
   });
 
   it('does not require recent auth for an action without step_up', async () => {

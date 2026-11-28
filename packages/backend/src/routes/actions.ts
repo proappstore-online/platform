@@ -24,20 +24,11 @@ import {
 import { looksLikeAppToken, rememberTokenUser, sha256Hex, touchLastUsed, verifyAppToken } from '../lib/app-tokens.js';
 import { getVerifier, runVerifier } from '../lib/verifiers/index.js';
 import { PUBLIC_VISIBILITY, requireVisible, visibilityFromRow, type AppVisibility } from '../lib/visibility.js';
-import { APP_HOST_HEADER } from '../lib/app-context.js';
+import { mediatedRelyingParty } from '../lib/relying-party.js';
 import { activeAppWorker, executionExports } from '../lib/app-worker-host.js';
 import { invokeAppWorkerHttp } from '../lib/app-worker-http.js';
 
 export const actionRoutes = new Hono<{ Bindings: Env }>();
-
-/**
- * Only HostApi can supply this header. A direct bearer request therefore cannot
- * claim an app relying party to replay a passkey step-up from another surface.
- */
-function mediatedRelyingParty(c: Parameters<typeof requireUser>[0]): string | undefined {
-  const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  return rpId && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(rpId) ? rpId : undefined;
-}
 
 /**
  * Success audit of role-gated actions (#232). `enforceActionAuth` marks the

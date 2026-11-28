@@ -1275,7 +1275,8 @@ which:
 - requires a recent **passkey** step-up (#244). A fresh OAuth or password
   sign-in does not count, and nothing is read first. Any other session gets 403
   `step_up_required` with `method: "passkey"`. The console then runs the passkey
-  ceremony on its own relying party (`console.proappstore.online`), offering to
+  ceremony on its own relying party (`proappstore.online`, so it works at
+  `console.proappstore.online` and at `proappstore.online/app/`), offering to
   register a passkey first if there is none, and retries with the short-lived
   step-up session it gets back, held only in memory;
 - runs the detail action again (role gate, `step_up`, audit) and takes the

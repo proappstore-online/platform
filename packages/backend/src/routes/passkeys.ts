@@ -7,11 +7,12 @@
  * (STEP_UP_SESSION_TTL_SECONDS). The host swaps it into the HttpOnly cookie
  * (`/.pas/auth/passkey/*`), so page JS never sees a token.
  *
- * On an app origin, reachable only through the host's mediation: the
- * relying-party id is the app hostname the host asserts in `X-PAS-Host`, which a
- * direct caller cannot set. The Creator Console (legacy-bearer, no mediation)
- * has its own relying party, CONSOLE_RP_ID (#244); its step-up returns the token
- * to the console page, which holds it in memory for step-up-guarded reads.
+ * The relying party comes from lib/relying-party.ts: on an app origin, the app
+ * hostname the host asserts (reachable only through its mediation); for the
+ * Creator Console (legacy-bearer, no mediation, served at console.proappstore.online
+ * and proappstore.online/app/), CONSOLE_RP_ID (#244, #698). The Console's step-up
+ * returns the token to the console page, which holds it in memory for
+ * step-up-guarded reads.
  *
  * Registration uses `attestation: 'none'`. The browser sends the SPKI public key
  * (`AuthenticatorAttestationResponse.getPublicKey()`), so there is no CBOR to
@@ -20,12 +21,11 @@
  * must not be able to enroll the thief's own passkey and then step up with it.
  */
 import { Hono } from 'hono';
-import type { Context } from 'hono';
 import { mintSession, type NewSession, type SessionClaims } from '@proappstore/build-core';
 import type { Env } from '../types.js';
 import { HttpError } from '../lib/auth.js';
 import { timingSafeEqual } from '../lib/bytes.js';
-import { APP_CONTEXT_HEADER, APP_HOST_HEADER } from '../lib/app-context.js';
+import { passkeyRelyingParty, type RelyingParty } from '../lib/relying-party.js';
 import { requireClaims } from './auth.js';
 
 export const passkeyRoutes = new Hono<{ Bindings: Env }>();
@@ -46,7 +46,6 @@ const FLAG_UV = 0x04; // user verified (PIN / biometric) — the second factor
 const FLAG_AT = 0x40; // attested credential data included
 
 const enc = new TextEncoder();
-const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 // ── helpers ──────────────────────────────────────────────────────
 
@@ -70,41 +69,6 @@ async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-/**
- * The Creator Console's relying party (#244). The console is a legacy-bearer page
- * that calls this API directly, so it has no host mediation; its passkeys are
- * bound to its own hostname instead. verifyClientData requires the ceremony's
- * origin to be exactly `https://${CONSOLE_RP_ID}` and verifyAuthenticatorData
- * the matching rpIdHash, so no other page can complete one.
- */
-export const CONSOLE_RP_ID = 'console.proappstore.online';
-const CONSOLE_ORIGIN = `https://${CONSOLE_RP_ID}`;
-
-/**
- * The relying party: the app hostname the host mediated this request from, or
- * — for a direct call from the console page, which carries neither host
- * header — the console. A mediated request always carries X-PAS-App, so the
- * cookie data plane (which strips X-PAS-Host so page JS never receives a
- * step-up token) still gets no relying party.
- *
- * The console path requires the browser's Origin to be the console (#334): a
- * browser sets Origin itself, so an app page holding a fresh session cannot
- * enroll a key of its own for the console. A non-browser caller can send any
- * Origin, but it also writes clientDataJSON and, with `attestation: 'none'`, the
- * key, so Origin is exactly as strong as WebAuthn's own origin and rpIdHash
- * checks and no stronger signal exists here: api.proappstore.online is not
- * behind Cloudflare Access, and CORS lets a browser send only Authorization and
- * Content-Type. Against such a caller the boundary is the fresh sign-in
- * registration requires (reauthRequired).
- */
-function relyingParty(c: Context<{ Bindings: Env }>): { appId: string; rpId: string } {
-  const appId = c.req.header(APP_CONTEXT_HEADER);
-  const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  if (!appId && !rpId && c.req.header('Origin') === CONSOLE_ORIGIN) return { appId: 'console', rpId: CONSOLE_RP_ID };
-  if (!appId || !rpId || !HOSTNAME.test(rpId)) throw new HttpError('passkeys are only available on an app origin or the console', 400);
-  return { appId, rpId };
 }
 
 async function credentialIds(db: D1Database, userId: string, rpId: string): Promise<string[]> {
@@ -141,7 +105,7 @@ async function issueChallenge(db: D1Database, userId: string, rpId: string, purp
 async function verifyClientData(
   db: D1Database,
   raw: unknown,
-  expected: { type: 'webauthn.create' | 'webauthn.get'; userId: string; rpId: string; purpose: 'register' | 'step-up' },
+  expected: { type: 'webauthn.create' | 'webauthn.get'; userId: string; rp: RelyingParty; purpose: 'register' | 'step-up' },
 ): Promise<Uint8Array> {
   const bytes = fromB64url(raw, 'clientDataJSON');
   let data: { type?: unknown; challenge?: unknown; origin?: unknown; crossOrigin?: unknown };
@@ -153,11 +117,11 @@ async function verifyClientData(
   if (typeof data.challenge !== 'string') throw new HttpError('clientDataJSON has no challenge', 400);
   const row = await db
     .prepare('DELETE FROM passkey_challenges WHERE challenge = ?1 AND user_id = ?2 AND rp_id = ?3 AND purpose = ?4 RETURNING expires_at')
-    .bind(data.challenge, expected.userId, expected.rpId, expected.purpose)
+    .bind(data.challenge, expected.userId, expected.rp.id, expected.purpose)
     .first<{ expires_at: number }>();
   if (!row || row.expires_at < Date.now()) throw new HttpError('unknown or expired challenge', 400);
   if (data.type !== expected.type) throw new HttpError(`clientDataJSON type must be ${expected.type}`, 400);
-  if (data.origin !== `https://${expected.rpId}`) throw new HttpError('origin does not match this app', 400);
+  if (data.origin !== expected.rp.origin) throw new HttpError('origin does not match this app', 400);
   if (data.crossOrigin === true) throw new HttpError('cross-origin ceremonies are not accepted', 400);
   return bytes;
 }
@@ -206,7 +170,8 @@ async function verifySignature(publicKey: string, alg: number, signature: Uint8A
 
 passkeyRoutes.post('/auth/passkey/register/options', async (c) => {
   const claims = await requireClaims(c);
-  const { appId, rpId } = relyingParty(c);
+  const rp = passkeyRelyingParty(c);
+  const rpId = rp.id;
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
   const refusal = reauthRequired(claims, existing.length > 0, rpId);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
@@ -215,7 +180,7 @@ passkeyRoutes.post('/auth/passkey/register/options', async (c) => {
   const name = claims.login ?? claims.uid;
   return c.json({
     challenge,
-    rp: { id: rpId, name: appId },
+    rp: { id: rpId, name: rp.name },
     user: { id: toB64url(enc.encode(claims.uid)), name, displayName: name },
     pubKeyCredParams: [{ type: 'public-key', alg: ES256 }, { type: 'public-key', alg: RS256 }],
     timeout: TIMEOUT_MS,
@@ -227,13 +192,14 @@ passkeyRoutes.post('/auth/passkey/register/options', async (c) => {
 
 passkeyRoutes.post('/auth/passkey/register', async (c) => {
   const claims = await requireClaims(c);
-  const { rpId } = relyingParty(c);
+  const rp = passkeyRelyingParty(c);
+  const rpId = rp.id;
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
   const refusal = reauthRequired(claims, existing.length > 0, rpId);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
 
-  await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.create', userId: claims.uid, rpId, purpose: 'register' });
+  await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.create', userId: claims.uid, rp, purpose: 'register' });
   const authData = fromB64url(body.authenticatorData, 'authenticatorData');
   const { flags, signCount } = await verifyAuthenticatorData(authData, rpId);
   if (!(flags & FLAG_AT) || authData.length < 55) throw new HttpError('authenticatorData carries no credential', 400);
@@ -269,7 +235,8 @@ passkeyRoutes.post('/auth/passkey/register', async (c) => {
 
 passkeyRoutes.post('/auth/passkey/step-up/options', async (c) => {
   const claims = await requireClaims(c);
-  const { rpId } = relyingParty(c);
+  const rp = passkeyRelyingParty(c);
+  const rpId = rp.id;
   const ids = await credentialIds(c.env.DB, claims.uid, rpId);
   if (!ids.length) return c.json({ error: 'no passkey registered for this app', code: 'no_passkey' }, 404);
   const challenge = await issueChallenge(c.env.DB, claims.uid, rpId, 'step-up');
@@ -284,7 +251,8 @@ passkeyRoutes.post('/auth/passkey/step-up/options', async (c) => {
 
 passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
   const claims = await requireClaims(c);
-  const { rpId } = relyingParty(c);
+  const rp = passkeyRelyingParty(c);
+  const rpId = rp.id;
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   if (typeof body.id !== 'string') throw new HttpError('id is required', 400);
   const cred = await c.env.DB
@@ -293,7 +261,7 @@ passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
     .first<{ id: string; public_key: string; alg: number; sign_count: number }>();
   if (!cred) throw new HttpError('unknown passkey', 400);
 
-  const clientData = await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.get', userId: claims.uid, rpId, purpose: 'step-up' });
+  const clientData = await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.get', userId: claims.uid, rp, purpose: 'step-up' });
   const authData = fromB64url(body.authenticatorData, 'authenticatorData');
   const { signCount } = await verifyAuthenticatorData(authData, rpId);
   const signed = new Uint8Array(authData.length + 32);
@@ -311,9 +279,10 @@ passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
 
   const { iat: _iat, exp: _exp, ...rest } = claims;
   const authTime = nowSeconds();
-  // rpId has just been verified by both clientData.origin and authenticatorData's
-  // rpIdHash. Carry that exact value into the short-lived token so downstream
-  // privileged checks cannot replay it on another app or the Console.
+  // rpId has just been verified by authenticatorData's rpIdHash, and the origin
+  // allowed to use it by clientData.origin. Carry that exact value into the
+  // short-lived token so downstream privileged checks cannot replay it on another
+  // app or the Console.
   const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey', step_up_rp_id: rpId };
   const token = await mintSession(next, c.env.SESSION_SIGNING_KEY, STEP_UP_SESSION_TTL_SECONDS);
   return c.json({ token, auth_time: authTime, expires_at: authTime + STEP_UP_SESSION_TTL_SECONDS });

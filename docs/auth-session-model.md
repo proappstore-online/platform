@@ -258,10 +258,19 @@ forwards them with the cookie session:
   The API refuses a passkey request without an app hostname, so app passkeys
   work only through `/.pas/auth/passkey/*`.
 - **Creator Console.** The Console calls `api.proappstore.online` directly from
-  the browser, with no host mediation. A passkey request with neither host header
-  and `Origin: https://console.proappstore.online` uses the Console relying party
-  (#244, #334). A browser sets `Origin` itself, so an app page can't choose the
-  Console relying party. A non-browser caller can send any `Origin`, but it also
+  the browser, with no host mediation. It is served at
+  `console.proappstore.online` and at the storefront's `proappstore.online/app/`
+  mirror, so its relying party is the parent domain `proappstore.online`, which
+  WebAuthn lets both hosts use (#698). A passkey request with neither host header
+  and `Origin` exactly `https://console.proappstore.online` or
+  `https://proappstore.online` uses the Console relying party (#244, #334), and
+  the ceremony's `clientDataJSON.origin` must equal that same `Origin`. A passkey
+  set up on either host works on both. An app page on `<app>.proappstore.online`
+  can also name the `proappstore.online` RP id in the browser, but its
+  `clientDataJSON` carries its own origin, so the API refuses it; and a hostname
+  the host mediates is never `proappstore.online` or `console.proappstore.online`
+  (`lib/relying-party.ts`). A browser sets `Origin` itself, so an app page can't
+  choose the Console relying party. A non-browser caller can send any `Origin`, but it also
   writes `clientDataJSON` and, with `attestation: 'none'`, the key, so the
   boundary against it is the fresh sign-in that registration requires (below).
   `Cf-Access-Jwt-Assertion` is not used: `api.proappstore.online` is not behind
@@ -273,7 +282,7 @@ forwards them with the cookie session:
   another needs a passkey step-up within the last 10 minutes, so a stolen
   long-lived cookie cannot enroll the thief's own passkey.
 - **Step-up checks.** One-use challenge with a 5-minute life; `origin` must be
-  `https://<host>`; the user must be present and verified (UP and UV); the
+  `https://<host>` (on the Console, the Console origin the request came from); the user must be present and verified (UP and UV); the
   signature must verify; the signature counter must not go backwards.
 - **Step-up result.** The API mints a session with `auth_time = now`,
   `auth_method = 'passkey'`, the verified `step_up_rp_id`, and a **1-hour** life. The host puts it in the cookie

@@ -14,7 +14,7 @@ import { actionCallers, batchPayload, prepareActionBatch, prepareActionQuery, ty
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
 import type { RoleGrant } from '../lib/held-app-roles.js';
-import { CONSOLE_RP_ID } from './passkeys.js';
+import { CONSOLE_RP_ID } from '../lib/relying-party.js';
 import { refusalQuery, unguardedStatements } from '../lib/operator-contract.js';
 import { gatedTool, type OperatorRefusal } from '../lib/operator-contract-shared.js';
 

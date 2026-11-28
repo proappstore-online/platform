@@ -12,7 +12,7 @@ import { REFUSAL_CAP, UNDECLARED } from './operator-audit.js';
 // owners only, and an owner-only, paged, filtered, redacted trail.
 
 const OWNER = await testToken('gh:1');
-const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'console.proappstore.online' } as never, TEST_SK);
+const fresh = () => mintSession({ uid: 'gh:1', login: 'owner', roles: ['user'], auth_time: Math.floor(Date.now() / 1000) - 10, auth_method: 'passkey', step_up_rp_id: 'proappstore.online' } as never, TEST_SK);
 const stored = (sample: typeof STASH | typeof PARENTS_CLUBS) => {
   const r = validateOperatorView(sample.tools as ToolManifest[], sample.operator_view);
   if (!('contract' in r)) throw new Error(r.error);
