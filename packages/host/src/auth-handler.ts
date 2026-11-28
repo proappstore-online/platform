@@ -177,8 +177,9 @@ async function authCredentialsLogin(request: Request, env: Env): Promise<Respons
 }
 
 // #230: passkey registration and step-up, mediated like credentials/login. The
-// host asserts the app (X-PAS-App) and hostname (X-PAS-Host, the WebAuthn
-// relying-party id) — the page cannot. A verified step-up swaps the cookie for
+// host asserts the app (X-PAS-App) and hostname (X-PAS-Host: the ceremony's
+// origin and step-up audience; the credential RP id is the shared
+// proappstore.online on the platform zone, #699) — the page cannot. A verified step-up swaps the cookie for
 // the short-lived session the API minted, carrying a fresh auth_time; the token
 // never reaches page JS, only its auth_time and expiry do.
 const PASSKEY_OPS = new Set(["register/options", "register", "step-up/options", "step-up"]);

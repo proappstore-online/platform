@@ -399,7 +399,9 @@ on an app with no user behind them. They run with platform identities that are
 - **Console passkey relying party** (#244, #334, #698). A direct passkey call (no
   host context) with `Origin: https://console.proappstore.online` or
   `Origin: https://proappstore.online` (the `/app/` mirror) uses the Console
-  relying party, `proappstore.online`. That `Origin` check is only as strong as
+  relying party. Since #699 its credentials share the RP id `proappstore.online`
+  with every app on the platform zone, and its step-up audience is
+  `proappstore.online`. That `Origin` check is only as strong as
   WebAuthn's own origin and rpIdHash checks (see the
   [session model](./auth-session-model.md)), so it selects the ceremony and
   authorizes nothing by itself. Console-gated step-ups require `step_up_rp_id` to
@@ -407,7 +409,9 @@ on an app with no user behind them. They run with platform identities that are
   `console.proappstore.online`) no longer counts, and a passkey registered then
   is not offered, so the owner sets up a new one. `lib/relying-party.ts` is the
   one place that picks a relying party, for the passkey routes and for the
-  `step_up` audience of app actions.
+  `step_up` audience of app actions; it keeps the credential RP id and the
+  step-up audience apart, so an app step-up never carries the Console's
+  audience and a Console step-up never carries an app's.
 
 ## Rule of thumb
 

@@ -7,10 +7,14 @@
  * (STEP_UP_SESSION_TTL_SECONDS). The host swaps it into the HttpOnly cookie
  * (`/.pas/auth/passkey/*`), so page JS never sees a token.
  *
- * The relying party comes from lib/relying-party.ts: on an app origin, the app
- * hostname the host asserts (reachable only through its mediation); for the
- * Creator Console (legacy-bearer, no mediation, served at console.proappstore.online
- * and proappstore.online/app/), CONSOLE_RP_ID (#244, #698). The Console's step-up
+ * The relying party comes from lib/relying-party.ts (#699). Credentials live
+ * under one shared RP id, `proappstore.online`, so a passkey enrolled on the
+ * Creator Console or in any app on `*.proappstore.online` works on all of them
+ * (an app on a custom domain keeps its own hostname). Each ceremony is still
+ * bound to the surface that started it: its challenge to the surface's
+ * audience, its clientDataJSON to that surface's exact origin, and the step-up
+ * it mints to that audience — the app hostname the host asserts (reachable only
+ * through its mediation), or the Console's (#244, #698). The Console's step-up
  * returns the token to the console page, which holds it in memory for
  * step-up-guarded reads.
  *
@@ -77,23 +81,25 @@ async function credentialIds(db: D1Database, userId: string, rpId: string): Prom
 }
 
 /**
- * Registering needs a recent sign-in; once the user has a passkey here, adding
- * another needs a recent passkey step-up. Sessions without `auth_time` (minted
- * before #230) are never fresh.
+ * Registering needs a recent sign-in; once the user has a passkey for this
+ * credential RP id, adding another needs a recent passkey step-up on this same
+ * surface (its audience). Sessions without `auth_time` (minted before #230) are
+ * never fresh.
  */
-function reauthRequired(claims: SessionClaims, hasPasskey: boolean, rpId: string): string | null {
+function reauthRequired(claims: SessionClaims, hasPasskey: boolean, rp: RelyingParty): string | null {
   const fresh = typeof claims.auth_time === 'number' && nowSeconds() - claims.auth_time <= FRESH_AUTH_SECONDS;
-  if (hasPasskey) return fresh && claims.auth_method === 'passkey' && claims.step_up_rp_id === rpId ? null : 'adding another passkey requires a passkey step-up for this relying party first';
+  if (hasPasskey) return fresh && claims.auth_method === 'passkey' && claims.step_up_rp_id === rp.audience ? null : 'adding another passkey requires a passkey step-up here first';
   return fresh ? null : 'sign in again to add a passkey';
 }
 
-async function issueChallenge(db: D1Database, userId: string, rpId: string, purpose: 'register' | 'step-up'): Promise<string> {
+/** A one-time challenge, bound to the user, the surface (its audience) and the purpose. */
+async function issueChallenge(db: D1Database, userId: string, audience: string, purpose: 'register' | 'step-up'): Promise<string> {
   const challenge = toB64url(crypto.getRandomValues(new Uint8Array(32)));
   const now = Date.now();
   await db.batch([
     db.prepare('DELETE FROM passkey_challenges WHERE user_id = ?1 AND expires_at < ?2').bind(userId, now),
     db.prepare('INSERT INTO passkey_challenges (challenge, user_id, rp_id, purpose, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)')
-      .bind(challenge, userId, rpId, purpose, now + CHALLENGE_TTL_MS),
+      .bind(challenge, userId, audience, purpose, now + CHALLENGE_TTL_MS),
   ]);
   return challenge;
 }
@@ -117,7 +123,7 @@ async function verifyClientData(
   if (typeof data.challenge !== 'string') throw new HttpError('clientDataJSON has no challenge', 400);
   const row = await db
     .prepare('DELETE FROM passkey_challenges WHERE challenge = ?1 AND user_id = ?2 AND rp_id = ?3 AND purpose = ?4 RETURNING expires_at')
-    .bind(data.challenge, expected.userId, expected.rp.id, expected.purpose)
+    .bind(data.challenge, expected.userId, expected.rp.audience, expected.purpose)
     .first<{ expires_at: number }>();
   if (!row || row.expires_at < Date.now()) throw new HttpError('unknown or expired challenge', 400);
   if (data.type !== expected.type) throw new HttpError(`clientDataJSON type must be ${expected.type}`, 400);
@@ -173,10 +179,10 @@ passkeyRoutes.post('/auth/passkey/register/options', async (c) => {
   const rp = passkeyRelyingParty(c);
   const rpId = rp.id;
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
-  const refusal = reauthRequired(claims, existing.length > 0, rpId);
+  const refusal = reauthRequired(claims, existing.length > 0, rp);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
 
-  const challenge = await issueChallenge(c.env.DB, claims.uid, rpId, 'register');
+  const challenge = await issueChallenge(c.env.DB, claims.uid, rp.audience, 'register');
   const name = claims.login ?? claims.uid;
   return c.json({
     challenge,
@@ -196,7 +202,7 @@ passkeyRoutes.post('/auth/passkey/register', async (c) => {
   const rpId = rp.id;
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const existing = await credentialIds(c.env.DB, claims.uid, rpId);
-  const refusal = reauthRequired(claims, existing.length > 0, rpId);
+  const refusal = reauthRequired(claims, existing.length > 0, rp);
   if (refusal) return c.json({ error: refusal, code: 'reauth_required' }, 403);
 
   await verifyClientData(c.env.DB, body.clientDataJSON, { type: 'webauthn.create', userId: claims.uid, rp, purpose: 'register' });
@@ -239,7 +245,7 @@ passkeyRoutes.post('/auth/passkey/step-up/options', async (c) => {
   const rpId = rp.id;
   const ids = await credentialIds(c.env.DB, claims.uid, rpId);
   if (!ids.length) return c.json({ error: 'no passkey registered for this app', code: 'no_passkey' }, 404);
-  const challenge = await issueChallenge(c.env.DB, claims.uid, rpId, 'step-up');
+  const challenge = await issueChallenge(c.env.DB, claims.uid, rp.audience, 'step-up');
   return c.json({
     challenge,
     rpId,
@@ -279,11 +285,11 @@ passkeyRoutes.post('/auth/passkey/step-up', async (c) => {
 
   const { iat: _iat, exp: _exp, ...rest } = claims;
   const authTime = nowSeconds();
-  // rpId has just been verified by authenticatorData's rpIdHash, and the origin
-  // allowed to use it by clientData.origin. Carry that exact value into the
-  // short-lived token so downstream privileged checks cannot replay it on another
-  // app or the Console.
-  const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey', step_up_rp_id: rpId };
+  // The credential RP id is shared across surfaces (#699), so the token carries
+  // the surface's audience instead: the challenge was bound to it and
+  // clientData.origin is exactly its origin. Downstream privileged checks cannot
+  // replay this step-up on another app or the Console.
+  const next: NewSession = { ...rest, auth_time: authTime, auth_method: 'passkey', step_up_rp_id: rp.audience };
   const token = await mintSession(next, c.env.SESSION_SIGNING_KEY, STEP_UP_SESSION_TTL_SECONDS);
   return c.json({ token, auth_time: authTime, expires_at: authTime + STEP_UP_SESSION_TTL_SECONDS });
 });

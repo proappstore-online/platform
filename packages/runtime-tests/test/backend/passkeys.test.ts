@@ -8,7 +8,10 @@ import { Authenticator } from './webauthn';
 // WebCrypto. The "authenticator" (./webauthn) is a P-256 key producing the exact
 // bytes a browser would: clientDataJSON, authenticatorData, a DER signature.
 
-const RP = 'demo.proappstore.online';
+// #699: every surface on the platform zone shares one credential RP id; each
+// app's step-up audience and ceremony origin stay its own hostname.
+const RP = 'proappstore.online';
+const HOST = 'demo.proappstore.online';
 const UID = 'gh:7';
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -21,10 +24,10 @@ function signIn(opts: { authTime?: number; method?: string } = {}): Promise<stri
 }
 
 /** A request as the host mediates it: session + asserted app + hostname, through its HostApi binding (#315). */
-function call(path: string, token: string, body: unknown = {}, host: string | null = RP) {
+function call(path: string, token: string, body: unknown = {}, host: string | null = HOST, app = 'demo') {
   return viaHostApi(`${BASE}/v1/auth/passkey/${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-PAS-App': 'demo', ...(host ? { 'X-PAS-Host': host } : {}) },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-PAS-App': app, ...(host ? { 'X-PAS-Host': host } : {}) },
     body: JSON.stringify(body),
   });
 }
@@ -37,7 +40,7 @@ async function challengeFor(path: 'register/options' | 'step-up/options', token:
 
 async function registered(): Promise<{ auth: Authenticator; token: string }> {
   const token = await signIn({ authTime: now() });
-  const auth = await Authenticator.create(RP);
+  const auth = await Authenticator.create(RP, `https://${HOST}`);
   const res = await call('register', token, await auth.attest(await challengeFor('register/options', token)));
   expect(res.status, await res.clone().text()).toBe(200);
   return { auth, token };
@@ -48,7 +51,7 @@ beforeEach(async () => {
 });
 
 describe('passkey registration (#230)', () => {
-  it('registers a passkey from a fresh sign-in, bound to the app hostname', async () => {
+  it('registers a passkey from a fresh sign-in, under the shared platform RP id (#699)', async () => {
     await registered();
     const row = await env.DB.prepare('SELECT user_id, rp_id, alg, sign_count FROM passkey_credentials').first();
     expect(row).toEqual({ user_id: UID, rp_id: RP, alg: -7, sign_count: 0 });
@@ -74,7 +77,7 @@ describe('passkey registration (#230)', () => {
 
   it('refuses a ceremony from another origin, and a request the host did not mediate', async () => {
     const token = await signIn({ authTime: now() });
-    const auth = await Authenticator.create(RP);
+    const auth = await Authenticator.create(RP, `https://${HOST}`);
     const wrongOrigin = await call('register', token, await auth.attest(await challengeFor('register/options', token), { origin: 'https://evil.example' }));
     expect(wrongOrigin.status).toBe(400);
     expect((await call('register/options', token, {}, null)).status).toBe(400);
@@ -93,7 +96,7 @@ describe('passkey step-up (#230)', () => {
     const claims = (await verifySession(body.token, env.SESSION_SIGNING_KEY))!;
     expect(claims.uid).toBe(UID);
     expect(claims.auth_method).toBe('passkey');
-    expect(claims.step_up_rp_id).toBe(RP);
+    expect(claims.step_up_rp_id).toBe(HOST);
     expect(claims.auth_time).toBeGreaterThan(oldTime);
     expect(claims.auth_time).toBe(body.auth_time);
     expect(claims.exp - claims.iat).toBe(3600);
@@ -112,7 +115,7 @@ describe('passkey step-up (#230)', () => {
 
   it('refuses a signature from another key, a missing user verification, and a counter that does not advance', async () => {
     const { auth, token } = await registered();
-    const other = await Authenticator.create(RP);
+    const other = await Authenticator.create(RP, `https://${HOST}`);
     const forged = await call('step-up', token, await auth.assert(await challengeFor('step-up/options', token), { signer: other.keys.privateKey }));
     expect(forged.status).toBe(403);
 
@@ -236,7 +239,7 @@ describe('console relying party (#244, #698)', () => {
   // its clientDataJSON then carries the app origin, which must never pass.
   it("an app page's key or ceremony cannot enroll or step up on the console", async () => {
     const token = await signIn({ authTime: now() });
-    // A key for an app hostname: wrong rpIdHash.
+    // A key for an app hostname (the pre-#699 app RP id): wrong rpIdHash.
     const appKey = await Authenticator.create('stash.proappstore.online');
     expect((await direct('register', token, await appKey.attest((await challenge('register/options', token)).challenge))).status).toBe(400);
     // The Console's RP id, from an app origin, another Console host than the request's, or the pre-#698 RP id.
@@ -249,9 +252,8 @@ describe('console relying party (#244, #698)', () => {
     expect((await direct('register', token, await legacy.attest((await challenge('register/options', token)).challenge))).status).toBe(400);
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM passkey_credentials').first()).toEqual({ n: 0 });
 
-    // Registered on the console, a passkey is not accepted for an app's step-up, nor from an app origin.
+    // Registered on the console, a Console ceremony still refuses an assertion from an app origin.
     expect((await direct('register', token, await auth.attest((await challenge('register/options', token)).challenge, { origin: CONSOLE }))).status).toBe(200);
-    expect((await call('step-up/options', token)).status).toBe(404); // demo app: no passkey there
     const opts = await challenge('step-up/options', token);
     expect((await direct('step-up', token, await auth.assert(opts.challenge, { origin: 'https://stash.proappstore.online' }))).status).toBe(400);
   });
@@ -274,5 +276,91 @@ describe('console relying party (#244, #698)', () => {
     const replay = await direct('step-up', token, await legacy.assert(opts.challenge, { origin: CONSOLE }));
     expect(replay.status).toBe(400);
     expect((await direct('step-up', token, await auth.assert(opts.challenge, { origin: CONSOLE }))).status).toBe(200);
+  });
+});
+
+// #699: one passkey for the whole platform. A credential enrolled on any
+// surface of the platform zone steps up on every other, but each step-up is
+// bound to the surface that ran it: its challenge, its origin and the audience
+// it mints.
+describe('one passkey for the platform (#699)', () => {
+  const CONSOLE = 'https://console.proappstore.online';
+  const direct = (path: string, token: string, body: unknown = {}, origin = CONSOLE) =>
+    SELF.fetch(`${BASE}/v1/auth/passkey/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify(body),
+    });
+  const ok = async (res: Response) => {
+    expect(res.status, await res.clone().text()).toBe(200);
+    return res.json() as Promise<{ challenge: string; token: string; rpId?: string; rp?: { id: string; name: string } }>;
+  };
+  const audienceOf = async (res: Response) => (await verifySession((await ok(res)).token, env.SESSION_SIGNING_KEY))!.step_up_rp_id;
+
+  it('a passkey enrolled on the Console steps up in an app, minting that app\'s audience', async () => {
+    const token = await signIn({ authTime: now() });
+    const auth = await Authenticator.create(RP, CONSOLE);
+    const reg = await ok(await direct('register/options', token));
+    expect(reg.rp).toEqual({ id: RP, name: 'ProAppStore' });
+    await ok(await direct('register', token, await auth.attest(reg.challenge)));
+
+    const stale = await signIn({ authTime: now() - 7200 });
+    const opts = await ok(await call('step-up/options', stale));
+    expect(opts.rpId).toBe(RP);
+    expect(await audienceOf(await call('step-up', stale, await auth.assert(opts.challenge, { origin: `https://${HOST}` })))).toBe(HOST);
+    // ...and still on the Console, with the Console's audience.
+    expect(await audienceOf(await direct('step-up', stale, await auth.assert((await ok(await direct('step-up/options', stale))).challenge)))).toBe(RP);
+  });
+
+  it('a passkey enrolled in an app steps up on the Console and in another app', async () => {
+    const { auth } = await registered();
+    const stale = await signIn({ authTime: now() - 7200 });
+    expect(await audienceOf(await direct('step-up', stale, await auth.assert((await ok(await direct('step-up/options', stale))).challenge, { origin: CONSOLE })))).toBe(RP);
+    const other = 'stash.proappstore.online';
+    const opts = await ok(await call('step-up/options', stale, {}, other, 'stash'));
+    expect(await audienceOf(await call('step-up', stale, await auth.assert(opts.challenge, { origin: `https://${other}` }), other, 'stash'))).toBe(other);
+  });
+
+  it('refuses a cross-surface replay: a challenge or assertion from one surface never completes on another', async () => {
+    const { auth } = await registered();
+    const token = await signIn({ authTime: now() - 7200 });
+    // An app's challenge, signed from the app, submitted on the Console.
+    const appChallenge = (await ok(await call('step-up/options', token))).challenge;
+    expect((await direct('step-up', token, await auth.assert(appChallenge, { origin: `https://${HOST}` }))).status).toBe(400);
+    // A Console challenge, signed from an app origin, submitted on the Console.
+    const consoleChallenge = (await ok(await direct('step-up/options', token))).challenge;
+    expect((await direct('step-up', token, await auth.assert(consoleChallenge, { origin: `https://${HOST}` }))).status).toBe(400);
+    // A Console challenge, signed from the Console, submitted through an app.
+    const consoleChallenge2 = (await ok(await direct('step-up/options', token))).challenge;
+    expect((await call('step-up', token, await auth.assert(consoleChallenge2, { origin: CONSOLE }))).status).toBe(400);
+    // One app's challenge and origin, submitted through another app.
+    const demo = (await ok(await call('step-up/options', token))).challenge;
+    expect((await call('step-up', token, await auth.assert(demo), 'stash.proappstore.online', 'stash')).status).toBe(400);
+  });
+
+  it('adding a second passkey needs a passkey step-up on the same surface, not another one', async () => {
+    const { auth } = await registered();
+    const token = await signIn({ authTime: now(), method: 'password' });
+    const consoleStepUp = (await ok(await direct('step-up', token, await auth.assert((await ok(await direct('step-up/options', token))).challenge, { origin: CONSOLE })))).token;
+    expect((await call('register/options', consoleStepUp)).status).toBe(403);
+    expect((await direct('register/options', consoleStepUp)).status).toBe(200);
+  });
+
+  it('an app on a custom domain keeps its own hostname as relying party: a platform passkey does not apply there', async () => {
+    const SHOP = 'shop.example.com';
+    await registered();
+    const token = await signIn({ authTime: now() });
+    const none = await call('step-up/options', token, {}, SHOP, 'shop');
+    expect(none.status).toBe(404);
+    expect(await none.json()).toMatchObject({ code: 'no_passkey' });
+
+    const reg = await ok(await call('register/options', token, {}, SHOP, 'shop'));
+    expect(reg.rp).toEqual({ id: SHOP, name: 'shop' });
+    const local = await Authenticator.create(SHOP);
+    await ok(await call('register', token, await local.attest(reg.challenge), SHOP, 'shop'));
+    const stale = await signIn({ authTime: now() - 7200 });
+    const opts = await ok(await call('step-up/options', stale, {}, SHOP, 'shop'));
+    expect(opts.rpId).toBe(SHOP);
+    expect(await audienceOf(await call('step-up', stale, await local.assert(opts.challenge), SHOP, 'shop'))).toBe(SHOP);
   });
 });

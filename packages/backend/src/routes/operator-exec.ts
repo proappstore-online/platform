@@ -14,7 +14,7 @@ import { actionCallers, batchPayload, prepareActionBatch, prepareActionQuery, ty
 import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSuccess } from './actions.js';
 import { markAudited } from '../lib/operator-audit-marks.js';
 import type { RoleGrant } from '../lib/held-app-roles.js';
-import { CONSOLE_RP_ID } from '../lib/relying-party.js';
+import { CONSOLE_STEP_UP_AUDIENCE } from '../lib/relying-party.js';
 import { refusalQuery, unguardedStatements } from '../lib/operator-contract.js';
 import { gatedTool, type OperatorRefusal } from '../lib/operator-contract-shared.js';
 
@@ -163,7 +163,7 @@ async function runOperatorCall(
     throw new HttpError(`action ${name} does not guard every statement with :${guard}; redeploy it so each statement checks the status`, 409);
   }
   const role = await enforceActionAuth(env.DB, appId, manifest, user);
-  if (manifest.step_up) requireRecentAuth(user, env, { rpId: CONSOLE_RP_ID });
+  if (manifest.step_up) requireRecentAuth(user, env, { rpId: CONSOLE_STEP_UP_AUDIENCE });
   let endpoint: string;
   let payload: unknown;
   try {

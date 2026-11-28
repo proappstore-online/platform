@@ -229,17 +229,22 @@ Sessions carry two claims that record the last active sign-in:
 
 - `auth_time`: epoch seconds.
 - `auth_method`: `github`, `google`, `password` or `passkey`.
-- `step_up_rp_id`: present only on a passkey step-up; the exact relying-party
-  hostname whose WebAuthn ceremony verified it. Privileged checks that name an
-  audience reject a missing or different value, so pre-#331 sessions cannot
-  become a wildcard step-up.
+- `step_up_rp_id`: present only on a passkey step-up; the step-up's audience,
+  the surface whose WebAuthn ceremony verified it: the app hostname, or
+  `proappstore.online` for the Console. Since #699 this is not the credential's
+  RP id, which every surface shares. Privileged checks that name an audience
+  reject a missing or different value, so pre-#331 sessions cannot become a
+  wildcard step-up, and a step-up on one app or the Console never counts on
+  another.
 
 They are stamped at the OAuth callback, at credentials login and at
 `/v1/auth/exchange`. Sessions minted before #230, and non-interactive ones
 (`via`), have neither. Treat that as "not recently authenticated".
 
-A user can register a passkey on an app origin and later re-authenticate with
-it (step-up). All four routes are `POST` and same-origin only, and the host
+A user can register a passkey and later re-authenticate with it (step-up). One
+passkey works on the whole platform (#699): the Console and every app on
+`*.proappstore.online` share the credential RP id `proappstore.online`, so a
+passkey enrolled on any of them steps up on all of them. On an app origin all four routes are `POST` and same-origin only, and the host
 forwards them with the cookie session:
 
 | Host route | API route | |
@@ -249,8 +254,16 @@ forwards them with the cookie session:
 | `/.pas/auth/passkey/step-up/options` | `/v1/auth/passkey/step-up/options` | request options; `404 no_passkey` when none |
 | `/.pas/auth/passkey/step-up` | `/v1/auth/passkey/step-up` | verifies and swaps the session |
 
-- **Relying party.** The relying-party id is the app hostname. The host asserts it
-  in `X-PAS-Host`, and only on `/.pas/auth/passkey/*`. On `/.pas/api` it strips
+- **Relying party (#699).** Two values, both from `lib/relying-party.ts`:
+  - the **credential RP id**, the rpIdHash authenticatorData must carry and the
+    credential's `rp_id`: `proappstore.online` on the Console and for every app
+    hostname under `proappstore.online` (`rp.name` is `ProAppStore`);
+  - the **step-up audience**, the surface the ceremony ran on: the app hostname,
+    or `proappstore.online` for the Console. Challenges are bound to it, the
+    ceremony's `clientDataJSON.origin` must be exactly that surface's origin,
+    and the step-up mints it as `step_up_rp_id`.
+
+  The app hostname is the one the host asserts in `X-PAS-Host`, and only on `/.pas/auth/passkey/*`. On `/.pas/api` it strips
   any client-supplied copy. A direct call to `api.proappstore.online` never
   passes the host, so the backend's default `fetch` export strips both
   `X-PAS-Host` and `X-PAS-App` itself. Only the host's binding to the `HostApi`
@@ -260,14 +273,14 @@ forwards them with the cookie session:
 - **Creator Console.** The Console calls `api.proappstore.online` directly from
   the browser, with no host mediation. It is served at
   `console.proappstore.online` and at the storefront's `proappstore.online/app/`
-  mirror, so its relying party is the parent domain `proappstore.online`, which
-  WebAuthn lets both hosts use (#698). A passkey request with neither host header
+  mirror; its step-up audience is `proappstore.online` (#698). A passkey request with neither host header
   and `Origin` exactly `https://console.proappstore.online` or
   `https://proappstore.online` uses the Console relying party (#244, #334), and
   the ceremony's `clientDataJSON.origin` must equal that same `Origin`. A passkey
-  set up on either host works on both. An app page on `<app>.proappstore.online`
-  can also name the `proappstore.online` RP id in the browser, but its
-  `clientDataJSON` carries its own origin, so the API refuses it; and a hostname
+  set up on either host, or in any app on the platform zone, works on both. An
+  app page on `<app>.proappstore.online` names the same `proappstore.online` RP
+  id, but its `clientDataJSON` carries its own origin, so a Console ceremony
+  refuses it; and a hostname
   the host mediates is never `proappstore.online` or `console.proappstore.online`
   (`lib/relying-party.ts`). A browser sets `Origin` itself, so an app page can't
   choose the Console relying party. A non-browser caller can send any `Origin`, but it also
@@ -276,16 +289,26 @@ forwards them with the cookie session:
   `Cf-Access-Jwt-Assertion` is not used: `api.proappstore.online` is not behind
   Cloudflare Access, and CORS lets a browser send only `Authorization` and
   `Content-Type`.
+- **Custom domains.** WebAuthn lets a page use only its own host or a
+  registrable suffix of it as RP id, so an app on a domain outside
+  `proappstore.online` cannot use the platform passkey. Its credential RP id
+  and audience stay its own hostname: a passkey there is enrolled separately
+  and works only on that domain. Related Origin Requests are not used, because
+  they cap a relying party at five registrable labels and creator domains are
+  an open set.
 - **Registration.** The browser sends `getPublicKey()` (SPKI) and
   `getPublicKeyAlgorithm()`; ES256 and RS256 are accepted. It needs a sign-in
-  within the last 10 minutes. Once the user has a passkey on that host, adding
-  another needs a passkey step-up within the last 10 minutes, so a stolen
-  long-lived cookie cannot enroll the thief's own passkey.
+  within the last 10 minutes. Once the user has a passkey for that credential
+  RP id, adding another needs a passkey step-up on the same surface within the
+  last 10 minutes, so a stolen long-lived cookie cannot enroll the thief's own
+  passkey. Because the credential is shared, a passkey enrolled from any app's
+  fresh sign-in also steps up on the Console; Console step-ups still need a
+  Console bearer session and a Console origin.
 - **Step-up checks.** One-use challenge with a 5-minute life; `origin` must be
   `https://<host>` (on the Console, the Console origin the request came from); the user must be present and verified (UP and UV); the
   signature must verify; the signature counter must not go backwards.
 - **Step-up result.** The API mints a session with `auth_time = now`,
-  `auth_method = 'passkey'`, the verified `step_up_rp_id`, and a **1-hour** life. The host puts it in the cookie
+  `auth_method = 'passkey'`, the surface's audience as `step_up_rp_id`, and a **1-hour** life. The host puts it in the cookie
   with `Max-Age` equal to its remaining life, and returns only
   `{ ok, auth_time, expires_at }` to the page.
 

@@ -90,7 +90,8 @@ describe('step_up actions (#231)', () => {
       expect(res.status, await res.clone().text()).toBe(200);
       return ((await res.json()) as { challenge: string }).challenge;
     };
-    const auth = await Authenticator.create(RP);
+    // One platform passkey (#699): the shared RP id, used from this app's origin.
+    const auth = await Authenticator.create('proappstore.online', `https://${RP}`);
     const reg = await passkey('register', oauth, await auth.attest(await challenge('register/options', oauth)));
     expect(reg.status, await reg.clone().text()).toBe(200);
     const stepped = await passkey('step-up', oauth, await auth.assert(await challenge('step-up/options', oauth)));

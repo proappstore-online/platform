@@ -1,26 +1,47 @@
 /**
- * Passkey relying parties (#230, #244, #331, #334, #698): the one place that
- * decides which WebAuthn relying party a request belongs to, and so which
- * `step_up_rp_id` audience a passkey step-up can mint.
+ * Passkey relying parties (#230, #244, #331, #334, #698, #699): the one place
+ * that decides, for a passkey request, which WebAuthn relying party its
+ * credentials belong to and which `step_up_rp_id` audience a step-up mints.
  *
- * - **App origin.** Reachable only through the host's mediation: the relying
- *   party is the app hostname the host asserts in `X-PAS-Host` (the page cannot,
- *   #315), and the ceremony's origin must be exactly that hostname.
+ * Those are two different things since #699:
+ *
+ * - **Credential RP id** (`RelyingParty.id`): the rpIdHash authenticatorData must
+ *   carry and the `rp_id` a credential is stored under. Every surface on the
+ *   platform zone shares one, `proappstore.online` (PLATFORM_RP_ID), so a person
+ *   enrols one passkey and it works on the Console and in every app on
+ *   `*.proappstore.online`.
+ * - **Step-up audience** (`RelyingParty.audience`): the surface the ceremony ran
+ *   on, and the `step_up_rp_id` minted. The Console's audience is
+ *   CONSOLE_STEP_UP_AUDIENCE; an app's is its own hostname. A step-up done in one
+ *   app therefore never authorises another app or the Console, and the reverse.
+ *
+ * Every ceremony is still bound to its exact origin (`clientDataJSON.origin`):
+ *
+ * - **App origin.** Reachable only through the host's mediation: the surface is
+ *   the app hostname the host asserts in `X-PAS-Host` (the page cannot, #315),
+ *   and the ceremony's origin must be exactly `https://<that hostname>`.
  * - **Creator Console.** A legacy-bearer page that calls the API directly, with
- *   no mediation. It is served at `console.proappstore.online` and at the
- *   storefront's `proappstore.online/app/` mirror (#698), so its relying party is
- *   the registrable parent `proappstore.online`, which WebAuthn lets both hosts
- *   use. A ceremony must come from one of those two origins exactly: an app page
- *   on `<app>.proappstore.online` can also name this RP id, but its
- *   clientDataJSON carries its own origin and is refused.
+ *   no mediation, served at `console.proappstore.online` and at the storefront's
+ *   `proappstore.online/app/` mirror (#698). A ceremony must come from one of
+ *   those two origins exactly.
+ *
+ * **Custom domains.** WebAuthn only lets a page use an RP id that is its own
+ * host or a registrable suffix of it, so an app on a domain outside
+ * proappstore.online cannot use the shared RP id. Its credential RP id stays its
+ * own hostname: a passkey there is enrolled separately and works only there.
+ * Related Origin Requests are not used: they cap a relying party at five
+ * registrable labels, which cannot cover an open set of creator domains.
  */
 import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import { HttpError } from './auth.js';
 import { APP_CONTEXT_HEADER, APP_HOST_HEADER } from './app-context.js';
 
-/** The Creator Console's relying party, and the `step_up_rp_id` its step-ups carry (#698). */
-export const CONSOLE_RP_ID = 'proappstore.online';
+/** The credential RP id every surface on the platform zone shares (#699). */
+export const PLATFORM_RP_ID = 'proappstore.online';
+
+/** The `step_up_rp_id` a Console step-up carries, and the only one Console-gated actions accept (#698). */
+export const CONSOLE_STEP_UP_AUDIENCE = 'proappstore.online';
 
 /**
  * Every origin the Console is served from. Both are first-party: the apex is the
@@ -32,16 +53,24 @@ const CONSOLE_ORIGINS: ReadonlySet<string> = new Set(['https://proappstore.onlin
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 export interface RelyingParty {
-  /** `rp.name` in registration options: the app slug, or `console`. */
+  /** `rp.name` in registration options: `ProAppStore` for the shared RP id, else the app slug. */
   name: string;
-  /** The RP id: the rpIdHash authenticatorData must carry, a credential's `rp_id`, and the `step_up_rp_id` minted. */
+  /** The credential RP id: the rpIdHash authenticatorData must carry and a credential's `rp_id`. */
   id: string;
+  /** The surface's step-up audience: the `step_up_rp_id` a step-up here mints. */
+  audience: string;
   /** The exact `clientDataJSON.origin` a ceremony must carry. */
   origin: string;
 }
 
+/** The credential RP id for an app hostname: the shared one on the platform zone, else the hostname itself. */
+function appCredentialRpId(hostname: string): string {
+  return hostname.endsWith(`.${PLATFORM_RP_ID}`) ? PLATFORM_RP_ID : hostname;
+}
+
 /**
- * The app hostname the host mediated this request from, or undefined. Only
+ * The app hostname the host mediated this request from, or undefined: the
+ * app's step-up audience. Only
  * HostApi can supply the header, so a direct bearer request cannot claim an app
  * relying party to replay a step-up from another surface. A hostname the
  * Console's relying party covers is never an app's: the host serves no app
@@ -50,7 +79,7 @@ export interface RelyingParty {
  */
 export function mediatedRelyingParty(c: Context<{ Bindings: Env }>): string | undefined {
   const rpId = c.req.header(APP_HOST_HEADER)?.toLowerCase();
-  if (!rpId || !HOSTNAME.test(rpId) || rpId === CONSOLE_RP_ID || CONSOLE_ORIGINS.has(`https://${rpId}`)) return undefined;
+  if (!rpId || !HOSTNAME.test(rpId) || rpId === CONSOLE_STEP_UP_AUDIENCE || CONSOLE_ORIGINS.has(`https://${rpId}`)) return undefined;
   return rpId;
 }
 
@@ -75,9 +104,10 @@ export function passkeyRelyingParty(c: Context<{ Bindings: Env }>): RelyingParty
   const appId = c.req.header(APP_CONTEXT_HEADER);
   const origin = c.req.header('Origin');
   if (!appId && !c.req.header(APP_HOST_HEADER) && origin && CONSOLE_ORIGINS.has(origin)) {
-    return { name: 'console', id: CONSOLE_RP_ID, origin };
+    return { name: 'ProAppStore', id: PLATFORM_RP_ID, audience: CONSOLE_STEP_UP_AUDIENCE, origin };
   }
-  const rpId = mediatedRelyingParty(c);
-  if (!appId || !rpId) throw new HttpError('passkeys are only available on an app origin or the console', 400);
-  return { name: appId, id: rpId, origin: `https://${rpId}` };
+  const host = mediatedRelyingParty(c);
+  if (!appId || !host) throw new HttpError('passkeys are only available on an app origin or the console', 400);
+  const id = appCredentialRpId(host);
+  return { name: id === PLATFORM_RP_ID ? 'ProAppStore' : appId, id, audience: host, origin: `https://${host}` };
 }

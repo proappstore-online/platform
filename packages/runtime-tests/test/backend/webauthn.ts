@@ -35,10 +35,10 @@ function rawToDer(raw: Uint8Array): Uint8Array {
 export class Authenticator {
   counter = 0;
   readonly credId = crypto.getRandomValues(new Uint8Array(16));
-  private constructor(readonly keys: CryptoKeyPair, readonly rp: string) {}
-  /** An authenticator for relying party `rp`; its ceremonies claim origin `https://${rp}` unless told otherwise. */
-  static async create(rp: string) {
-    return new Authenticator((await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as CryptoKeyPair, rp);
+  private constructor(readonly keys: CryptoKeyPair, readonly rp: string, readonly origin: string) {}
+  /** An authenticator for relying party `rp`; its ceremonies claim `origin` (default `https://${rp}`) unless a ceremony says otherwise. */
+  static async create(rp: string, origin = `https://${rp}`) {
+    return new Authenticator((await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as CryptoKeyPair, rp, origin);
   }
   async authData(flags: number, withCredential: boolean) {
     const head = concat(await sha256(enc.encode(this.rp)), new Uint8Array([flags]), u32(this.counter));
@@ -46,7 +46,7 @@ export class Authenticator {
     return concat(head, new Uint8Array(16), new Uint8Array([0, this.credId.length]), this.credId);
   }
   async attest(challenge: string, o: { origin?: string } = {}) {
-    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.create', challenge, origin: o.origin ?? `https://${this.rp}` }));
+    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.create', challenge, origin: o.origin ?? this.origin }));
     return {
       id: b64url(this.credId),
       clientDataJSON: b64url(clientData),
@@ -57,7 +57,7 @@ export class Authenticator {
   }
   async assert(challenge: string, o: { flags?: number; signer?: CryptoKey; bumpCounter?: boolean; origin?: string } = {}) {
     if (o.bumpCounter !== false) this.counter++;
-    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.get', challenge, origin: o.origin ?? `https://${this.rp}` }));
+    const clientData = enc.encode(JSON.stringify({ type: 'webauthn.get', challenge, origin: o.origin ?? this.origin }));
     const authData = await this.authData(o.flags ?? 0x05, false);
     const raw = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, o.signer ?? this.keys.privateKey, concat(authData, await sha256(clientData))));
     return { id: b64url(this.credId), clientDataJSON: b64url(clientData), authenticatorData: b64url(authData), signature: b64url(rawToDer(raw)) };

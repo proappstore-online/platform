@@ -37,7 +37,9 @@ describe('host context headers reach routes only through HostApi (#315)', () => 
 
     const mediated = await options(viaHostApi);
     expect(mediated.status, await mediated.clone().text()).toBe(200);
-    expect((await mediated.json<{ rp: { id: string } }>()).rp.id).toBe(RP);
+    // #699: the credential RP id is the shared platform one; the challenge is bound to the mediated hostname.
+    expect((await mediated.json<{ rp: { id: string } }>()).rp.id).toBe('proappstore.online');
+    expect(await env.DB.prepare('SELECT rp_id FROM passkey_challenges').first()).toEqual({ rp_id: RP });
   });
 
   it("secrets proxy: a forged X-PAS-App on a direct call is no app origin, so no app's secrets are spent", async () => {
