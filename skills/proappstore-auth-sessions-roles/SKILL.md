@@ -55,8 +55,10 @@ every chapter.
    ([PAS-AUTH-014](https://docs.proappstore.online/standard/auth/#pas-auth-014)).
    Declare the app's roles in the top-level `mcp.json` `roles` block
    (`{ id, label, description?, requires? }`): registration then refuses a
-   gate naming an undeclared role, the app owner holds every declared role,
-   and granting a role also grants the roles it `requires`.
+   gate naming an undeclared role, the app owner holds every declared role
+   (review documents and private-app access included), and granting a role
+   also grants the roles it `requires`. Declare review-document roles in
+   `mcp.json` `storage.review_roles` too, not from the app's own UI.
 3. **The server is the boundary; SQL scoping is the final check.** Every
    action defaults to `requires_auth: true`, declares the narrowest
    `app_roles`, and scopes rows to the caller in SQL. A UI guard, a hidden

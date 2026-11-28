@@ -387,12 +387,15 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
   type State = {
     objects: Map<string, Uint8Array>; config: string[] | null; roles: Map<string, string[]>;
     team: Map<string, string>; creator: string; audit: unknown[][]; auditFails: boolean; retention: number | null;
+    /** #696: the roles the app declares in mcp.json (its owner holds them), and whether mcp.json owns review_roles. */
+    declared: string[]; fromManifest: boolean;
   };
   let state: State;
   beforeEach(() => {
     state = {
       objects: new Map(), config: ['moderator'], roles: new Map([['gh:2', ['moderator']]]),
       team: new Map([['gh:9', 'admin']]), creator: 'gh:8', audit: [], auditFails: false, retention: null,
+      declared: [], fromManifest: false,
     };
   });
 
@@ -409,6 +412,15 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
   }
   function db() {
     const answer = (sql: string, args: unknown[]): { first?: unknown; all?: unknown; run?: unknown } => {
+      if (sql.includes('FROM app_declared_roles')) {
+        // heldAppRoles: the caller's grants, plus every declared role when they own the app.
+        const id = args[1] as string;
+        const owner = state.creator === id || state.team.get(id) === 'owner';
+        return { all: { results: [
+          ...(state.roles.get(id) ?? []).map((role_name) => ({ role_name, source: 'grant' })),
+          ...(owner ? state.declared.map((role_name) => ({ role_name, source: 'owner' })) : []),
+        ] } };
+      }
       if (sql.includes('SELECT creator_id FROM apps')) return { first: { creator_id: state.creator } };
       if (sql.includes('FROM team_members')) return { first: state.team.has(args[1] as string) ? { role: state.team.get(args[1] as string) } : null };
       if (sql.includes('INSERT INTO app_storage_config')) {
@@ -417,12 +429,10 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
         if (args[6]) state.retention = args[2] as number | null;
         return { run: {} };
       }
-      if (sql.includes('SELECT review_retention_days FROM app_storage_config')) return { first: { review_retention_days: state.retention } };
-      if (sql.includes('FROM app_storage_config')) return { first: state.config ? { review_roles: JSON.stringify(state.config) } : null };
-      if (sql.includes('FROM app_roles')) {
-        const [, id, , ...wanted] = args as string[];
-        return { first: (state.roles.get(id) ?? []).some((r) => wanted.includes(r)) ? { 1: 1 } : null };
+      if (sql.includes('SELECT review_retention_days, review_roles_from_manifest FROM app_storage_config')) {
+        return { first: { review_retention_days: state.retention, review_roles_from_manifest: state.fromManifest ? 1 : 0 } };
       }
+      if (sql.includes('FROM app_storage_config')) return { first: state.config ? { review_roles: JSON.stringify(state.config) } : null };
       if (sql.includes('INSERT INTO storage_review_access')) {
         if (state.auditFails) throw new Error('D1 unavailable');
         state.audit.push(args); return { run: {} };
@@ -501,6 +511,23 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     expect((await read(OUTSIDER)).status).toBe(403);
   });
 
+  it('the owner holds the review roles the app declares in mcp.json roles, audited like any reviewer (#696)', async () => {
+    await upload();
+    state.creator = 'gh:3';
+    expect((await read(OUTSIDER)).status).toBe(403); // `moderator` is not declared: only a grant counts
+    state.declared = ['moderator'];
+    expect((await read(OUTSIDER)).status).toBe(200);
+    expect(state.audit).toEqual([['myapp', 'gh:1', 'cert.pdf', 'gh:3', 'read', expect.any(Number)]]);
+    state.config = ['verifier'];
+    expect((await read(OUTSIDER)).status).toBe(403); // a declared role that is not a review role opens nothing
+    state.creator = 'gh:8';
+    state.team.set('gh:3', 'owner');
+    state.config = ['moderator'];
+    expect((await read(OUTSIDER)).status).toBe(200); // a team owner too
+    state.team.set('gh:3', 'admin');
+    expect((await read(OUTSIDER)).status).toBe(403); // but not a team admin
+  });
+
   it("a stale config naming 'member' grants nothing", async () => {
     await upload();
     state.config = ['member'];
@@ -556,14 +583,14 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
     const ADMIN = await testToken('gh:9');
     const ok = await put(ADMIN, ['verifier', 'verifier', 'moderator']);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_retention_days: null, effective_review_retention_days: 30 });
+    expect(await ok.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_roles_from_manifest: false, review_retention_days: null, effective_review_retention_days: 30 });
     expect(state.config).toEqual(['verifier', 'moderator']);
     expect((await put(ADMIN, ['member'])).status).toBe(400);
     expect((await put(ADMIN, ['Bad Role'])).status).toBe(400);
     expect((await put(ADMIN, 'moderator')).status).toBe(400);
     expect((await put(TOK_B, ['moderator'])).status).toBe(403); // a reviewer is not the team
     const got = await req('GET', '/v1/apps/myapp/storage-config', ADMIN);
-    expect(await got.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_retention_days: null, effective_review_retention_days: 30 });
+    expect(await got.json()).toEqual({ review_roles: ['verifier', 'moderator'], review_roles_from_manifest: false, review_retention_days: null, effective_review_retention_days: 30 });
   });
 
   it('storage-config: review_retention_days is 1–365 or null, set alone without touching the roles (#307)', async () => {
@@ -572,16 +599,35 @@ describe('review uploads — _review namespace, reviewer roles, audit (#208)', (
       req('PUT', '/v1/apps/myapp/storage-config', token, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
     const ok = await put(ADMIN, { review_retention_days: 7 });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ review_roles: ['moderator'], review_retention_days: 7, effective_review_retention_days: 7 });
+    expect(await ok.json()).toEqual({ review_roles: ['moderator'], review_roles_from_manifest: false, review_retention_days: 7, effective_review_retention_days: 7 });
     expect(state.config).toEqual(['moderator']); // roles kept
     for (const bad of [0, 366, 1.5, '30', true]) expect((await put(ADMIN, { review_retention_days: bad })).status).toBe(400);
     expect(state.retention).toBe(7);
     expect((await put(ADMIN, { review_roles: ['verifier'] })).status).toBe(200);
     expect(state.retention).toBe(7); // retention kept
     const reset = await put(ADMIN, { review_retention_days: null });
-    expect(await reset.json()).toEqual({ review_roles: ['verifier'], review_retention_days: null, effective_review_retention_days: 30 });
+    expect(await reset.json()).toEqual({ review_roles: ['verifier'], review_roles_from_manifest: false, review_retention_days: null, effective_review_retention_days: 30 });
     expect((await put(ADMIN, {})).status).toBe(400);
     expect((await put(TOK_B, { review_retention_days: 7 })).status).toBe(403);
+  });
+
+  it('storage-config: review_roles declared in mcp.json cannot be changed here; the same list and the retention still can (#696)', async () => {
+    const ADMIN = await testToken('gh:9');
+    const put = (body: unknown) =>
+      req('PUT', '/v1/apps/myapp/storage-config', ADMIN, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+    state.fromManifest = true;
+    const refused = await put({ review_roles: ['verifier'] });
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).toContain('storage.review_roles');
+    expect(state.config).toEqual(['moderator']);
+    expect((await put({ review_roles: ['verifier'], review_retention_days: 7 })).status).toBe(409); // nothing is half-applied
+    expect(state.retention).toBeNull();
+
+    // Rideshare's Staff screen re-sends what it read: the same list is a no-op, not a conflict.
+    const same = await put({ review_roles: ['moderator', 'moderator'], review_retention_days: 7 });
+    expect(same.status).toBe(200);
+    expect(await same.json()).toEqual({ review_roles: ['moderator'], review_roles_from_manifest: true, review_retention_days: 7, effective_review_retention_days: 7 });
+    expect((await put({ review_roles: ['member'] })).status).toBe(400); // validated before the lock is consulted
   });
 
   it('storage-review-access: the team admin reads the audit trail; a reviewer cannot', async () => {

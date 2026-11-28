@@ -196,17 +196,19 @@ An app can declare its roles at the top level of `mcp.json` (#695):
   form a cycle.
 - When `roles` is declared, every role the manifest gates on must be one of
   them: each action's `auth.app_roles` (the platform's `member` is always
-  allowed there) and the operator view's `admin_access.roles` and
-  `audit.app_roles`. A typo fails registration with a message naming the
-  action or field, instead of locking everyone out.
+  allowed there), the operator view's `admin_access.roles` and
+  `audit.app_roles`, and `storage.review_roles` (below). A typo fails
+  registration with a message naming the action or field, instead of locking
+  everyone out.
 
 What declaring them changes:
 
 - **The owner holds every declared role.** The app's creator, or a team member
   with the `owner` team role, passes every gate on a declared role: actions
   (and so the operator view), `GET /v1/apps/:appId/roles/check/:role`,
-  `GET /v1/apps/:appId/roles/me` and the operator audit trail, without being
-  granted it. Only declared roles are implied; a platform admin holds none
+  `GET /v1/apps/:appId/roles/me`, the operator audit trail, review documents
+  (`_review/` uploads, including evidence opened from the operator view) and a
+  private app's `visibility.roles` (#696), without being granted it. Only declared roles are implied; a platform admin holds none
   through admin standing. The success audit records the role with
   `role_via_owner` set when ownership, not a grant, supplied it (a role the
   owner was also granted is recorded as the grant).
@@ -222,6 +224,29 @@ The declaration is replaced with the manifest on every deploy: a manifest
 without `roles` clears it, the owner then holds only what they were granted,
 and role names are free strings again. Grants in `app_roles` are never touched
 by a deploy.
+
+### Review roles (`storage`)
+
+The app roles whose holders may read and delete other users' review uploads
+(`app.storage.uploadForReview`, see the SDK overview) can be declared in
+`mcp.json` instead of being set at runtime (#696):
+
+```json
+"storage": { "review_roles": ["ops"] }
+```
+
+- `review_roles` follows the rules of `PUT /v1/apps/:appId/storage-config`: at
+  most 10 app role names, never `member`. When the app declares `roles`, each
+  must be a declared role. A violation fails registration.
+- Registration writes the list to the app's storage config. From then on the
+  manifest is the source of truth: `PUT /v1/apps/:appId/storage-config` refuses a
+  different `review_roles` with `409` (re-sending the same list is accepted as a
+  no-op), while `review_retention_days` stays editable there.
+  `GET /v1/apps/:appId/storage-config` reports `review_roles_from_manifest: true`.
+- A manifest without `storage` leaves an app that never declared it exactly as it
+  was. For an app that did, it hands the list back to the team as it stands, and
+  `PUT storage-config` can change it again; `DELETE /v1/apps/:appId/tools` does
+  the same.
 
 ## The `mcp.json` manifest
 
@@ -897,8 +922,8 @@ A personal or invite-only app declares itself private (#259):
 The whole app — `/`, every asset, `/.pas/api/*`, `/.pas/data/*`, its actions, its
 `mcp.proappstore.online/mcp/apps/<id>` endpoint and its storefront listing — is
 then available only to the app's **team** (its creator, any team member, platform
-admins) and to users holding one of `roles`. Grant those roles with the normal
-invite flow. `/.pas/auth/*` stays reachable, so a visitor can still sign in.
+admins) and to users holding one of `roles`, read like every other app-role gate
+(#696). Grant those roles with the normal invite flow. `/.pas/auth/*` stays reachable, so a visitor can still sign in.
 
 - **No session:** a page navigation is redirected to the platform sign-in page
   (`/.pas/auth/signin?return_to=<path>`), which offers GitHub, Google, an emailed
@@ -1257,9 +1282,10 @@ which:
   path from that fresh row, never from the client;
 - serves only a `_review/u/<uid>/<path>` object in this app's own storage, so
   no other namespace, app or storage path is reachable;
-- requires the caller to hold one of the app's review roles
-  (`PUT /v1/apps/:appId/storage-config`), so the operator view never widens
-  who may open review documents;
+- requires the caller to hold one of the app's review roles (mcp.json
+  `storage.review_roles` or `PUT /v1/apps/:appId/storage-config`), so the
+  operator view never widens who may open review documents. The owner holds a
+  review role the app declares in `roles` (#696);
 - serves PDF and image types only, `private, no-store`, `nosniff`, with
   `default-src 'none'`;
 - records the read in `storage_review_access` (the #208 trail) and in

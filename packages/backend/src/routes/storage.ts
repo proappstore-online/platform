@@ -4,7 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, HttpError, type FasUser } from '../lib/auth.js';
 import { wrap } from '../lib/route-wrap.js';
-import { holdsReviewRole, recordReviewAccess, REVIEW_CONTENT_TYPES, REVIEW_ROLE_NAME, reviewRoles } from '../lib/review-access.js';
+import { holdsReviewRole, parseReviewRoles, recordReviewAccess, REVIEW_CONTENT_TYPES, reviewRoles } from '../lib/review-access.js';
 import { dispatchWebhook } from '../lib/webhook-dispatch.js';
 import { requireVisibleCaller, requireVisibleUser, type AppVisibility } from '../lib/visibility.js';
 import { DEFAULT_REVIEW_RETENTION_DAYS, MAX_REVIEW_RETENTION_DAYS, reviewRetentionDays } from '../lib/review-storage-reaper.js';
@@ -43,8 +43,6 @@ export const storageRoutes = new Hono<{ Bindings: Env }>();
 // `_review/<path>` stores a private document at {appId}/_review/u/{uid}/<path>.
 // Its uploader and holders of the app's declared review roles may read or
 // delete it at `_review/u/<uid>/<path>`; nobody else, the app team included.
-
-const MAX_REVIEW_ROLES = 10;
 
 /**
  * Authorize access to `_review/u/<ownerId>/<path>`: the uploader, or a live
@@ -320,15 +318,21 @@ storageRoutes.delete('/apps/:appId/storage/*', wrap(async (c) => {
   return c.body(null, 204);
 }));
 
-/** The app's stored review retention (#307): 1–365 days, or null for the platform default. */
-async function storedRetention(db: D1Database, appId: string): Promise<number | null> {
-  const row = await db.prepare('SELECT review_retention_days FROM app_storage_config WHERE app_id = ?1').bind(appId).first<{ review_retention_days: number | null }>();
-  return row?.review_retention_days ?? null;
-}
-
+/**
+ * The app's storage configuration (#208, #307, #696). `review_roles_from_manifest`
+ * is true while the app declares `storage.review_roles` in mcp.json: the manifest
+ * is then the source of truth and PUT cannot change the roles.
+ */
 async function storageConfig(db: D1Database, appId: string) {
-  const days = await storedRetention(db, appId);
-  return { review_roles: await reviewRoles(db, appId), review_retention_days: days, effective_review_retention_days: reviewRetentionDays(days) };
+  const row = await db.prepare('SELECT review_retention_days, review_roles_from_manifest FROM app_storage_config WHERE app_id = ?1').bind(appId)
+    .first<{ review_retention_days: number | null; review_roles_from_manifest: number }>();
+  const days = row?.review_retention_days ?? null;
+  return {
+    review_roles: await reviewRoles(db, appId),
+    review_roles_from_manifest: row?.review_roles_from_manifest === 1,
+    review_retention_days: days,
+    effective_review_retention_days: reviewRetentionDays(days),
+  };
 }
 
 /** The app's storage configuration (#208, #307). Any team member may read it. */
@@ -344,39 +348,46 @@ storageRoutes.get('/apps/:appId/storage-config', wrap(async (c) => {
  *
  * - `review_roles`: which app roles may review `_review/` uploads (#208). `member`
  *   is refused: every signed-in user holds it, so it would make every review
- *   document readable by every user of the app.
+ *   document readable by every user of the app. An app that declares
+ *   `storage.review_roles` in mcp.json (#696) owns the list there: a different
+ *   list is refused with 409, the same list is accepted as a no-op.
  * - `review_retention_days` (#307): delete undecided review uploads after this
- *   many days, 1–365; null restores the platform default (30).
+ *   many days, 1–365; null restores the platform default (30). Editable either way.
  */
 storageRoutes.put('/apps/:appId/storage-config', wrap(async (c) => {
   const appId = c.req.param('appId')!;
   const actor = await requireAppAccess(c, appId, 'admin');
   const body = await c.req.json<{ review_roles?: unknown; review_retention_days?: unknown }>().catch(() => null);
-  const setRoles = body !== null && typeof body === 'object' && 'review_roles' in body;
+  let setRoles = body !== null && typeof body === 'object' && 'review_roles' in body;
   const setDays = body !== null && typeof body === 'object' && 'review_retention_days' in body;
   if (!setRoles && !setDays) return c.text('body must set review_roles and/or review_retention_days', 400);
 
   let roles: string[] = [];
   if (setRoles) {
-    const raw = body!.review_roles;
-    if (!Array.isArray(raw) || raw.length > MAX_REVIEW_ROLES || raw.some((r) => typeof r !== 'string' || !REVIEW_ROLE_NAME.test(r))) {
-      return c.text(`review_roles must be an array of up to ${MAX_REVIEW_ROLES} app role names`, 400);
+    const parsed = parseReviewRoles(body!.review_roles, 'review_roles');
+    if ('error' in parsed) return c.text(parsed.error, 400);
+    roles = parsed.roles;
+    const current = await storageConfig(c.env.DB, appId);
+    if (current.review_roles_from_manifest) {
+      const same = roles.length === current.review_roles.length && roles.every((r) => current.review_roles.includes(r));
+      if (!same) return c.text("review_roles is declared in this app's mcp.json (storage.review_roles); change it there and redeploy", 409);
+      setRoles = false;
     }
-    if (raw.includes('member')) return c.text("review_roles cannot include 'member' (every signed-in user holds it)", 400);
-    roles = [...new Set(raw as string[])];
   }
   const days = setDays ? body!.review_retention_days : null;
   if (setDays && days !== null && (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > MAX_REVIEW_RETENTION_DAYS)) {
     return c.text(`review_retention_days must be an integer from 1 to ${MAX_REVIEW_RETENTION_DAYS}, or null for the platform default (${DEFAULT_REVIEW_RETENTION_DAYS})`, 400);
   }
 
-  await c.env.DB.prepare(
-    `INSERT INTO app_storage_config (app_id, review_roles, review_retention_days, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
-     ON CONFLICT(app_id) DO UPDATE SET
-       review_roles = CASE WHEN ?6 THEN excluded.review_roles ELSE app_storage_config.review_roles END,
-       review_retention_days = CASE WHEN ?7 THEN excluded.review_retention_days ELSE app_storage_config.review_retention_days END,
-       updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-  ).bind(appId, JSON.stringify(roles), days, actor.id, Date.now(), setRoles ? 1 : 0, setDays ? 1 : 0).run();
+  if (setRoles || setDays) {
+    await c.env.DB.prepare(
+      `INSERT INTO app_storage_config (app_id, review_roles, review_retention_days, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(app_id) DO UPDATE SET
+         review_roles = CASE WHEN ?6 THEN excluded.review_roles ELSE app_storage_config.review_roles END,
+         review_retention_days = CASE WHEN ?7 THEN excluded.review_retention_days ELSE app_storage_config.review_retention_days END,
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+    ).bind(appId, JSON.stringify(roles), days, actor.id, Date.now(), setRoles ? 1 : 0, setDays ? 1 : 0).run();
+  }
   return c.json(await storageConfig(c.env.DB, appId));
 }));
 

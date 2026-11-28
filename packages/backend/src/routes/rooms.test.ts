@@ -131,7 +131,10 @@ describe('GET /v1/apps/:appId/rooms/:roomId', () => {
   it('refuses a caller a private app does not admit with 4401 app_private, before the room (#259)', async () => {
     const roomFetch = vi.fn(() => new Response('upgraded'));
     // Every lookup answers the private row: not the creator, no team row, no role.
-    const db = { prepare: (sql: string) => ({ bind: () => ({ first: async () => (sql.includes('app_visibility') ? { mode: 'private', roles: '["viewer"]' } : null) }) }) } as unknown as D1Database;
+    const db = { prepare: (sql: string) => ({ bind: () => ({
+      first: async () => (sql.includes('app_visibility') ? { mode: 'private', roles: '["viewer"]' } : null),
+      all: async () => ({ results: [] }),
+    }) }) } as unknown as D1Database;
     const res = await app.request(
       'https://api.proappstore.online/v1/apps/meetup/rooms/lobby',
       { headers: { Upgrade: 'websocket', Authorization: `Bearer ${TOK}` } },

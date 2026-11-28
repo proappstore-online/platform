@@ -9,7 +9,8 @@
  *     its team role — a developer who can deploy and run SQL must also be able
  *     to open the app and its console), or a platform admin; and
  *   - a user holding one of the declared **app roles** (`app_roles`, granted
- *     through the existing invite flow, routes/invites.ts).
+ *     through the existing invite flow, routes/invites.ts), read through the
+ *     shared heldAppRoles (lib/held-app-roles.ts, #696) like every app-role gate.
  *
  * Platform admins are recognised by id (`ADMIN_GITHUB_IDS`), not only by the
  * session's `admin` role: a session issued to an app origin carries just
@@ -34,7 +35,7 @@ import type { Context } from 'hono';
 import type { Env } from '../types.js';
 import type { FasUser } from './auth.js';
 import { HttpError, requireUser } from './auth.js';
-import { roleLoginAlias } from './role-subject.js';
+import { heldAppRoles } from './held-app-roles.js';
 
 /** What the visibility predicate reads: the database, and who the platform admins are. */
 export type VisibilityEnv = Pick<Env, 'DB' | 'ADMIN_GITHUB_IDS'>;
@@ -97,13 +98,9 @@ export async function visibilityAllows(
   if (isPlatformAdmin(env, user)) return true;
   if (await isAppTeam(db, appId, user)) return true;
   if (visibility.roles.length === 0) return false;
-  const placeholders = visibility.roles.map(() => '?').join(', ');
-  // A role granted to a GitHub login before first sign-in still counts — for the GitHub session that owns that login only.
-  const row = await db
-    .prepare(`SELECT 1 FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id = ?) AND role_name IN (${placeholders}) LIMIT 1`)
-    .bind(appId, user.id, roleLoginAlias(user), ...visibility.roles)
-    .first();
-  return row !== null;
+  // The shared app-role read (#696): grants, matched by roleSubjects, plus the owner's declared roles.
+  const held = await heldAppRoles(db, appId, user);
+  return visibility.roles.some((r) => held.has(r));
 }
 
 /**

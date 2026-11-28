@@ -3,7 +3,8 @@
  * `app_roles`, plus — when they own the app — every role the app declares in
  * mcp.json `roles` (`app_declared_roles`). Every app-role gate reads this:
  * action auth (which also backs the operator view), GET /roles/check/:role,
- * GET /roles/me and the operator audit trail.
+ * GET /roles/me, the operator audit trail, review-document access
+ * (lib/review-access.ts) and a private app's `visibility.roles` (#696).
  *
  * The owner is the app's creator or a team member with the `owner` team role,
  * as requireAppAccess decides it. A platform admin is not the app's owner and

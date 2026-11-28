@@ -256,7 +256,7 @@ describe('refused operator requests join the trail exactly once', () => {
       mockStmt({ first: { creator_id: 'gh:1' } }),
       mockStmt({ first: { contract: stored(STASH) } }),
       mockStmt({ first: { review_roles: '["operator"]' } }),
-      mockStmt({ first: { 1: 1 } }),
+      mockStmt({ all: { results: [{ role_name: 'operator', source: 'grant' }] } }),
       mockStmt({ first: { manifest: JSON.stringify(STASH.tools.find((t) => t.name === 'op_kyc_detail')) } }),
       mockStmt({ all: { results: [{ role_name: 'operator' }] } }),
     );

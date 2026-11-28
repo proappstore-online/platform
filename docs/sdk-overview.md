@@ -312,16 +312,25 @@ uploader.
 
 - the uploader;
 - any user who holds one of the app's **review roles**, checked live against
-  `app.roles` on every request.
+  `app.roles` on every request. The app's owner holds a review role the app
+  declares in mcp.json `roles` (#696).
 
 Nobody else can, including the app team, the app creator and platform admins.
 
-**Declaring review roles.** A team admin sets them once per app:
+**Declaring review roles.** Declare them in `mcp.json` (#696):
+
+```json
+"storage": { "review_roles": ["moderator"] }
+```
+
+or, for an app without that block, a team admin sets them once per app:
 
 ```
 PUT /v1/apps/<appId>/storage-config   { "review_roles": ["moderator"] }
 ```
 
+Once `mcp.json` declares them, that `PUT` refuses a different list with `409`;
+change the manifest and redeploy instead (docs: mcp-app-tools, "Review roles").
 `member` is refused, because every signed-in user holds it. Assign the role
 itself with `app.roles.assign`. Revoking the role, or removing it from
 `review_roles`, denies the next read.
@@ -353,8 +362,9 @@ PUT /v1/apps/<appId>/storage-config   { "review_retention_days": 14 }
 ```
 
 Either field of `storage-config` may be sent alone; the other keeps its value.
-`GET /v1/apps/<appId>/storage-config` returns `review_retention_days` (null when
-unset) and `effective_review_retention_days`. Each expiry is recorded in the
+`GET /v1/apps/<appId>/storage-config` returns `review_roles`,
+`review_roles_from_manifest`, `review_retention_days` (null when unset) and
+`effective_review_retention_days`. Each expiry is recorded in the
 audit trail above with actor `system:retention` and action `platform_expired`.
 If your app keeps the review key on a row, expect a `404` for a document past
 its retention.

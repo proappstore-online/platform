@@ -485,7 +485,7 @@ describe('operator ID verification (#240)', () => {
     const access = mockStmt();
     const tool = sample.tools.find((t) => t.name === action)!;
     const review = opts.evidence
-      ? [mockStmt({ first: { review_roles: '["operator"]' } }), mockStmt({ first: opts.reviewer === false ? null : { 1: 1 } })]
+      ? [mockStmt({ first: { review_roles: '["operator"]' } }), mockStmt({ all: { results: opts.reviewer === false ? [] : [{ role_name: 'operator', source: 'grant' }] } })]
       : [];
     const d = mockD1(
       mockStmt({ first: { creator_id: 'gh:1' } }),

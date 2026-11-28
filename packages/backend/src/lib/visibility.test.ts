@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forgetAppVisibility, getAppVisibilityCached, isPlatformAdmin, VISIBILITY_CACHE_TTL_MS } from './visibility.js';
+import { forgetAppVisibility, getAppVisibilityCached, isPlatformAdmin, visibilityAllows, VISIBILITY_CACHE_TTL_MS } from './visibility.js';
 
 // #259 review: public storage, counter reads and room upgrades serve anonymous
 // callers of PUBLIC apps, so the visibility read behind them is cached per
@@ -61,5 +61,32 @@ describe('isPlatformAdmin (#56: app-origin sessions carry only [user])', () => {
     expect(isPlatformAdmin(env, { id: 'gh:1', roles: ['user', 'admin'] })).toBe(true);
     expect(isPlatformAdmin(env, { id: 'gh:1', roles: ['user'] })).toBe(false);
     expect(isPlatformAdmin({}, { id: 'gh:5', roles: ['user'] })).toBe(false);
+  });
+});
+
+describe('visibilityAllows: visibility.roles read through heldAppRoles (#696)', () => {
+  const PRIVATE = { mode: 'private' as const, roles: ['ops'] };
+  /** Not the creator, no team row; `held` is what heldAppRoles' one query answers. */
+  function db(held: Array<{ role_name: string; source: 'grant' | 'owner' }>) {
+    const sql: string[] = [];
+    const d = {
+      prepare: (q: string) => { sql.push(q); return { bind: () => ({ first: async () => null, all: async () => ({ results: held }) }) }; },
+    } as unknown as D1Database;
+    return { d, sql };
+  }
+  const user = { id: 'gh:2', login: 'rider', roles: ['user'] };
+
+  it('admits a holder of a listed role, refuses everyone else, and asks the shared role read', async () => {
+    const granted = db([{ role_name: 'ops', source: 'grant' }]);
+    expect(await visibilityAllows({ DB: granted.d }, 'rideshare', PRIVATE, user)).toBe(true);
+    expect(granted.sql.some((q) => q.includes('app_declared_roles'))).toBe(true);
+    expect(await visibilityAllows({ DB: db([{ role_name: 'editor', source: 'grant' }]).d }, 'rideshare', PRIVATE, user)).toBe(false);
+    expect(await visibilityAllows({ DB: db([]).d }, 'rideshare', PRIVATE, user)).toBe(false);
+  });
+
+  it('a private app listing no roles never reads them', async () => {
+    const none = db([{ role_name: 'ops', source: 'grant' }]);
+    expect(await visibilityAllows({ DB: none.d }, 'rideshare', { mode: 'private', roles: [] }, user)).toBe(false);
+    expect(none.sql.some((q) => q.includes('app_roles'))).toBe(false);
   });
 });

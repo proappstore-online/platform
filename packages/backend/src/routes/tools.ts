@@ -28,6 +28,7 @@ import { validateVisibility } from '../lib/manifest/visibility.js';
 import { validateWorkerManifest } from '../lib/manifest/worker.js';
 import { validateUserSecrets } from '../lib/manifest/user-secrets.js';
 import { validateRoles } from '../lib/manifest/roles.js';
+import { validateStorage } from '../lib/manifest/storage.js';
 import { validateHooks } from '../lib/manifest/hooks.js';
 import { validateConnectors } from '../lib/manifest/connectors.js';
 import { googleContractHash } from '../lib/google-calendar-policy.js';
@@ -179,6 +180,11 @@ async function syncBilling(env: Env | undefined, db: D1Database, appId: string, 
   return warnings;
 }
 
+/** Hand an app's review roles back to PUT storage-config (#696), keeping the list. */
+function releaseManifestReviewRoles(db: D1Database, appId: string): D1PreparedStatement {
+  return db.prepare('UPDATE app_storage_config SET review_roles_from_manifest = 0 WHERE app_id = ? AND review_roles_from_manifest = 1').bind(appId);
+}
+
 export async function replaceAppTools(
   db: D1Database,
   appId: string,
@@ -210,6 +216,8 @@ export async function replaceAppTools(
   if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
   const rolesResult = validateRoles(site.roles, tools as ToolManifest[], operatorView.contract);
   if ('error' in rolesResult) return { status: 400, payload: { error: rolesResult.error } };
+  const storageResult = validateStorage(site.storage, rolesResult.roles);
+  if ('error' in storageResult) return { status: 400, payload: { error: storageResult.error } };
   const visibilityResult = validateVisibility(site.visibility, tools as ToolManifest[]);
   if ('error' in visibilityResult) return { status: 400, payload: { error: visibilityResult.error } };
   const workerResult = validateWorkerManifest(site.worker);
@@ -343,6 +351,15 @@ export async function replaceAppTools(
     ...(rolesResult.roles ?? []).map((r, i) =>
       db.prepare('INSERT INTO app_declared_roles (app_id, role_id, position, label, description, requires, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind(appId, r.id, i, r.label, r.description, JSON.stringify(r.requires), now)),
+    // Review roles declared in mcp.json `storage` (#696): written to the storage config and
+    // locked against PUT storage-config. Without the block the lock is released and the
+    // roles stay as they are, so an app that never declared it is untouched.
+    storageResult.storage
+      ? db.prepare(
+        `INSERT INTO app_storage_config (app_id, review_roles, review_roles_from_manifest, updated_by, updated_at) VALUES (?, ?, 1, 'mcp.json', ?)
+         ON CONFLICT(app_id) DO UPDATE SET review_roles = excluded.review_roles, review_roles_from_manifest = 1, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      ).bind(appId, JSON.stringify(storageResult.storage.review_roles), now)
+      : releaseManifestReviewRoles(db, appId),
     // Worker schedules (#255) are replaced with the manifest too. Their run
     // history and breaker state live in scheduled_action_runs/_state under
     // 'worker:<name>' (source 'code'), reset by the DELETE above like actions'.
@@ -437,6 +454,7 @@ export async function replaceAppTools(
       worker: workerResult.worker,
       user_secrets: userSecretsResult.userSecrets.map((d) => d.name),
       roles: rolesResult.roles?.map((r) => r.id) ?? null,
+      storage: storageResult.storage,
       hooks: hooksResult.hooks.map((h) => ({ name: h.name, kind: h.verify.kind, to: h.to === 'worker' ? 'worker' : { action: h.to.action } })),
       connectors: connectorsResult.connectors.map((k) => ({ name: k.name, kind: k.kind, modes: k.modes })),
       rooms: roomsResult.rules.map((r) => ({ pattern: `${r.prefix}*`, authorize: r.authorize })),
@@ -649,6 +667,8 @@ toolsRoutes.delete('/apps/:appId/tools', async (c) => {
     c.env.DB.prepare('DELETE FROM app_user_secret_decls WHERE app_id = ?').bind(appId),
     // #695: the declared roles; grants in app_roles stay.
     c.env.DB.prepare('DELETE FROM app_declared_roles WHERE app_id = ?').bind(appId),
+    // #696: the manifest no longer owns the review roles; they stay as they are.
+    releaseManifestReviewRoles(c.env.DB, appId),
   ]);
   return c.json({ ok: true });
 });

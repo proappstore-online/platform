@@ -31,11 +31,13 @@ export interface SiteManifest {
   user_secrets?: unknown;
   /** The app roles the app declares (#695): `[{ id, label, description?, requires? }]` — lib/manifest/roles.ts. */
   roles?: unknown;
+  /** Storage settings the manifest owns (#696): `{ review_roles }` — lib/manifest/storage.ts. */
+  storage?: unknown;
 }
 
 /** The site-manifest fields of a submitted mcp.json body, for every registration path. */
 export function siteManifestFrom(body: SiteManifest | null | undefined): SiteManifest {
-  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions, embed: body?.embed, isolation: body?.isolation, billing: body?.billing, user_secrets: body?.user_secrets, roles: body?.roles };
+  return { page_meta: body?.page_meta, sitemap: body?.sitemap, operator: body?.operator, operator_view: body?.operator_view, visibility: body?.visibility, worker: body?.worker, hooks: body?.hooks, connectors: body?.connectors, rooms: body?.rooms, approved_unscoped: body?.approved_unscoped, permissions: body?.permissions, embed: body?.embed, isolation: body?.isolation, billing: body?.billing, user_secrets: body?.user_secrets, roles: body?.roles, storage: body?.storage };
 }
 
 export interface PageMetaRoute { path: string; action: string; param: string; not_found?: 404 }
