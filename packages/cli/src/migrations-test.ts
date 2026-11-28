@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { bold, dim, green, red, yellow } from './lib/ansi.js';
 import { splitSqlStatements } from './lib/sql-statements.js';
+import { planRebuild } from './lib/table-rebuild.js';
 
 /**
  * `pas migrations test` (#503): before a deploy applies migrations.json to production, apply the whole chain to
@@ -18,7 +19,8 @@ import { splitSqlStatements } from './lib/sql-statements.js';
  * Rejections are reported, not failed: a trigger that rejects EVERY call looks the same, so read the list.
  */
 
-export interface Migration { name: string; sql: string }
+/** `rebuild` names the table a declared table rebuild replaces (#701); `sql` is then its new CREATE TABLE. */
+export interface Migration { name: string; sql: string; rebuild?: string }
 export interface ActionManifest {
   name: string;
   operation?: string;
@@ -125,6 +127,21 @@ export async function testMigrationChain(db: D1Like, input: { migrations: Migrat
   const report: ChainReport = { migrations: 0, statements: 0, migrationFailure: null, actions: [], ok: true };
 
   for (const m of input.migrations) {
+    if (m.rebuild !== undefined) {
+      // #701: a declared table rebuild runs as the data worker runs it, one batch or nothing.
+      const plan = await planRebuild(db, m.rebuild, m.sql);
+      try {
+        if ('error' in plan) throw new Error(plan.error);
+        await db.batch(plan.statements.map((sql) => db.prepare(sql)));
+      } catch (e) {
+        report.migrationFailure = { migration: m.name, statementIndex: 0, statement: m.sql.slice(0, 300), detail: errorText(e) };
+        report.ok = false;
+        return report;
+      }
+      report.statements += plan.statements.length;
+      report.migrations++;
+      continue;
+    }
     const statements = splitSqlStatements(m.sql);
     for (let i = 0; i < statements.length; i++) {
       try {

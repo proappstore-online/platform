@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { splitSqlStatements } from './sql-statements.js';
 import { writesReservedTable } from './reserved-tables.js';
+import { planRebuild } from './table-rebuild.js';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 
@@ -318,7 +319,7 @@ export { splitSqlStatements };
 
 app.post('/migrate', async (c) => {
   await authorize(c, 'owner');
-  const body = await c.req.json<{ migrations: { name: string; sql: string }[] }>();
+  const body = await c.req.json<{ migrations: { name: string; sql: string; rebuild?: string }[] }>();
   if (!Array.isArray(body.migrations) || body.migrations.length === 0) {
     throw new HTTPException(400, { message: 'migrations must be a non-empty array of {name, sql}' });
   }
@@ -340,6 +341,22 @@ app.post('/migrate', async (c) => {
   const ran: string[] = [];
   for (const m of body.migrations) {
     if (appliedSet.has(m.name)) continue;
+    // #701: a declared table rebuild runs as one batch (one transaction) with its `_migrations` row, or not at all.
+    if (m.rebuild !== undefined) {
+      const plan = await planRebuild(c.env.DB, m.rebuild, String(m.sql ?? ''));
+      const failed = (detail: string) => c.json({ error: 'migration rebuild failed', migration: m.name, detail, applied: ran, already: [...appliedSet] }, 422);
+      if ('error' in plan) return failed(plan.error);
+      try {
+        await c.env.DB.batch([
+          ...plan.statements.map((s) => c.env.DB.prepare(s)),
+          c.env.DB.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)').bind(m.name, Date.now()),
+        ]);
+      } catch (e) {
+        return failed(e instanceof Error ? e.message : String(e));
+      }
+      ran.push(m.name);
+      continue;
+    }
     // Split into statements on top-level semicolons only (safe for triggers +
     // string literals containing ';').
     const statements = splitSqlStatements(m.sql);

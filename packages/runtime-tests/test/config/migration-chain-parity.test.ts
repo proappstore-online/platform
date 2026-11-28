@@ -20,6 +20,13 @@ describe('what `pas migrations test` mirrors (#503)', () => {
     expect(vendored.slice(0, vendored.length - original.length)).toMatch(/^\/\/ VENDORED from packages\/data-worker\/src\/sql-statements\.ts/);
   });
 
+  it("runs a declared table rebuild with the data worker's own code (#701): the vendored copy is the same file, header aside", () => {
+    const original = readFileSync(join(here, '../../../data-worker/src/table-rebuild.ts'), 'utf8');
+    const vendored = readFileSync(join(here, '../../../cli/src/lib/table-rebuild.ts'), 'utf8');
+    expect(vendored.endsWith(original)).toBe(true);
+    expect(vendored.slice(0, vendored.length - original.length)).toMatch(/^\/\/ VENDORED from packages\/data-worker\/src\/table-rebuild\.ts/);
+  });
+
   it('and agrees with it on triggers, CASE ... END, strings with semicolons and comments', () => {
     for (const sql of [
       "CREATE TABLE t (a TEXT); INSERT INTO t VALUES ('a;b');",

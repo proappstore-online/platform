@@ -4,7 +4,7 @@ description: "Application Standard requirements for app data, migrations, regist
 
 # Data, actions, and Workers
 
-**Standard version 1.13** · Chapter `DATA` · Part of the [Application Standard](./index.md)
+**Standard version 1.14** · Chapter `DATA` · Part of the [Application Standard](./index.md)
 
 **Scope.** D1 schema and migrations, registered actions, per-user/project/tenant row scoping, KV, counters, storage, rooms and Durable Objects, Workers and service bindings.
 
@@ -118,7 +118,7 @@ CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created TE
 
 ### PAS-DATA-002 — Schema changes are additive, named, ordered, never edited, and applied by the deploy {#pas-data-002}
 
-**Severity:** High · **Verification:** Manual · **Enforcement:** automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, and a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · **Since:** 1.3
+**Severity:** High · **Verification:** Manual · **Enforcement:** automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added, and a declared table rebuild `{"name", "rebuild": "<table>", "sql": "CREATE TABLE <table> (…)"}` (#701), whose copy, `DROP` and `RENAME` the platform writes and runs in one transaction, refused unless the new definition keeps every column with its declared type, the copy keeps every row, no foreign key references the table and the definition has no conflict clause; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · **Since:** 1.3
 
 **Rule.** `migrations.json` MUST be the only schema source: entries are appended with a new name, never edited once deployed, and contain only additive statements. Renames and removals MUST be done expand/contract (add the new column or table, migrate data through an action, stop reading the old one; drop nothing). The app MUST NOT run DDL at runtime from browser code except `app.db.migrate` mirroring the same file in local development.
 
@@ -126,7 +126,7 @@ CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created TE
 
 **Rationale.** Migrations are idempotent **by name**: editing an already-applied entry is silently skipped, which is how an action came to reference a column that was never added. The deploy applies the file before actions register and before the frontend uploads, and the schema-coherence check then compiles every action against the live schema — so the file is the contract the rest of the deploy relies on.
 
-**Recommended implementation.** Number entries (`0001_init`, `0002_tasks_status`); to fix a mistake, add `0003_…`. Check `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) after a deploy that touched schema.
+**Recommended implementation.** Number entries (`0001_init`, `0002_tasks_status`); to fix a mistake, add `0003_…`. To change what SQLite cannot alter in place, such as widening an enum-style `CHECK`, declare a table rebuild ([migration repair runbook](../migration-repair-runbook.md#rebuilding-a-table-701)); it keeps every column and every row. Check `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) after a deploy that touched schema.
 
 **Conforming example.**
 

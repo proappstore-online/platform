@@ -4,7 +4,7 @@ description: "Application Standard requirements for tests, keyless deployments, 
 
 # Testing, deployment, and operations
 
-**Standard version 1.13** · Chapter `OPS` · Part of the [Application Standard](./index.md)
+**Standard version 1.14** · Chapter `OPS` · Part of the [Application Standard](./index.md)
 
 **Scope.** Testing, CI and OIDC deployment, rollback, logging and monitoring, privacy, dependency policy.
 

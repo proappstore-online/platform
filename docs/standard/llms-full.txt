@@ -1,6 +1,6 @@
 # ProAppStore Recommended Application Standard — full text
 
-Version 1.13. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
+Version 1.14. Canonical HTML: https://docs.proappstore.online/standard/ · Data: https://docs.proappstore.online/standard/standard.json · Audit instructions: https://docs.proappstore.online/standard/audit-instructions/
 Clause URLs are stable: https://docs.proappstore.online/standard/<chapter page>/#<clause id in lower case>. Findings must cite them.
 
 ## Chapter STACK — Stack and platform services
@@ -2226,7 +2226,7 @@ Supporting links: [MCP app tools — magic placeholders](../mcp-app-tools.md#mag
 
 ### PAS-DATA-002 — Schema changes are additive, named, ordered, never edited, and applied by the deploy
 URL: https://docs.proappstore.online/standard/data/#pas-data-002
-Severity: high · Verification: manual (Manual) · Enforcement: automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, and a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · Since: 1.3
+Severity: high · Verification: manual (Manual) · Enforcement: automated — platform `POST /v1/apps/:id/migrate/oidc` lints every statement (allowed: `CREATE TABLE/[UNIQUE] INDEX/VIEW/TRIGGER`, `CREATE VIRTUAL TABLE … USING fts5`, `ALTER TABLE … ADD [COLUMN]`, `INSERT [OR IGNORE] INTO`, `WITH … INSERT`, a backfill `UPDATE t SET c = … WHERE c IS NULL` of a column the same migration added, and a declared table rebuild `{"name", "rebuild": "<table>", "sql": "CREATE TABLE <table> (…)"}` (#701), whose copy, `DROP` and `RENAME` the platform writes and runs in one transaction, refused unless the new definition keeps every column with its declared type, the copy keeps every row, no foreign key references the table and the definition has no conflict clause; rejected: `DROP` (`no-drop`), `DELETE`, any other `UPDATE`, `REPLACE` and `INSERT OR REPLACE`, an upsert's `ON CONFLICT … DO UPDATE`, `ALTER … RENAME` and `DROP COLUMN`, `ADD COLUMN … NOT NULL` without a non-null `DEFAULT`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, other virtual-table modules, writes to platform `_pas_*` tables, and anything that does not parse; DML inside a trigger body is allowed with a warning); the data worker tracks applied names in `_migrations` · Since: 1.3
 
 Rule: `migrations.json` MUST be the only schema source: entries are appended with a new name, never edited once deployed, and contain only additive statements. Renames and removals MUST be done expand/contract (add the new column or table, migrate data through an action, stop reading the old one; drop nothing). The app MUST NOT run DDL at runtime from browser code except `app.db.migrate` mirroring the same file in local development.
 
@@ -2240,7 +2240,7 @@ Rationale: Migrations are idempotent **by name**: editing an already-applied ent
 
 *
 
-Recommended implementation: Number entries (`0001_init`, `0002_tasks_status`); to fix a mistake, add `0003_…`. Check `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) after a deploy that touched schema.
+Recommended implementation: Number entries (`0001_init`, `0002_tasks_status`); to fix a mistake, add `0003_…`. To change what SQLite cannot alter in place, such as widening an enum-style `CHECK`, declare a table rebuild ([migration repair runbook](../migration-repair-runbook.md#rebuilding-a-table-701)); it keeps every column and every row. Check `GET /v1/apps/:id/schema-status` (or the `schema_status` MCP tool) after a deploy that touched schema.
 
 *
 

@@ -18,8 +18,10 @@ export interface ExecuteResult {
 export interface Migration {
   /** Unique name, e.g. "0001_init" or "0002_add_photos". Run in array order. */
   name: string;
-  /** SQL statements separated by semicolons. */
+  /** SQL statements separated by semicolons; for a `rebuild`, the table's new CREATE TABLE. */
   sql: string;
+  /** Declares a table rebuild (#701): the table `sql` redefines. The platform copies every row, drops and renames. */
+  rebuild?: string;
 }
 
 export interface MigrateResult {

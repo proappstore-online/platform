@@ -378,6 +378,23 @@ describe('POST /apps/:appId/migrate/oidc', () => {
     expect(res.status).toBe(422);
   });
 
+  // #701: a declared rebuild is forwarded untouched (the data worker runs it); an invalid one never leaves the backend.
+  it('forwards a declared table rebuild to the data worker as-is', async () => {
+    const rebuild = { name: '0004_docs_kinds', rebuild: 'docs', sql: "CREATE TABLE docs (id TEXT PRIMARY KEY, kind TEXT CHECK (kind IN ('a', 'b')))" };
+    const res = await call('aiuniversity', { migrations: [additive, rebuild] }, { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(200);
+    expect(migrateBody).toEqual({ migrations: [additive, rebuild] });
+  });
+
+  it('422 on an invalid rebuild, without calling the data worker', async () => {
+    const res = await call('aiuniversity',
+      { migrations: [{ name: '0004_bad', rebuild: 'docs', sql: 'CREATE TABLE docs (id TEXT); DROP TABLE audit' }] },
+      { Authorization: `Bearer ${await signToken()}` });
+    expect(res.status).toBe(422);
+    expect((await res.json() as { error: string }).error).toMatch(/^migration "0004_bad" is not a valid table rebuild — rebuild: .*exactly one CREATE TABLE/);
+    expect(migrateBody).toBeUndefined();
+  });
+
   it('200 with a no-op note when migrations is empty', async () => {
     const res = await call('aiuniversity', { migrations: [] }, { Authorization: `Bearer ${await signToken()}` });
     expect(res.status).toBe(200);

@@ -8,6 +8,19 @@ Part of the [Application Standard](./index.md). One entry per version, newest
 first; the [changelog policy](./governance.md#changelog-policy) defines the
 sections.
 
+## 1.14
+
+A declared table rebuild in `migrations.json` (#701).
+
+- **Added** — none.
+- **Changed** — none.
+- **Withdrawn** — none.
+- **Editorial** — PAS-DATA-002's enforcement line and recommended
+  implementation name the declared table rebuild, the one way to widen a
+  `CHECK` constraint: the app gives the new `CREATE TABLE`, the platform
+  copies every row, drops and renames in one transaction, and refuses a
+  definition that drops or retypes a column.
+
 ## 1.13
 
 D1's per-statement limits on registered actions (#571).

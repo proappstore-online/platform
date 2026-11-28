@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { splitSqlStatements } from '../../../data-worker/src/sql-statements.js';
-import { lintMigration } from './migration-lint.js';
+import { lintMigration, lintRebuild } from './migration-lint.js';
 import { forbiddenMigrationStatement, splitMigrationStatements } from '../routes/deploy.js';
 
 // #455: the additive-only lint classifies statements from the SQLite token stream,
@@ -261,3 +261,62 @@ describe('reserved _pas_ tables (#508)', () => {
   });
 });
 
+
+describe('declared table rebuild (#701)', () => {
+  const WIDER = "CREATE TABLE docs (user_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('licence', 'police_check')), PRIMARY KEY (user_id, kind))";
+  const rebuildRefused = (table: unknown, sql: string, reason: RegExp) => {
+    const r = lintRebuild(table, sql);
+    expect(r.error, sql).not.toBeNull();
+    expect(r.error!.reason).toMatch(reason);
+    return r.error!;
+  };
+
+  it('accepts one plain CREATE TABLE of the named table, quoted or any case, WITHOUT ROWID or STRICT', () => {
+    expect(lintRebuild('docs', WIDER).error).toBeNull();
+    expect(lintRebuild('docs', `${WIDER};`).error).toBeNull();
+    expect(lintRebuild('Docs', WIDER.replace('docs', '"DOCS"')).error).toBeNull();
+    expect(lintRebuild('docs', `${WIDER} WITHOUT ROWID`).error).toBeNull();
+    expect(lintRebuild('docs', `-- widen kind\n${WIDER} STRICT`).error).toBeNull();
+  });
+
+  it('the same sql without `rebuild` is still an ordinary additive CREATE TABLE', () => {
+    expect(lintMigration(WIDER).error).toBeNull();
+  });
+
+  it('refuses anything but the one definition statement', () => {
+    rebuildRefused('docs', `${WIDER}; DROP TABLE audit`, /exactly one CREATE TABLE/);
+    rebuildRefused('docs', `${WIDER}; CREATE INDEX i ON docs (kind)`, /exactly one CREATE TABLE/);
+    rebuildRefused('docs', '', /exactly one CREATE TABLE/);
+    rebuildRefused('docs', 'DROP TABLE docs', /must be CREATE TABLE/);
+    rebuildRefused('docs', 'CREATE INDEX docs ON x (a)', /must be CREATE TABLE/);
+    rebuildRefused('docs', 'CREATE TEMP TABLE docs (a)', /must be CREATE TABLE/);
+  });
+
+  it('refuses another table, a schema prefix, AS SELECT and IF NOT EXISTS', () => {
+    rebuildRefused('docs', 'CREATE TABLE audit (a)', /creates audit, not docs/);
+    rebuildRefused('docs', 'CREATE TABLE main.docs (a)', /schema-qualified/);
+    rebuildRefused('docs', 'CREATE TABLE docs AS SELECT * FROM old', /not AS SELECT/);
+    rebuildRefused('docs', WIDER.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS'), /without IF NOT EXISTS/);
+  });
+
+  it('refuses a conflict clause, which could drop rows in the copy', () => {
+    rebuildRefused('docs', 'CREATE TABLE docs (id TEXT PRIMARY KEY ON CONFLICT REPLACE)', /conflict clause/);
+    rebuildRefused('docs', 'CREATE TABLE docs (id TEXT, UNIQUE (id) ON CONFLICT IGNORE)', /conflict clause/);
+  });
+
+  it('refuses a table name that is not a plain identifier, or is the platform\'s', () => {
+    rebuildRefused('', 'CREATE TABLE x (a)', /plain identifier/);
+    rebuildRefused(7, 'CREATE TABLE x (a)', /plain identifier/);
+    rebuildRefused('a b', 'CREATE TABLE "a b" (a)', /plain identifier/);
+    rebuildRefused('_pas_entitlements', 'CREATE TABLE _pas_entitlements (a)', /platform or SQLite table/);
+    rebuildRefused('_migrations', 'CREATE TABLE _migrations (a)', /platform or SQLite table/);
+    rebuildRefused('sqlite_sequence', 'CREATE TABLE sqlite_sequence (a)', /platform or SQLite table/);
+    rebuildRefused('docs__rebuild', 'CREATE TABLE docs__rebuild (a)', /platform or SQLite table/);
+  });
+
+  it('names the rule and quotes the definition', () => {
+    const e = rebuildRefused('docs', 'CREATE TABLE audit (a)', /^rebuild: /);
+    expect(e.rule).toBe('rebuild');
+    expect(e.statement).toBe('CREATE TABLE audit (a)');
+  });
+});

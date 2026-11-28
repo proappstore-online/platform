@@ -6,7 +6,7 @@ import { type ActionManifest, testMigrationChain, withFreshD1 } from '../../../c
 
 // miniflare resolves from this package, as it does beside the CLI under `npx -p @proappstore/cli -p miniflare`.
 const load = () => import('miniflare') as never;
-const run = (migrations: { name: string; sql: string }[], actions: ActionManifest[]) => withFreshD1((db) => testMigrationChain(db, { migrations, actions }), load);
+const run = (migrations: { name: string; sql: string; rebuild?: string }[], actions: ActionManifest[]) => withFreshD1((db) => testMigrationChain(db, { migrations, actions }), load);
 const outcomes = (r: Awaited<ReturnType<typeof run>>) => Object.fromEntries(r.actions.map((a) => [a.name, a.outcome]));
 
 const NOTES = {
@@ -33,6 +33,21 @@ describe('migration chain on a fresh D1 (#503)', () => {
     expect(r.migrations).toBe(2);
     expect(outcomes(r)).toEqual({ add_note: 'ok', list_notes: 'ok', rename_body: 'ok' });
     expect(r.ok).toBe(true);
+  });
+
+  // #701: `pas migrations test` runs a declared table rebuild as the data worker does, so a widened CHECK takes the new
+  // value in the chain, and a rebuild that drops a column fails the chain.
+  it('runs a declared table rebuild: the widened CHECK accepts the new value; a dropped column fails the chain', async () => {
+    const widen = { name: '0002_status', rebuild: 'notes', sql: "CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'archived')), updated_at INTEGER)" };
+    const archive: ActionManifest = { name: 'archive', operation: 'execute', params: {}, sql: "INSERT INTO notes (id, user_id, body, status) VALUES (:__uuid, :__user_id, 'x', 'archived')" };
+    const good = await run([NOTES, widen], [addNote, archive]);
+    expect(good.migrationFailure).toBeNull();
+    expect(good.migrations).toBe(2);
+    expect(outcomes(good)).toEqual({ add_note: 'ok', archive: 'ok' });
+
+    const bad = await run([NOTES, { name: '0002_bad', rebuild: 'notes', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, body TEXT NOT NULL)' }], []);
+    expect(bad.ok).toBe(false);
+    expect(bad.migrationFailure).toMatchObject({ migration: '0002_bad', detail: expect.stringMatching(/drops column status/) });
   });
 
   // #575: each distinct :name is one numbered slot, so loopride's create_quote (:pickup_lat x82, 127 placeholders)

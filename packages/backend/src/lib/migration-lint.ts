@@ -21,9 +21,14 @@
  *           that does not tokenize or balance.
  *   trigger a body of INSERT / UPDATE / DELETE / REPLACE / SELECT / WITH is allowed
  *           (it runs only on future writes) with a warning.
+ *
+ * A migration entry with `rebuild: "<table>"` (#701) is the one way to rebuild a table, e.g. to widen a CHECK: its sql is
+ * the table's new CREATE TABLE and the platform writes the copy, DROP and RENAME itself (lintRebuild below; the executor
+ * is packages/data-worker/src/table-rebuild.ts).
  */
 import { parseStatements, type SqlStatement, type SqlToken } from '../../../data-worker/src/sql-statements.js';
 import { writesReservedTable } from '../../../data-worker/src/reserved-tables.js';
+import { rebuildDefinitionError } from '../../../data-worker/src/table-rebuild.js';
 
 interface MigrationLintError {
   /** The whole offending statement. */
@@ -330,4 +335,15 @@ export function lintMigration(sql: string): MigrationLint {
     if (error) return { error, warnings };
   }
   return { error: null, warnings };
+}
+
+/**
+ * A declared table rebuild (#701): `{ name, rebuild: table, sql }` with `sql` the table's new CREATE TABLE. The static
+ * half of the check, shared with the executor; the data worker checks the live schema (every column kept, no foreign key
+ * into the table) and runs the copy in one batch.
+ */
+export function lintRebuild(table: unknown, sql: string): MigrationLint {
+  const why = rebuildDefinitionError(table, sql);
+  if (why) return { error: { statement: sql.trim(), rule: 'rebuild', reason: `rebuild: ${why}` }, warnings: [] };
+  return lintMigration(sql);
 }

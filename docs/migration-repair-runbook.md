@@ -122,6 +122,7 @@ string, a comment, a quoted name or a clause is not a statement.
 | `UPDATE t SET new_col = … WHERE new_col IS NULL`, for columns that an `ALTER TABLE t ADD COLUMN` earlier in the **same migration** added (#563) | allowed: a backfill that rewrites no existing data and is a no-op when re-run |
 | `DROP`, `DELETE`, any other `UPDATE`, `REPLACE`, `INSERT OR REPLACE`, `ON CONFLICT DO UPDATE`, `ALTER … RENAME`, `ALTER … DROP COLUMN`, `PRAGMA`, `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, anything else | refused |
 | SQL that does not tokenize or balance | refused, naming the line and column |
+| An entry with `"rebuild": "<table>"` whose `sql` is that table's new `CREATE TABLE` (#701) | allowed: the platform runs the rebuild (see [Rebuilding a table](#rebuilding-a-table-701)) |
 
 A refusal names the rule (`no-drop`, `no-update`, `not-null-needs-default`,
 `syntax`, …) and quotes the whole statement. A trigger ends at the `END;` that
@@ -129,6 +130,61 @@ follows a `;`, as `sqlite3_complete` decides, so a `CASE … END` inside its bod
 is no longer taken for the end of the trigger. A backfill of a column the same
 migration adds is allowed (`UPDATE t SET c = … WHERE c IS NULL`). Any other `UPDATE` is
 still refused; do it from the app's own batch action or as an owner repair.
+
+## Rebuilding a table (#701)
+
+SQLite cannot alter a column constraint in place. A table created with
+`kind TEXT CHECK (kind IN ('a', 'b'))` never accepts `'c'` until the table is
+rebuilt, and a migration cannot write the rebuild's `DROP` and `RENAME`. It
+declares the rebuild instead, and the platform writes them:
+
+```json
+{
+  "name": "0031_driver_documents_police_check",
+  "rebuild": "driver_documents",
+  "sql": "CREATE TABLE driver_documents (user_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('licence_front', 'police_check')), file_key TEXT NOT NULL, note TEXT, uploaded_at INTEGER NOT NULL, PRIMARY KEY (user_id, kind))"
+}
+```
+
+`rebuild` names the table; `sql` is exactly one `CREATE TABLE` of that table
+with its whole new definition: every existing column, any new ones, and the
+changed constraints. Write it without `IF NOT EXISTS`. If an app's data worker
+predates rebuilds, the plain `CREATE TABLE` then fails ("table already exists")
+rather than being skipped and recorded as applied. Redeploy the data worker
+(`redeploy-data-workers.yml`) and re-run.
+
+The data worker runs it as **one D1 batch, which is one transaction**, together
+with the migration's `_migrations` row:
+
+1. `CREATE TABLE "<table>__rebuild" (…)`: the new definition under a scratch name.
+2. `INSERT INTO "<table>__rebuild" (cols) SELECT cols FROM <table>`: every row,
+   with its `rowid`.
+3. A row-count guard that aborts the batch unless both tables hold the same
+   number of rows.
+4. Views, and other tables' triggers, that name the table are dropped, because
+   SQLite's `RENAME` refuses while they point at a missing table.
+5. `DROP TABLE <table>`, then `ALTER TABLE "<table>__rebuild" RENAME TO <table>`.
+6. The table's own indexes and triggers, and the views and triggers from step 4,
+   are recreated from their stored SQL.
+
+It is refused, with nothing changed, when:
+
+- `sql` is not one plain `CREATE TABLE` of the named table (another table,
+  more statements, `IF NOT EXISTS`, `AS SELECT`, a schema prefix, `TEMP`);
+- the definition has a conflict clause (`ON CONFLICT IGNORE|REPLACE` could drop
+  rows in the copy);
+- the new definition drops a column or changes a kept column's declared type;
+- a foreign key references the table, from another table or from the table
+  itself (old or new definition), because the implicit `DELETE` of `DROP TABLE` would
+  cascade;
+- either side is `WITHOUT ROWID` and the other is not;
+- the table is missing, or is a platform (`_pas_*`, `_migrations`) or SQLite
+  table.
+
+A row the new definition rejects, for example an old value that a narrowed
+`CHECK` or a new `NOT NULL` no longer allows, fails the batch, and the table
+stays exactly as it was. `pas migrations test` runs rebuilds the same way on a
+fresh D1.
 
 ## Do Not
 

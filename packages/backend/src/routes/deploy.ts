@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { lintMigration } from '../lib/migration-lint.js';
+import { lintMigration, lintRebuild } from '../lib/migration-lint.js';
 import { splitSqlStatements } from '../../../data-worker/src/sql-statements.js';
 import { internalTokenOk } from '@proappstore/build-core';
 import type { Env } from '../types.js';
@@ -235,17 +235,21 @@ async function applyMigrations(
   }
 
   const warnings: string[] = [];
-  for (const m of migrations as { name?: unknown; sql?: unknown }[]) {
+  for (const m of migrations as { name?: unknown; sql?: unknown; rebuild?: unknown }[]) {
     if (typeof m?.name !== 'string' || typeof m?.sql !== 'string') {
       return { status: 400, body: { error: 'each migration must be {name, sql}' } };
     }
-    const { error: bad, warnings: lintWarnings } = lintMigration(m.sql);
+    // #701: `rebuild` declares a table rebuild; the platform, not the app, writes its copy, DROP and RENAME.
+    const rebuild = m.rebuild !== undefined;
+    const { error: bad, warnings: lintWarnings } = rebuild ? lintRebuild(m.rebuild, m.sql) : lintMigration(m.sql);
     warnings.push(...lintWarnings.map((x) => `migration "${m.name}": ${x}`));
     if (bad) {
       return {
         status: 422,
         body: {
-          error: `migration "${m.name}" is not backward-compatible — ${bad.reason}. Use expand/contract: add nullable/defaulted schema first, deploy compatible code, then contract later if still needed: ${bad.statement}`,
+          error: rebuild
+            ? `migration "${m.name}" is not a valid table rebuild — ${bad.reason}: ${bad.statement}`
+            : `migration "${m.name}" is not backward-compatible — ${bad.reason}. Use expand/contract: add nullable/defaulted schema first, deploy compatible code, then contract later if still needed: ${bad.statement}`,
         },
       };
     }

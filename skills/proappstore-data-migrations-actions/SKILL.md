@@ -7,7 +7,7 @@ metadata:
   author: proappstore-online
   version: "1.0"
   mcp-endpoint: https://mcp.proappstore.online/mcp
-  standard-version: "1.13"
+  standard-version: "1.14"
   issue: proappstore-online/platform#175
   triggers: migrations, migration, registered actions, registered action, tenant, data access, ProAppStore
 allowed-tools: whoami sdk_reference recipe platform_guide app_info list_app_tools schema_status
@@ -59,7 +59,9 @@ plan and prescribe; you never run SQL, provision or deploy.
    ([PAS-DATA-005](https://docs.proappstore.online/standard/data/#pas-data-005)).
 5. **Schema is additive and deploy-applied.** `migrations.json` entries are
    appended with a new name, never edited, contain only additive statements,
-   and are applied by the deploy before the actions register
+   and are applied by the deploy before the actions register. To widen a
+   `CHECK`, declare a table rebuild (`"rebuild": "<table>"`, `sql` = its new
+   `CREATE TABLE`); the platform copies every row
    ([PAS-DATA-002](https://docs.proappstore.online/standard/data/#pas-data-002),
    [PAS-STACK-008](https://docs.proappstore.online/standard/stack/#pas-stack-008)).
 6. **Never fabricate APIs.** Name only `app.actions.call` / `callPublic`, the

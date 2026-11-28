@@ -433,7 +433,9 @@ not additive: `DROP` (`no-drop`), `DELETE`, `UPDATE` (except a backfill
 `ATTACH`, `DETACH`, `VACUUM`, `REINDEX`, `TEMP` objects, virtual tables other
 than `fts5`, and writes to `_pas_*` tables. Change a shape by expand/contract:
 add the new column or table, move the data through an action, stop reading the
-old one.
+old one. A constraint SQLite cannot alter in place, such as an enum-style
+`CHECK` that needs a new value, is changed with a declared table rebuild
+(`"rebuild": "<table>"`, [runbook](./migration-repair-runbook.md#rebuilding-a-table-701)).
 
 ## Scheduled actions
 
