@@ -17,7 +17,7 @@
  */
 import { selectsColumn, actionCallers, literalLimit, type ToolManifest } from './action-sql.js';
 import { schemaViolations } from './json-schema-check.js';
-import { validateOperatorView, MAX_ADMIN_ROLES, MAX_AUDIT_ROLES, MAX_OPERATOR_ACTIONS, MAX_OPERATOR_RESOURCES, OPERATOR_VIEW_VERSIONS, ROLE } from './operator-contract.js';
+import { validateOperatorView, MAX_ADMIN_ROLES, MAX_AUDIT_ROLES, MAX_OPERATOR_ACTIONS, MAX_OPERATOR_RESOURCES, MAX_REFUSALS, MAX_REFUSAL_MESSAGE, MAX_REFUSAL_SQL, OPERATOR_VIEW_VERSIONS, ROLE } from './operator-contract.js';
 import { COLUMN_KEY, ID, MAX_OPERATOR_COLUMNS, OPERATOR_COLUMN_FORMATS, OPERATOR_RESOURCE_KINDS, isObj, type OperatorViewContract } from './operator-contract-shared.js';
 import { LIST_CAPABILITIES, LIST_KINDS, MAX_DETAIL_FIELDS, MAX_EVIDENCE, MAX_PAGE_SIZE, MAX_STATES } from './operator-contract-lists.js';
 import {
@@ -72,6 +72,7 @@ const action: Schema = obj({
   transition: obj({ from: arr({ type: 'string' }, 1), to: { type: 'string' } }, ['from', 'to']),
   destructive: { type: 'boolean' },
   target: name,
+  refusals: arr(obj({ when: str(MAX_REFUSAL_SQL), message: str(MAX_REFUSAL_MESSAGE) }, ['when', 'message']), 1, MAX_REFUSALS),
 }, ['id', 'title', 'resource', 'action', 'confirm']);
 
 /**
@@ -101,13 +102,14 @@ export function operatorCapabilities() {
     action_operations: { resource: ['query'], detail: ['query'], action: ['execute', 'batch'] },
     limits: {
       resources: MAX_OPERATOR_RESOURCES, actions: MAX_OPERATOR_ACTIONS, columns: MAX_OPERATOR_COLUMNS, detail_fields: MAX_DETAIL_FIELDS,
-      page_size: MAX_PAGE_SIZE, states: MAX_STATES, evidence: MAX_EVIDENCE, audit_roles: MAX_AUDIT_ROLES, admin_roles: MAX_ADMIN_ROLES,
+      page_size: MAX_PAGE_SIZE, states: MAX_STATES, evidence: MAX_EVIDENCE, audit_roles: MAX_AUDIT_ROLES, admin_roles: MAX_ADMIN_ROLES, refusals: MAX_REFUSALS,
       series_measures: MAX_MEASURES, series_dimension_values: MAX_DIMENSION_VALUES, series_days: MAX_SERIES_DAYS, series_rows: MAX_SERIES_ROWS,
     },
     features: {
       list_capabilities: [...LIST_CAPABILITIES],
       series: { grains: [...SERIES_GRAINS], units: [...SERIES_UNITS], aggregations: [...SERIES_AGGREGATIONS] },
-      action_options: ['transition', 'destructive', 'target'],
+      action_options: ['transition', 'destructive', 'target', 'refusals'],
+      refusals: 'transitions only: [{ when, message }] checked in order after the guarded write changed nothing; the first true when is the 409 reason the console shows',
       evidence: 'verification resources only: detail fields holding a _review/ document path',
       audit: 'audit.app_roles: the owner must also hold one to read the audit trail',
       admin_access: 'admin_access.roles: app roles admitted to the console beside the owner (never member or public)',
@@ -121,6 +123,7 @@ export function operatorCapabilities() {
       'A paged resource needs a literal LIMIT (the page size) and an ORDER BY; a series needs a literal LIMIT.',
       'Action params map action params to columns of their resource and cover every required param; a destructive action needs step_up.',
       'A transition maps a param to the status column and every statement of the write guards on it (#340); verification decisions are step-up transitions taken on the record page.',
+      "A refusal's when is one read-only SQL boolean (no write verb, comment, [bracket] identifier or unbalanced parenthesis) over the action's own params and magic params, held to the action's :__user_id scoping lint (#697).",
     ],
     schema: OPERATOR_VIEW_SCHEMA,
   };

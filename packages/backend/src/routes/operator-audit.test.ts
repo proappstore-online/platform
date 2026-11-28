@@ -247,7 +247,7 @@ describe('refused operator requests join the trail exactly once', () => {
     d.prepare.mockImplementation(() => mockStmt());
     const res = await req('stash/operator/actions/resolve', d, { method: 'POST', body: JSON.stringify({ row: { report_id: 'r1', status: 'open' } }) });
     expect(res.status).toBe(409);
-    expect(auditBinds(d)).toEqual([['stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1']]);
+    expect(auditBinds(d)).toEqual([['stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1', null]]);
   });
 
   it('a step-up refusal on a document is written once, with the record it was for', async () => {
@@ -272,7 +272,7 @@ describe('refused operator requests join the trail exactly once', () => {
     const d = db(PARENTS_CLUBS, 'op_list_parents');
     d.prepare.mockImplementation(() => mockStmt());
     expect((await req('parents-clubs/operator/resources/parents', d)).status).toBe(200);
-    expect(auditBinds(d)).toEqual([['parents-clubs', 'op_list_parents', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:parents', null]]);
+    expect(auditBinds(d)).toEqual([['parents-clubs', 'op_list_parents', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:parents', null, null]]);
     const anon = mockD1();
     expect((await req('parents-clubs/operator/resources/parents', anon, { token: null })).status).toBe(401);
     expect(anon.prepare).not.toHaveBeenCalled();

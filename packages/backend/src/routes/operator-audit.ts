@@ -215,7 +215,7 @@ async function trailRole(db: D1Database, appId: string, owner: FasUser, roles: s
 
 interface AuditRow {
   id: number; created_at: number; actor_id: string; actor_login: string | null; role_name: string; role_via_owner: number;
-  action_name: string; operator_action: string; target: string | null; status: number;
+  action_name: string; operator_action: string; target: string | null; status: number; refusal_reason: string | null;
 }
 
 // ── The trail ───────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
   if (!recent && c.req.query('target')?.trim()) requireRecentAuth(owner, c.env);
 
   const { results } = await c.env.DB.prepare(
-    `SELECT a.id, a.created_at, a.actor_id, u.login AS actor_login, a.role_name, a.role_via_owner, a.action_name, a.operator_action, a.target, a.status
+    `SELECT a.id, a.created_at, a.actor_id, u.login AS actor_login, a.role_name, a.role_via_owner, a.action_name, a.operator_action, a.target, a.status, a.refusal_reason
        FROM app_action_audit a LEFT JOIN users u ON u.id = a.actor_id
       WHERE a.app_id = ? AND a.operator_action IS NOT NULL${where.sql}
       ORDER BY a.id DESC LIMIT ?`,
@@ -261,6 +261,8 @@ operatorAuditRoutes.get('/apps/:appId/operator/audit', async (c) => {
       target_hidden: hide,
       status: r.status,
       outcome: r.status < 400 ? 'success' : 'refused',
+      // #697: the declared refusal that explained a 409, or null.
+      reason: r.refusal_reason,
     };
   });
 

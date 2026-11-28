@@ -4080,7 +4080,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "Run a declared operator row action",
-        "description": "Owner only (#240). Body `{ row }`: only the declared columns the action maps are read, each a bounded scalar. A transition is refused (409) unless the row's status is in its `from`; the write runs under the action's own role gate and step_up (destructive actions require a recent sign-in), and a guarded transition that changes nothing is a 409. Audited with the contract action id and target.",
+        "description": "Owner only (#240). Body `{ row }`: only the declared columns the action maps are read, each a bounded scalar. A transition is refused (409) unless the row's status is in its `from`; the write runs under the action's own role gate and step_up (destructive actions require a recent sign-in), and a guarded transition that changes nothing is a 409: `{ error: 'refused', reason }` with the message of the first of the action's declared `refusals` whose condition holds (#697), else `the record changed since it was loaded`. Audited with the contract action id, target and any refusal reason.",
         "operationId": "post_v1_apps_appId_operator_actions_actionId",
         "requestBody": {
           "required": true,
@@ -4460,7 +4460,7 @@ export const openapiSpec: Record<string, unknown> = {
           "Apps"
         ],
         "summary": "The operator audit trail",
-        "description": "Owner only (#240), plus one of the contract's `audit.app_roles` when declared (the owner holds it when the app declares it in mcp.json `roles`, #695). 50 rows per page, newest first; `next_cursor` continues. Never tokens, params, document paths or query results; targets of verification reads and document views are hidden until a recent sign-in (`target_hidden`). Each row's `role_via_owner` is true when the role came from owning the app rather than a grant (#695). Reading the trail is recorded.",
+        "description": "Owner only (#240), plus one of the contract's `audit.app_roles` when declared (the owner holds it when the app declares it in mcp.json `roles`, #695). 50 rows per page, newest first; `next_cursor` continues. Never tokens, params, document paths or query results; targets of verification reads and document views are hidden until a recent sign-in (`target_hidden`). Each row's `role_via_owner` is true when the role came from owning the app rather than a grant (#695), and `reason` is the declared refusal that explained a 409, else null (#697). Reading the trail is recorded.",
         "operationId": "get_v1_apps_appId_operator_audit",
         "responses": {
           "200": {

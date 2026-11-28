@@ -16,7 +16,7 @@ import type { Env } from '../types.js';
 import { requireAppAccess, requireAppOwner, requireUser } from '../lib/auth.js';
 import { forgetAppVisibility, PUBLIC_VISIBILITY, requireVisible, visibilityFromRow } from '../lib/visibility.js';
 import { type ActionState, type ToolManifest } from '../lib/action-sql.js';
-import { validateOperatorView } from '../lib/operator-contract.js';
+import { refusalQuery, validateOperatorView } from '../lib/operator-contract.js';
 import { inspectAdminConsole, operatorCapabilities, previewAdminConsole, proposeAdminUpdate, securityReview, type RoleContext } from '../lib/operator-authoring.js';
 import { loadContract } from './operator.js';
 import { refuseAppMediated } from '../lib/operator-audit-marks.js';
@@ -214,6 +214,16 @@ export async function replaceAppTools(
   if ('error' in operatorResult) return { status: 400, payload: { error: operatorResult.error } };
   const operatorView = validateOperatorView(tools as ToolManifest[], site.operator_view);
   if ('error' in operatorView) return { status: 400, payload: { error: operatorView.error } };
+  // #697: an action's declared refusals run as one read-only query with the action's params and auth, so they pass the
+  // same checks as the tools' own SQL: the manifest rules, the :__user_id scoping lint and the schema check.
+  const refusalTools = (operatorView.contract?.actions ?? []).flatMap((a) => {
+    const tool = (tools as ToolManifest[]).find((t) => t.name === a.action);
+    return a.refusals && tool ? [refusalQuery(tool, a.refusals)] : [];
+  });
+  if (refusalTools.length) {
+    const invalid = await validateToolSet(refusalTools, env, appId, { source: 'code' });
+    if (invalid) return { status: invalid.status, payload: { ...invalid.payload, error: `operator_view refusals: ${String(invalid.payload.error)}` } };
+  }
   const rolesResult = validateRoles(site.roles, tools as ToolManifest[], operatorView.contract);
   if ('error' in rolesResult) return { status: 400, payload: { error: rolesResult.error } };
   const storageResult = validateStorage(site.storage, rolesResult.roles);

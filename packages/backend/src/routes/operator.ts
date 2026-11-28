@@ -64,9 +64,14 @@ operatorRoutes.get('/apps/:appId/operator', async (c) => {
         apiCalls: Number(activity?.api_calls ?? 0),
       },
     },
-    contract,
+    contract: contract && withoutRefusalSql(contract),
   });
 });
+
+/** The contract as the console gets it: a refusal's SQL (#697) stays server-side, like every action's. */
+function withoutRefusalSql(contract: OperatorViewContract): OperatorViewContract {
+  return { ...contract, actions: contract.actions.map(({ refusals: _refusals, ...action }) => action) };
+}
 
 /** The app's stored contract. Stored only after validation; an unreadable row falls back to the baseline. */
 export async function loadContract(db: D1Database, appId: string): Promise<OperatorViewContract | null> {
@@ -314,6 +319,7 @@ operatorRoutes.post('/apps/:appId/operator/actions/:actionId', async (c) => {
     c.env, appId, action.action, input, caller, sessionToken(c.req.header('Authorization')),
     { operatorAction: action.id, target: target === null ? null : String(target), request: c.req.raw },
     action.transition ? transitionGuard(action.params, resource) ?? null : null,
+    action.refusals,
   );
   c.header('Cache-Control', 'no-store');
   return c.json({ ok: true, changes });

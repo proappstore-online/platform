@@ -95,6 +95,18 @@ describe('GET /v1/apps/:appId/operator (#240)', () => {
     }
   });
 
+  it("keeps a declared refusal's SQL server-side: the console gets the action without its refusals (#697)", async () => {
+    const refusals = [{ when: 'EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND reporter_id = :__user_id)', message: "You can't resolve a report you filed." }];
+    const stored = validateOperatorView(STASH.tools as ToolManifest[], { ...STASH.operator_view, actions: STASH.operator_view.actions.map((a) => (a.id === 'resolve' ? { ...a, refusals } : a)) });
+    if (!('contract' in stored) || !stored.contract) throw new Error(JSON.stringify(stored));
+    const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt(), mockStmt(), mockStmt(), mockStmt({ first: { contract: JSON.stringify(stored.contract) } }));
+    const res = await get('stash', auth(OWNER), db);
+    const text = await res.text();
+    expect(text).not.toContain('refusals');
+    expect(text).not.toContain('reporter_id = :__user_id');
+    expect((JSON.parse(text) as { contract: { actions: unknown[] } }).contract.actions).toEqual(stored.contract.actions.map(({ refusals: _r, ...a }) => a));
+  });
+
   it('falls back to the baseline when a stored contract is unreadable', async () => {
     const db = mockD1(mockStmt({ first: { creator_id: 'gh:1' } }), mockStmt(), mockStmt(), mockStmt(), mockStmt({ first: { contract: '{not json' } }));
     const res = await get('stash', auth(OWNER), db);
@@ -154,7 +166,7 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(body.next_cursor).toBe('u050');
     expect(dataCalls[0]!.url).toContain('pas-data-stash.');
     // Role-granted success is audited like the actions route.
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_users', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:members', null);
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_users', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:members', null, null);
   });
 
   it('blocks a declared secret-like column categorically: absent from rows and detail, logged by name only (#294)', async () => {
@@ -259,7 +271,7 @@ describe('GET /v1/apps/:appId/operator/resources/* (#240 slice 3)', () => {
     expect(body).toEqual({ rows: [{ open_reports: null, suspended_users: 3 }], next_cursor: null });
     expect(JSON.stringify(body)).not.toMatch(/@|u1|u2/);
     // Audited like every operator read.
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_report_metrics', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:moderation', null);
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_report_metrics', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:moderation', null, null);
   });
 
   it('kpiRow keeps finite numbers and numeric strings; everything else is null', () => {
@@ -361,7 +373,7 @@ describe('operator reports & suspensions (#240)', () => {
     expect(calls[0]!.url).toContain('/execute');
     expect(JSON.stringify(calls[0]!.body.params)).not.toContain('never sent');
     expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['r1', 'open']));
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 0, 200, expect.any(Number), 'resolve', 'r1');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 0, 200, expect.any(Number), 'resolve', 'r1', null);
   });
 
   it('refuses a transition the row status does not allow, before the data worker', async () => {
@@ -378,7 +390,31 @@ describe('operator reports & suspensions (#240)', () => {
     const res = await act('stash', 'resolve', report, d);
     expect(res.status).toBe(409);
     expect(await res.text()).toContain('the record changed since it was loaded');
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1', null);
+  });
+
+  // #697: the contract action's declared refusals explain the 409, on the body and the audit row.
+  it('a guarded write that changed nothing answers the first declared refusal that holds', async () => {
+    const refusals = [
+      { when: 'EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND reporter_id = :__user_id)', message: "You can't resolve a report you filed." },
+      { when: "NOT EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND status = 'open')", message: "This report isn't open." },
+    ];
+    const refusing = { ...STASH, operator_view: { ...STASH.operator_view, actions: STASH.operator_view.actions.map((a) => (a.id === 'resolve' ? { ...a, refusals } : a)) } };
+    const replies = [{ meta: { changes: 0 } }, { rows: [{ refusal: 1 }] }];
+    calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return Response.json(replies[calls.length - 1]);
+    }));
+    const { d, audit } = db(refusing as typeof STASH, 'op_resolve_report');
+    const res = await act('stash', 'resolve', report, d);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'refused', errorCode: 'refused', reason: "This report isn't open." });
+    // The refusal query is read-only (/query), bound with the write's own params and caller.
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/execute', '/query']);
+    expect(calls[1]!.body.sql).toBe(`SELECT CASE WHEN (${refusals[0]!.when.replace(':report_id', '?1').replace(':__user_id', '?2')}) THEN 0 WHEN (${refusals[1]!.when.replace(':report_id', '?1')}) THEN 1 END AS refusal`);
+    expect(calls[1]!.body.params).toEqual(['r1', 'gh:1']);
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_resolve_report', 'gh:1', 'operator', 0, 409, expect.any(Number), 'resolve', 'r1', "This report isn't open.");
   });
 
   it('a destructive action needs a recent sign-in: a stale session is refused before the data worker', async () => {
@@ -392,7 +428,7 @@ describe('operator reports & suspensions (#240)', () => {
     expect(ok.status, await ok.clone().text()).toBe(200);
     expect(await ok.json()).toEqual({ ok: true, changes: 2 });
     expect(calls[0]!.url).toContain('/batch');
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_suspend_user', 'gh:1', 'operator', 0, 200, expect.any(Number), 'suspend_member', 'u9');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_suspend_user', 'gh:1', 'operator', 0, 200, expect.any(Number), 'suspend_member', 'u9', null);
   });
 
   it('refuses callers and inputs that are not allowed', async () => {
@@ -438,7 +474,7 @@ describe('operator reports & suspensions (#240)', () => {
     const history = await list('suspension_history?related=u9', d);
     expect(history.status).toBe(200);
     expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['u9']));
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_suspensions', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:suspension_history', 'u9');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_list_suspensions', 'gh:1', 'operator', 0, 200, expect.any(Number), 'read:suspension_history', 'u9', null);
   });
 
   it('a second app (Parents Clubs) runs its own workflow through the same route and roles', async () => {
@@ -449,7 +485,7 @@ describe('operator reports & suspensions (#240)', () => {
     expect(res.status, await res.clone().text()).toBe(200);
     expect(calls[0]!.url).toContain('pas-data-parents-clubs.');
     expect(calls[0]!.body.params).toEqual(expect.arrayContaining(['f1', 'new']));
-    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_uphold_flag', 'gh:1', 'moderator', 0, 200, expect.any(Number), 'uphold', 'f1');
+    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_uphold_flag', 'gh:1', 'moderator', 0, 200, expect.any(Number), 'uphold', 'f1', null);
     // Stash's action ids mean nothing on Parents Clubs.
     expect((await act('parents-clubs', 'resolve', report, db(PARENTS_CLUBS, 'op_uphold_flag').d)).status).toBe(404);
   });
@@ -515,7 +551,7 @@ describe('operator ID verification (#240)', () => {
     const body = (await res.json()) as { record: Record<string, unknown> };
     expect(body.record).toMatchObject({ full_name: 'Ada', status: 'pending', document_path: true, selfie_path: false });
     expect(JSON.stringify(body)).not.toMatch(/_review|id\.png|internal_score|97/);
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'detail:kyc', 'k1');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'detail:kyc', 'k1', null);
   });
 
   it("serves the record's own document to a reviewer, uncached and locked down, on both audit trails", async () => {
@@ -530,7 +566,7 @@ describe('operator ID verification (#240)', () => {
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
     expect(bucket.get).toHaveBeenCalledWith('stash/_review/u/gh:10/id.png');
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'evidence:kyc.document_path', 'k1', null);
     expect(access.bind).toHaveBeenCalledWith('stash', 'gh:10', 'id.png', 'gh:1', 'read', expect.any(Number));
   });
 
@@ -595,18 +631,18 @@ describe('operator ID verification (#240)', () => {
     dataWorker([{ ...kycRow, document_path: null }]);
     const none = db(STASH, 'op_kyc_detail', { evidence: true });
     expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', none.d, await fresh())).status).toBe(404);
-    expect(none.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 404, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(none.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 404, expect.any(Number), 'evidence:kyc.document_path', 'k1', null);
 
     dataWorker([kycRow]);
     const missing = db(STASH, 'op_kyc_detail', { evidence: true });
     const empty = { get: vi.fn(async () => null) };
     expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', missing.d, await fresh(), empty as never)).status).toBe(404);
-    expect(missing.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 404, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(missing.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 404, expect.any(Number), 'evidence:kyc.document_path', 'k1', null);
 
     dataWorker([kycRow]);
     const html = db(STASH, 'op_kyc_detail', { evidence: true });
     expect((await get('stash/operator/resources/kyc/records/k1/evidence/document_path', html.d, await fresh(), storage('text/html'))).status).toBe(415);
-    expect(html.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 415, expect.any(Number), 'evidence:kyc.document_path', 'k1');
+    expect(html.audit.bind).toHaveBeenCalledWith('stash', 'op_kyc_detail', 'gh:1', 'operator', 0, 415, expect.any(Number), 'evidence:kyc.document_path', 'k1', null);
     expect(html.audit.bind).toHaveBeenCalledTimes(1);
   });
 
@@ -632,11 +668,11 @@ describe('operator ID verification (#240)', () => {
     const { d, audit } = db(STASH, 'op_approve_kyc');
     const ok = await act('approve_kyc', row, d, await fresh());
     expect(ok.status, await ok.clone().text()).toBe(200);
-    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 0, 200, expect.any(Number), 'approve_kyc', 'k1');
+    expect(audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 0, 200, expect.any(Number), 'approve_kyc', 'k1', null);
     dataWorker([], 0);
     const raced = db(STASH, 'op_approve_kyc');
     expect((await act('approve_kyc', row, raced.d, await fresh())).status).toBe(409);
-    expect(raced.audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 0, 409, expect.any(Number), 'approve_kyc', 'k1');
+    expect(raced.audit.bind).toHaveBeenCalledWith('stash', 'op_approve_kyc', 'gh:1', 'operator', 0, 409, expect.any(Number), 'approve_kyc', 'k1', null);
   });
 
   it("a second app (Parents Clubs) serves its licence through the same route", async () => {
@@ -647,6 +683,6 @@ describe('operator ID verification (#240)', () => {
     expect(res.status, await res.clone().text()).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/pdf');
     expect(bucket.get).toHaveBeenCalledWith('parents-clubs/_review/u/p7/licence.pdf');
-    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_verification_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'evidence:id_checks.licence_path', 'v1');
+    expect(audit.bind).toHaveBeenCalledWith('parents-clubs', 'op_verification_detail', 'gh:1', 'operator', 0, 200, expect.any(Number), 'evidence:id_checks.licence_path', 'v1', null);
   });
 });

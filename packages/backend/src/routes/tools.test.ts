@@ -1035,6 +1035,26 @@ describe('PUT /v1/apps/:appId/tools — operator_view (#240)', () => {
     }
   });
 
+  // #697: an action's refusals are a query held to the action's own :__user_id scoping lint.
+  it("holds declared refusals to the action's :__user_id scoping lint, then stores them on the action", async () => {
+    const scoped = STASH.tools.map((t) => (t.name === 'op_resolve_report' ? { ...t, auth: { app_roles: ['operator'] } } : t));
+    const refusing = (when: string) => ({
+      tools: scoped,
+      operator_view: { ...STASH.operator_view, actions: STASH.operator_view.actions.map((a) => (a.id === 'resolve' ? { ...a, refusals: [{ when, message: "You can't resolve your own report." }] } : a)) },
+    });
+    const unscoped = await put(refusing("EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND status = 'resolved')"));
+    expect(unscoped.res.status).toBe(400);
+    expect(unscoped.body.error).toBe('operator_view refusals: statements must include :__user_id or declare auth.caller_unscoped');
+    expect(unscoped.db.batch).not.toHaveBeenCalled();
+
+    const own = await put(refusing('EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND reporter_id = :__user_id)'));
+    expect(own.res.status, own.body.error).toBe(200);
+    const stored = JSON.parse(insertOf(own.db)![2] as string) as { actions: { id: string; refusals?: unknown }[] };
+    expect(stored.actions.find((a) => a.id === 'resolve')?.refusals).toEqual([
+      { when: 'EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND reporter_id = :__user_id)', message: "You can't resolve your own report." },
+    ]);
+  });
+
   it('only the app owner may register one', async () => {
     const { res, db } = await put(STASH, 'stash', mockD1(mockStmt({ first: { creator_id: 'gh:9' } }), mockStmt({ first: null })));
     expect(res.status).toBe(403);

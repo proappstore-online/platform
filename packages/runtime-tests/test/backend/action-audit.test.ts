@@ -68,9 +68,10 @@ describe('success audit of role-gated actions (#232)', () => {
     expect(row.created_at as number).toBeGreaterThanOrEqual(before);
     // Least privilege: nothing from the request or the result is kept. The operator
     // columns (#240, migration 0064) are only filled for console operator calls.
-    // `role_via_owner` (#695, migration 0155) is 0 for a granted role.
-    expect(Object.keys(row).sort()).toEqual(['action_name', 'actor_id', 'app_id', 'created_at', 'id', 'operator_action', 'role_name', 'role_via_owner', 'status', 'target']);
-    expect(row).toMatchObject({ operator_action: null, target: null, role_via_owner: 0 });
+    // `role_via_owner` (#695, migration 0155) is 0 for a granted role; `refusal_reason` (#697, migration 0157) is only
+    // set on an operator refusal a declared reason explained.
+    expect(Object.keys(row).sort()).toEqual(['action_name', 'actor_id', 'app_id', 'created_at', 'id', 'operator_action', 'refusal_reason', 'role_name', 'role_via_owner', 'status', 'target']);
+    expect(row).toMatchObject({ operator_action: null, target: null, role_via_owner: 0, refusal_reason: null });
     expect(JSON.stringify(row)).not.toContain('c-secret-42');
     expect(JSON.stringify(row)).not.toContain('id document');
   });

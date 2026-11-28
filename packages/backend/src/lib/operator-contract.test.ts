@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateOperatorView } from './operator-contract.js';
+import { refusalQuery, validateOperatorView } from './operator-contract.js';
 import type { ToolManifest } from './action-sql.js';
 import { PARENTS_CLUBS, STASH } from '../__fixtures__/operator-view.js';
 
@@ -441,3 +441,80 @@ describe('operator_view.admin_access (#291, #302)', () => {
   });
 });
 
+
+// #697: a transition may declare why it refuses. Each `when` is a read-only SQL
+// boolean over the action's own inputs, validated as one query tool with the
+// action's params and auth (validateManifest), and kept a single expression.
+describe('operator_view action refusals (#697)', () => {
+  const OWN = { when: 'EXISTS (SELECT 1 FROM reports r WHERE r.id = :report_id AND r.reporter_id = :__user_id)', message: "You can't resolve a report you filed." };
+  const MOVED = { when: "NOT EXISTS (SELECT 1 FROM reports r WHERE r.id = :report_id AND r.status = 'open')", message: "This report isn't open." };
+  const withRefusals = (refusals: unknown, actionId = 'resolve') => {
+    const view = clone(STASH.operator_view) as typeof STASH.operator_view;
+    const action = view.actions.find((a) => a.id === actionId) as Record<string, unknown>;
+    action.refusals = refusals;
+    return view;
+  };
+
+  it('keeps declared refusals in order on the stored action, and leaves actions without them unchanged', () => {
+    const r = validateOperatorView(stashTools, withRefusals([OWN, { ...MOVED, message: `  ${MOVED.message}  ` }]));
+    if (!('contract' in r) || !r.contract) throw new Error(JSON.stringify(r));
+    expect(r.contract.actions.find((a) => a.id === 'resolve')?.refusals).toEqual([OWN, MOVED]);
+    expect(r.contract.actions.find((a) => a.id === 'dismiss')).not.toHaveProperty('refusals');
+  });
+
+  it('builds one read-only query that answers the index of the first true refusal, with the action params and auth', () => {
+    const tool = stashTools.find((t) => t.name === 'op_resolve_report')!;
+    expect(refusalQuery(tool, [OWN, MOVED])).toEqual({
+      name: 'op_resolve_report', description: 'Why "op_resolve_report" changed nothing', operation: 'query', requires_auth: true,
+      sql: `SELECT CASE WHEN (${OWN.when}) THEN 0 WHEN (${MOVED.when}) THEN 1 END AS refusal`,
+      params: tool.params, auth: tool.auth,
+    });
+  });
+
+  it('refuses refusals on an action that is not a transition', () => {
+    expect(errorOf(stashTools, withRefusals([OWN], 'suspend_reported'))).toBe('operator_view.actions[1]: refusals are only supported on transition actions');
+  });
+
+  it('validates the shape: 1-5 entries of { when, message } and nothing else', () => {
+    const at = 'operator_view.actions[3].refusals';
+    const cases: Array<[unknown, string]> = [
+      [[], `${at} must be an array of 1-5`],
+      [OWN, `${at} must be an array of 1-5`],
+      [Array.from({ length: 6 }, () => OWN), `${at} must be an array of 1-5`],
+      [['x'], `${at}[0] must be an object`],
+      [[{ ...OWN, sql: 'SELECT 1' }], `${at}[0]: unknown field "sql"`],
+      [[{ message: 'x' }], `${at}[0]: when is required`],
+      [[{ when: 'x'.repeat(2001), message: 'x' }], `${at}[0]: when is required`],
+      [[{ when: '1 = 1' }], `${at}[0]: message is required`],
+      [[{ when: '1 = 1', message: 'x'.repeat(201) }], `${at}[0]: message is required`],
+    ];
+    for (const [refusals, error] of cases) expect(errorOf(stashTools, withRefusals(refusals)), JSON.stringify(refusals)).toContain(error);
+  });
+
+  it('cannot write or leave its expression: no write verb, comment, stray quote, bracket identifier or unbalanced parenthesis', () => {
+    const at = 'operator_view.actions[3].refusals[0]: when';
+    const cases: Array<[string, string]> = [
+      ['EXISTS (DELETE FROM reports WHERE id = :report_id)', `${at} is read-only`],
+      ['1 = 1 OR (SELECT 1 FROM x WHERE 0) IS NULL AND 1 IN (UPDATE x SET y = 1 WHERE 1)', `${at} is read-only`],
+      ['insert = 1', `${at} is read-only`],
+      ['1) THEN 0 END AS refusal FROM reports UNION SELECT reporter_id FROM reports WHERE (1', `${at} has an unbalanced ")"`],
+      ['(1 = 1', `${at} has an unbalanced "("`],
+      ["1 = 1 -- ) THEN 0", `${at} must not contain a comment`],
+      ['1 = 1 /* ) */', `${at} must not contain a comment`],
+      ["1 = 'open", `${at} has an unterminated quote`],
+      ['[(] = 1) OR (1', `${at} must not use [bracketed]`],
+      ['`(` = 1', `${at} must not use [bracketed]`],
+    ];
+    for (const [when, error] of cases) expect(errorOf(stashTools, withRefusals([{ when, message: 'x' }])), when).toContain(error);
+    // Quoted text may hold any of those characters: it is a literal, not code.
+    expect(errorOf(stashTools, withRefusals([{ when: "(SELECT reason FROM reports WHERE id = :report_id) IN ('it''s -- ) [x]', \"delete\")", message: 'x' }]))).toBeNull();
+  });
+
+  it("is validated as the action's SQL: only the action's params and the magic params, no multi-statement", () => {
+    const at = 'operator_view.actions[3].refusals';
+    expect(errorOf(stashTools, withRefusals([{ when: ':user_id = :__user_id', message: 'x' }]))).toBe(`${at}: SQL references :user_id but it is not declared in params`);
+    expect(errorOf(stashTools, withRefusals([{ when: '1 = 1; SELECT 1', message: 'x' }]))).toBe(`${at}: SQL must not contain semicolons (no multi-statement)`);
+    expect(errorOf(stashTools, withRefusals([{ when: 'EXISTS (SELECT 1 FROM x) AND 1 = (SELECT 1 WHERE 1) OR DROP = 1', message: 'x' }]))).toBe(`${at}: SQL must not contain DROP`);
+    expect(errorOf(stashTools, withRefusals([{ when: ':from_status = :__now AND :__user_is_child = 0', message: 'x' }]))).toBeNull();
+  });
+});

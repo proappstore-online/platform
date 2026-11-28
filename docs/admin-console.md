@@ -68,7 +68,9 @@ above).
 - **Change:** each `actions[]` entry is a row button that runs one registered write action.
   It can be a status `transition` (409 if the row has moved on; in a `batch`, every
   statement must check the status, #340) or `destructive` (needs `step_up`). Every
-  action asks for confirmation.
+  action asks for confirmation. A transition can declare `refusals`, so a refused write
+  tells the operator why instead of "the record changed" (see
+  [Explaining a refusal](#explaining-a-refusal)).
 - **Metrics:** a `metrics` resource shows KPI tiles or a time series.
 - **Audit:** every visit, read and action, and every refused attempt, is recorded under the
   caller's own id. Refused attempts are bounded: at most 20 rows per caller and app in any
@@ -226,6 +228,48 @@ read is declared `caller_unscoped`, with a reason.
 }
 ```
 
+### Explaining a refusal
+
+A transition's SQL usually encodes business rules as well as the status guard: nobody may
+approve their own application, every document must be accepted first. When one of them stops
+the write, it changes nothing, and by default the platform can only answer 409 *the record
+changed since it was loaded*. Declare `refusals` on the action to say why instead (#697):
+
+```json
+{
+  "id": "approve", "title": "Approve", "resource": "applications", "action": "op_approve_application",
+  "params": { "applicant_id": "user_id", "from_status": "status" }, "confirm": "Approve this application?",
+  "transition": { "from": ["submitted"], "to": "approved" },
+  "refusals": [
+    { "when": ":applicant_id = :__user_id", "message": "You can't review your own application." },
+    { "when": "EXISTS (SELECT 1 FROM documents d WHERE d.user_id = :applicant_id AND d.status != 'accepted')", "message": "Accept every document first." },
+    { "when": "NOT EXISTS (SELECT 1 FROM applications a WHERE a.user_id = :applicant_id AND a.status = 'submitted')", "message": "This application isn't waiting for review." }
+  ]
+}
+```
+
+- **When it runs:** only after the guarded write changed nothing. The `when`s are tried in
+  order and the first true one wins, so put the most useful explanation first. The answer is
+  409 `{ "error": "refused", "reason": "<message>" }`, and the console shows the reason. If none
+  is true (or none is declared), the answer stays 409 *the record changed since it was loaded*.
+- **What a `when` is:** one SQL boolean over the action's own params and the magic params
+  (`:__user_id`, `:__now`, …), bound exactly as the write binds them. All of an action's
+  `refusals` run as one read-only query, `SELECT CASE WHEN (<when>) THEN 0 … END`, through the
+  data worker's `/query`.
+- **How it is checked at registration:** that query is validated like the action's own SQL. It
+  may only name the action's declared params, it is held to the action's `:__user_id` scoping
+  lint (refer to `:__user_id`, or the action must declare `auth.caller_unscoped`), and it is
+  compiled against the app's schema. A `when` must also stay one expression: no `INSERT`,
+  `UPDATE` or `DELETE`, no comment or semicolon, no `[bracketed]` or backtick identifier, and
+  balanced parentheses. At most 5 refusals per action, each `when` up to 2000 characters and
+  each `message` up to 200.
+- **Transitions only:** an action without `transition` has no guard, so a write that changes
+  nothing is not a refusal and `refusals` is rejected there.
+- **Audit:** the refusal row records the message in `refusal_reason`, and the audit trail
+  returns it as `reason` (null for every other row).
+- **Never sent to the console:** `GET /apps/:appId/operator` returns the contract without
+  `refusals`. The console only ever sees the message, on the 409.
+
 ### 3. Ship and grant
 
 1. Push `mcp.json` to `main`. The deploy registers the tools and the contract, and refuses
@@ -337,7 +381,8 @@ Errors are JSON `{ "error": "<message>", ...extra }`.
 | 404 | `app not found`, `resource not declared`, `action not declared`, `resource has no detail`, `record not found`, `evidence not declared`, `no document for this record`, `resource is not a time series` | Unknown app, or something the contract doesn't declare |
 | 400 | `resource is not searchable` / `not paged` / `has no status filter` / `unknown status` / `is not listed per record`, `row must be an object`, `row.<col> is required`, … | A request the contract doesn't allow |
 | 409 | `"<title>" is not available from status …` | A transition from a status that isn't in `from` |
-| 409 | `the record changed since it was loaded; reload and try again` | A guarded write that changed nothing |
+| 409 | `refused` (+ `reason`) | A guarded write that changed nothing, explained by the first of the action's `refusals` whose `when` is true (#697). Show `reason` |
+| 409 | `the record changed since it was loaded; reload and try again` | A guarded write that changed nothing, with no declared refusal that holds |
 | 409 | `action <name> cannot run from the operator view` | The action is public, scheduled, or can't be called by a user |
 | 409 | `action <name> does not guard every statement with :<param>; redeploy it…` | A transition whose stored action has a statement that ignores the status (#340) |
 | 409 | `this resource pages on a column on the sensitive-field list…` / `this metric's time column is on the sensitive-field list…` | A contract stored before that name joined the sensitive-field list (#336). Redeploy the `operator_view` |

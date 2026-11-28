@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../types.js';
-import type { FasUser } from '../lib/auth.js';
+import { HttpError, type FasUser } from '../lib/auth.js';
 
 const m = vi.hoisted(() => ({
   loadManifest: vi.fn(),
@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   actionCallers: vi.fn(),
   gatedTool: vi.fn(),
   unguardedStatements: vi.fn(),
+  refusalQuery: vi.fn(),
   markAudited: vi.fn(),
 }));
 
@@ -30,7 +31,7 @@ vi.mock('../lib/action-sql.js', () => ({
   prepareActionQuery: m.prepareActionQuery,
 }));
 vi.mock('../lib/operator-contract-shared.js', () => ({ gatedTool: m.gatedTool }));
-vi.mock('../lib/operator-contract.js', () => ({ unguardedStatements: m.unguardedStatements }));
+vi.mock('../lib/operator-contract.js', () => ({ unguardedStatements: m.unguardedStatements, refusalQuery: m.refusalQuery }));
 vi.mock('../lib/operator-audit-marks.js', () => ({ markAudited: m.markAudited }));
 
 import { runOperatorQuery, runOperatorWrite, startOperatorQuery } from './operator-exec.js';
@@ -178,7 +179,7 @@ describe('runOperatorWrite', () => {
     m.forwardToDataWorker.mockResolvedValue(json({ meta: { changes: 1 } }));
     expect(await runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, null)).toBe(1);
     expect(m.forwardToDataWorker).toHaveBeenCalledWith(env, 'a', 'execute', { sql: 'select 1' }, 'tok');
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer', viaOwner: false }, 200, audit);
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', { actorId: 'gh:1', role: 'reviewer', viaOwner: false }, 200, { ...audit, refusalReason: null });
   });
 
   it('sums changes across a batch', async () => {
@@ -192,7 +193,7 @@ describe('runOperatorWrite', () => {
     write();
     m.forwardToDataWorker.mockResolvedValue(json({}));
     expect(await runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, null)).toBe(0);
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 200, audit);
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 200, { ...audit, refusalReason: null });
   });
 
   it('records 409 and refuses when the status guard matched nothing', async () => {
@@ -200,7 +201,8 @@ describe('runOperatorWrite', () => {
     m.forwardToDataWorker.mockResolvedValue(json({ meta: { changes: 0 } }));
     const e = await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status'));
     expect(e?.status).toBe(409);
-    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 409, audit);
+    expect(e?.message).toBe('the record changed since it was loaded; reload and try again');
+    expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 409, { ...audit, refusalReason: null });
     expect(m.markAudited).toHaveBeenCalledWith(request);
   });
 
@@ -216,5 +218,63 @@ describe('runOperatorWrite', () => {
   it('refuses a query action used as a write', async () => {
     const e = await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, null));
     expect(e?.status).toBe(409);
+  });
+
+  // #697: a contract action's declared refusals explain a guarded write that changed nothing.
+  describe('declared refusals (#697)', () => {
+    const refusals = [{ when: 'own = 1', message: "You can't review your own." }, { when: 'docs = 0', message: 'Accept every document first.' }];
+    const unchanged = (refusalAnswer: Response) => m.forwardToDataWorker
+      .mockResolvedValueOnce(json({ meta: { changes: 0 } }))
+      .mockResolvedValueOnce(refusalAnswer);
+    beforeEach(() => {
+      write();
+      m.refusalQuery.mockReturnValue({ name: 'act', operation: 'query', sql: 'SELECT CASE … END AS refusal' });
+      m.prepareActionQuery.mockImplementation((q: { sql: string }) => ({ sql: q.sql, params: ['bound'] }));
+    });
+
+    it('answers the first true refusal as the 409 reason and records it on the audit row', async () => {
+      unchanged(json({ rows: [{ refusal: 1 }] }));
+      const input = { driver_user_id: 'u1', from_status: 'submitted' };
+      const e = await refusal(runOperatorWrite(env, 'a', 'act', input, user, 'tok', audit, 'status', refusals)) as HttpError | null;
+      expect(e).toBeInstanceOf(HttpError);
+      expect([e?.status, e?.message, e?.body]).toEqual([409, 'refused', { reason: 'Accept every document first.' }]);
+      // The refusal query is built from the action as registered now and bound with the write's own input and caller.
+      expect(m.refusalQuery).toHaveBeenCalledWith(expect.objectContaining({ name: 'act', operation: 'execute' }), refusals);
+      expect(m.prepareActionQuery).toHaveBeenLastCalledWith({ name: 'act', operation: 'query', sql: 'SELECT CASE … END AS refusal' }, input, 'gh:1');
+      expect(m.forwardToDataWorker).toHaveBeenLastCalledWith(env, 'a', 'query', { sql: 'SELECT CASE … END AS refusal', params: ['bound'] }, 'tok');
+      expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 409, { ...audit, refusalReason: 'Accept every document first.' });
+    });
+
+    it('keeps the generic 409 when no refusal holds', async () => {
+      unchanged(json({ rows: [{ refusal: null }] }));
+      const e = await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status', refusals));
+      expect([e?.status, e?.message]).toEqual([409, 'the record changed since it was loaded; reload and try again']);
+      expect(m.recordActionSuccess).toHaveBeenCalledWith(env.DB, 'a', 'act', expect.anything(), 409, { ...audit, refusalReason: null });
+    });
+
+    it('keeps the generic 409 when the refusal query cannot run', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      unchanged(json('down', 503));
+      const e = await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status', refusals));
+      expect([e?.status, e?.message]).toEqual([409, 'the record changed since it was loaded; reload and try again']);
+      m.forwardToDataWorker.mockResolvedValueOnce(json({ meta: { changes: 0 } }));
+      // The write prepares first; the refusal query (an action re-registered without a param it names) cannot.
+      m.prepareActionQuery.mockImplementation((q: { operation: string; sql: string }) => {
+        if (q.operation === 'query') throw new Error('Unresolved parameter: gone');
+        return { sql: q.sql };
+      });
+      expect((await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status', refusals)))?.message).toContain('changed since it was loaded');
+      expect(error).toHaveBeenCalledTimes(2);
+      error.mockRestore();
+    });
+
+    it('runs no refusal query when the write changed rows, or when none are declared', async () => {
+      m.forwardToDataWorker.mockResolvedValue(json({ meta: { changes: 1 } }));
+      expect(await runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status', refusals)).toBe(1);
+      m.forwardToDataWorker.mockResolvedValue(json({ meta: { changes: 0 } }));
+      expect((await refusal(runOperatorWrite(env, 'a', 'act', {}, user, 'tok', audit, 'status')))?.status).toBe(409);
+      expect(m.refusalQuery).not.toHaveBeenCalled();
+      expect(m.forwardToDataWorker).toHaveBeenCalledTimes(2);
+    });
   });
 });

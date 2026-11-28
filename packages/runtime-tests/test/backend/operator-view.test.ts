@@ -333,6 +333,75 @@ describe('operator reports & suspensions (#240)', () => {
     }
   });
 
+  // #697: a declared refusal is registered through the real PUT (validated like the action's SQL, schema-checked by the
+  // data worker's /validate), stored on the action, then evaluated on real D1: the /query the backend sends is replayed
+  // exactly as the data worker runs it, after the guarded write changed nothing.
+  it('a refused transition answers the first declared refusal that holds on real D1, and records it on the audit row (#697)', async () => {
+    const refusals = [
+      { when: 'EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND reporter_id = :__user_id)', message: "You can't resolve a report you filed." },
+      { when: "NOT EXISTS (SELECT 1 FROM reports WHERE id = :report_id AND status = 'open')", message: "This report isn't open." },
+    ];
+    const refusing = { ...STASH, operator_view: { ...STASH.operator_view, actions: STASH.operator_view.actions.map((a) => (a.id === 'resolve' ? { ...a, refusals } : a)) } };
+    const validated: string[] = [];
+    worker('stash').intercept({ path: '/validate', method: 'POST' }).reply(200, (req) => {
+      const { statements } = JSON.parse(String(req.body)) as { statements: { id: string; sql: string }[] };
+      validated.push(...statements.map((st) => st.sql));
+      return { results: statements.map((st) => ({ id: st.id, ok: true })) };
+    }).times(2);
+    const reg = await SELF.fetch(`${BASE}/v1/apps/stash/tools`, json('PUT', refusing, await session('gh:1')));
+    expect(reg.status, await reg.clone().text()).toBe(200);
+    expect(validated.filter((sql) => sql.startsWith('SELECT CASE WHEN'))).toHaveLength(1);
+    const stored = JSON.parse((await env.DB.prepare("SELECT contract FROM app_operator_view WHERE app_id = 'stash'").first<{ contract: string }>())!.contract) as { actions: { id: string; refusals?: unknown }[] };
+    expect(stored.actions.find((a) => a.id === 'resolve')?.refusals).toEqual(refusals);
+
+    const replayed: unknown[][] = [];
+    const evaluate = () => worker('stash').intercept({ path: '/query', method: 'POST' }).reply(200, async (req) => {
+      const body = JSON.parse(String(req.body)) as { sql: string; params: unknown[] };
+      replayed.push(body.params);
+      return { rows: (await env.DB.prepare(body.sql).bind(...body.params).all()).results, meta: {} };
+    });
+    await env.DB.batch([
+      env.DB.prepare('CREATE TABLE reports (id TEXT PRIMARY KEY, reporter_id TEXT NOT NULL, status TEXT NOT NULL)'),
+      env.DB.prepare("INSERT INTO reports VALUES ('r1', 'gh:1', 'open'), ('r2', 'gh:5', 'resolved'), ('r3', 'gh:5', 'open')"),
+    ]);
+    try {
+      const attempt = async (row: typeof report, expected: string | null) => {
+        answer('stash', '/execute', { meta: { changes: 0 } });
+        evaluate();
+        const res = await act('stash', 'resolve', row);
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { error: string; reason?: string };
+        if (expected) expect(body).toMatchObject({ error: 'refused', reason: expected });
+        else expect(body).toMatchObject({ error: 'the record changed since it was loaded; reload and try again' });
+      };
+      // The owner filed r1: the first refusal wins, even though r1 is open.
+      await attempt(report, "You can't resolve a report you filed.");
+      // r2 moved on: the second refusal holds.
+      await attempt({ ...report, report_id: 'r2' }, "This report isn't open.");
+      // r3 is open and filed by someone else: no declared refusal holds, so the generic 409 stays.
+      await attempt({ ...report, report_id: 'r3' }, null);
+      expect(replayed).toEqual([['r1', 'gh:1'], ['r2', 'gh:1'], ['r3', 'gh:1']]);
+      expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM reports').first()).toEqual({ n: 3 });
+      expect((await env.DB.prepare("SELECT target, status, refusal_reason FROM app_action_audit WHERE app_id = 'stash' ORDER BY id").all()).results).toEqual([
+        { target: 'r1', status: 409, refusal_reason: "You can't resolve a report you filed." },
+        { target: 'r2', status: 409, refusal_reason: "This report isn't open." },
+        { target: 'r3', status: 409, refusal_reason: null },
+      ]);
+      // The trail carries the declared reason; the console's contract never carries the refusal SQL.
+      const trail = (await (await SELF.fetch(`${BASE}/v1/apps/stash/operator/audit?outcome=refused`, json('GET', undefined, await session('gh:1')))).json()) as { rows: { target: string; reason: string | null }[] };
+      expect(trail.rows.map((r) => [r.target, r.reason])).toEqual([['r3', null], ['r2', "This report isn't open."], ['r1', "You can't resolve a report you filed."]]);
+      const viewText = await (await SELF.fetch(`${BASE}/v1/apps/stash/operator`, json('GET', undefined, await session('gh:1')))).text();
+      expect(viewText).not.toContain('reporter_id = :__user_id');
+    } finally {
+      await env.DB.prepare('DROP TABLE reports').run();
+    }
+  });
+
+  it('migration 0157 adds the nullable refusal_reason audit column (#697)', async () => {
+    const cols = (await env.DB.prepare('PRAGMA table_info(app_action_audit)').all<{ name: string; notnull: number; type: string }>()).results ?? [];
+    expect(cols.find((c) => c.name === 'refusal_reason')).toMatchObject({ type: 'TEXT', notnull: 0 });
+  });
+
   it('refuses to run a transition whose stored action has an unguarded statement (#340)', async () => {
     // A contract stored before #340: the action was re-registered without the guard on statement 2.
     const manifest = JSON.parse((await env.DB.prepare("SELECT manifest FROM app_tools WHERE app_id = 'stash' AND name = 'op_lift_suspension'").first<{ manifest: string }>())!.manifest) as { statements: string[] };

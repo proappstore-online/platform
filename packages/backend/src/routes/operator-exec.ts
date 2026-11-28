@@ -15,8 +15,8 @@ import { enforceActionAuth, forwardToDataWorker, loadManifest, recordActionSucce
 import { markAudited } from '../lib/operator-audit-marks.js';
 import type { RoleGrant } from '../lib/held-app-roles.js';
 import { CONSOLE_RP_ID } from './passkeys.js';
-import { unguardedStatements } from '../lib/operator-contract.js';
-import { gatedTool } from '../lib/operator-contract-shared.js';
+import { refusalQuery, unguardedStatements } from '../lib/operator-contract.js';
+import { gatedTool, type OperatorRefusal } from '../lib/operator-contract-shared.js';
 
 /** What an operator-view call adds to its audit row (#240): the contract action or read, and its target record. */
 export interface OperatorAudit {
@@ -80,7 +80,10 @@ export async function startOperatorQuery(
  * status), every statement must use that param, re-checked here against the
  * action as registered now (#340), so a stale status changes nothing anywhere
  * in the batch. A write the guard matched to nothing is recorded with status
- * 409 and refused: the record moved on since the operator loaded it.
+ * 409 and refused. When the contract action declares `refusals` (#697), the
+ * first one whose condition holds is the refusal's `reason`, on the 409 body
+ * and the audit row; with none declared or none true, the record moved on
+ * since the operator loaded it.
  */
 export async function runOperatorWrite(
   env: Env,
@@ -91,16 +94,47 @@ export async function runOperatorWrite(
   token: string,
   audit: OperatorAudit,
   guard: string | null,
+  refusals: OperatorRefusal[] = [],
 ): Promise<number> {
-  const { body, role } = await runOperatorCall(env, appId, name, input, user, token, ['execute', 'batch'], guard);
+  const { body, role, manifest } = await runOperatorCall(env, appId, name, input, user, token, ['execute', 'batch'], guard);
   const result = body as { meta?: { changes?: unknown }; results?: { meta?: { changes?: unknown } }[] };
   const changes = Array.isArray(result.results)
     ? result.results.reduce((n, r) => n + Number(r.meta?.changes ?? 0), 0)
     : Number(result.meta?.changes ?? 0);
   const refused = guard !== null && changes === 0;
-  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, ...role }, refused ? 409 : 200, audit); markAudited(audit.request); }
+  const reason = refused && refusals.length ? await refusalReason(env, appId, manifest, refusals, input, user, token) : null;
+  if (role) { await recordActionSuccess(env.DB, appId, name, { actorId: user.id, ...role }, refused ? 409 : 200, { ...audit, refusalReason: reason }); markAudited(audit.request); }
+  if (reason !== null) throw new HttpError('refused', 409, { reason });
   if (refused) throw new HttpError('the record changed since it was loaded; reload and try again', 409);
   return changes;
+}
+
+/**
+ * The message of the first declared refusal whose condition holds (#697), or
+ * null. The refusal query runs read-only through the data worker's /query with
+ * the write's own input and magic params. It only explains a refusal that has
+ * already happened, so a failure here (an action re-registered with other
+ * params, an unreachable worker) leaves the generic 409 rather than a 5xx.
+ */
+async function refusalReason(
+  env: Env,
+  appId: string,
+  manifest: ToolManifest,
+  refusals: OperatorRefusal[],
+  input: Record<string, unknown>,
+  user: FasUser,
+  token: string,
+): Promise<string | null> {
+  try {
+    const upstream = await forwardToDataWorker(env, appId, 'query', prepareActionQuery(refusalQuery(manifest, refusals), input, user.id), token);
+    if (!upstream.ok) throw new Error(`data worker ${upstream.status}`);
+    const rows = ((await upstream.json()) as { rows?: { refusal?: unknown }[] }).rows;
+    const index = rows?.[0]?.refusal;
+    return typeof index === 'number' ? refusals[index]?.message ?? null : null;
+  } catch (e) {
+    console.error('[operator] refusal reason unavailable', { appId, action: manifest.name, err: String(e) });
+    return null;
+  }
 }
 
 async function runOperatorCall(
@@ -112,7 +146,7 @@ async function runOperatorCall(
   token: string,
   operations: ToolManifest['operation'][],
   guard: string | null = null,
-): Promise<{ body: unknown; role: RoleGrant | null }> {
+): Promise<{ body: unknown; role: RoleGrant | null; manifest: ToolManifest }> {
   const manifest = await loadManifest(env.DB, appId, name);
   // The console runs actions as the owner: a worker/hook-only action (#254) is out of reach, like a scheduled one.
   if (!operations.includes(manifest.operation) || manifest.requires_auth === false || manifest.schedule !== undefined || !actionCallers(manifest).includes('user')) {
@@ -149,5 +183,5 @@ async function runOperatorCall(
   } catch {
     throw new HttpError('data worker returned an invalid response', 502);
   }
-  return { body, role };
+  return { body, role, manifest };
 }

@@ -68,7 +68,16 @@ export interface OperatorAction {
   destructive?: boolean;
   /** The resource column whose value the audit records as the action's target. */
   target?: string | null;
+  /**
+   * Why a transition that changed nothing was refused (#697), checked in order after the write:
+   * the first `when` that is true over the action's own inputs gives the 409 its `reason`.
+   * Absent on contracts stored before it, and on actions that declare none.
+   */
+  refusals?: OperatorRefusal[];
 }
+
+/** One declared refusal (#697): a read-only SQL boolean over the action's params and magic params, and the plain text shown. */
+export interface OperatorRefusal { when: string; message: string }
 
 export interface OperatorViewContract {
   version: 1;

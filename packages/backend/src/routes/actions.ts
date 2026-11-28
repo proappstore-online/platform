@@ -64,12 +64,12 @@ export async function recordActionSuccess(
   action: string,
   grant: AuditGrant,
   status: number,
-  operator?: { operatorAction: string; target: string | null },
+  operator?: { operatorAction: string; target: string | null; refusalReason?: string | null },
 ): Promise<void> {
   try {
     await db.prepare(
-      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, role_via_owner, status, created_at, operator_action, target) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(appId, action, grant.actorId, grant.role, grant.viaOwner ? 1 : 0, status, Date.now(), operator?.operatorAction ?? null, operator?.target ?? null).run();
+      'INSERT INTO app_action_audit (app_id, action_name, actor_id, role_name, role_via_owner, status, created_at, operator_action, target, refusal_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(appId, action, grant.actorId, grant.role, grant.viaOwner ? 1 : 0, status, Date.now(), operator?.operatorAction ?? null, operator?.target ?? null, operator?.refusalReason ?? null).run();
   } catch (e) {
     // The action has already run; an audit write failing must not turn its
     // success into an error. Logged so a gap in the trail is visible.

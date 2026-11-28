@@ -9,7 +9,8 @@
  *                     users/reports/suspensions/verification only: "search"?, "page"?, "detail"?, "status"?, "related"?,
  *                     metrics only: "series"? }],
  *     "actions":   [{ "id", "title", "resource", "action", "params": { <action param>: <resource column> }, "confirm",
- *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column> }],
+ *                     "transition"?: { "from": [<state>], "to": <state> }, "destructive"?: true, "target"?: <column>,
+ *                     transitions only: "refusals"?: [{ "when": <sql boolean>, "message": <text> }] }],
  *     "audit"?:    { "app_roles": [<role>] }     // the owner must also hold one to read the audit trail
  *     "admin_access"?: { "roles": [<role>] }     // #302: who may use the admin console, beside the owner (enforced since #293)
  *   }
@@ -29,11 +30,12 @@
  * kinds; version 1 contracts keep validating and rendering as they are.
  */
 import type { ToolManifest } from './action-sql.js';
+import { validateManifest } from './manifest/tool.js';
 import { resolveRelated, validateListCapabilities } from './operator-contract-lists.js';
 import { validateSeries } from './operator-contract-series.js';
 import {
   ID, OPERATOR_RESOURCE_KINDS, gatedTool, isObj, required, text, unknownField, validateColumns,
-  type OperatorAction, type OperatorResource, type OperatorResourceKind, type OperatorViewContract,
+  type OperatorAction, type OperatorRefusal, type OperatorResource, type OperatorResourceKind, type OperatorViewContract,
 } from './operator-contract-shared.js';
 
 export type { OperatorResource, OperatorViewContract } from './operator-contract-shared.js';
@@ -44,9 +46,12 @@ export const MAX_OPERATOR_ACTIONS = 20;
 export const MAX_AUDIT_ROLES = 5;
 export const MAX_ADMIN_ROLES = 5;
 export const ROLE = /^[a-z][a-z0-9_-]{0,49}$/;
+export const MAX_REFUSALS = 5;
+export const MAX_REFUSAL_SQL = 2000;
+export const MAX_REFUSAL_MESSAGE = 200;
 
 const RESOURCE_FIELDS = ['id', 'kind', 'title', 'description', 'action', 'columns', 'search', 'page', 'detail', 'status', 'related', 'series'];
-const ACTION_FIELDS = ['id', 'title', 'resource', 'action', 'params', 'confirm', 'transition', 'destructive', 'target'];
+const ACTION_FIELDS = ['id', 'title', 'resource', 'action', 'params', 'confirm', 'transition', 'destructive', 'target', 'refusals'];
 
 function validateResource(tools: ToolManifest[], raw: unknown, where: string): OperatorResource | string {
   if (!isObj(raw)) return `${where} must be an object`;
@@ -152,6 +157,72 @@ function validateTransition(tool: ToolManifest, resource: OperatorResource, mapp
   return { from: from as string[], to: raw.to };
 }
 
+/**
+ * The read-only query that says which declared refusal applies (#697): one
+ * SELECT whose CASE tries each `when` in order and answers the index of the
+ * first true one (NULL for none). It is a query tool with the action's own
+ * params and auth, so registration validates it with the same rules as the
+ * action's SQL (validateManifest, then validateToolSet's :__user_id scoping
+ * lint and schema check), and the operator executor binds it with the same
+ * input and magic params as the write (prepareActionQuery).
+ */
+export function refusalQuery(tool: ToolManifest, refusals: OperatorRefusal[]): ToolManifest {
+  const cases = refusals.map((r, i) => `WHEN (${r.when}) THEN ${i}`).join(' ');
+  return {
+    name: tool.name,
+    description: `Why "${tool.name}" changed nothing`,
+    operation: 'query',
+    requires_auth: true,
+    sql: `SELECT CASE ${cases} END AS refusal`,
+    params: tool.params,
+    ...(tool.auth ? { auth: tool.auth } : {}),
+  };
+}
+
+/**
+ * Why a `when` cannot sit inside the refusal query's `WHEN (…)`, or null. It
+ * must stay one expression: quotes closed, parentheses balanced and never
+ * closing the wrapper, no comment, no bracket or backtick identifier (either
+ * could hide a parenthesis from this scan), and no write verb.
+ */
+function refusalConditionError(when: string): string | null {
+  // Literals and quoted identifiers emptied, leftmost first, so neither can hide a character from the checks below.
+  const code = when.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"/g, ' ');
+  if (/['"]/.test(code)) return 'has an unterminated quote';
+  if (/--|\/\*/.test(code)) return 'must not contain a comment';
+  if (/[[\]`]/.test(code)) return 'must not use [bracketed] or `backtick` identifiers';
+  if (/\b(INSERT|UPDATE|DELETE)\b/i.test(code)) return 'is read-only: it must not contain INSERT, UPDATE or DELETE';
+  let depth = 0;
+  for (const ch of code) {
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth < 0) return 'has an unbalanced ")"';
+  }
+  return depth === 0 ? null : 'has an unbalanced "("';
+}
+
+/** `refusals` of a transition action (#697): in order, at most MAX_REFUSALS, each a SQL boolean and its message. */
+function validateRefusals(tool: ToolManifest, raw: unknown, where: string): OperatorRefusal[] | string {
+  const at = `${where}.refusals`;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_REFUSALS) return `${at} must be an array of 1-${MAX_REFUSALS}`;
+  const refusals: OperatorRefusal[] = [];
+  for (const [i, r] of raw.entries()) {
+    const rat = `${at}[${i}]`;
+    if (!isObj(r)) return `${rat} must be an object`;
+    const extra = unknownField(r, ['when', 'message'], rat);
+    if (extra) return extra;
+    const when = text(r.when, MAX_REFUSAL_SQL);
+    if (!when) return `${rat}: when is required (a SQL boolean over the action's params, max ${MAX_REFUSAL_SQL} chars)`;
+    const bad = refusalConditionError(when);
+    if (bad) return `${rat}: when ${bad}`;
+    const message = text(r.message, MAX_REFUSAL_MESSAGE);
+    if (!message) return `${rat}: message is required (the reason the operator is shown, max ${MAX_REFUSAL_MESSAGE} chars)`;
+    refusals.push({ when, message });
+  }
+  const sqlError = validateManifest(refusalQuery(tool, refusals));
+  if (sqlError) return `${at}: ${sqlError}`;
+  return refusals;
+}
+
 function validateAction(tools: ToolManifest[], resources: OperatorResource[], raw: unknown, where: string): OperatorAction | string {
   if (!isObj(raw)) return `${where} must be an object`;
   const extra = unknownField(raw, ACTION_FIELDS, where);
@@ -180,9 +251,15 @@ function validateAction(tools: ToolManifest[], resources: OperatorResource[], ra
   }
   const target = raw.target ?? Object.values(mapped)[0] ?? null;
   if (target !== null && !resource.columns.some((c) => c.key === target)) return `${where}: target must be a declared column of resource "${resource.id}"`;
+  // A refusal explains a guarded write that changed nothing; an unguarded one has nothing to explain.
+  if (raw.refusals !== undefined && !transition) return `${where}: refusals are only supported on transition actions`;
+  const refusals = raw.refusals === undefined ? null : validateRefusals(tool, raw.refusals, where);
+  if (typeof refusals === 'string') return refusals;
   return {
     id: raw.id, title, resource: resource.id, action: tool.name, params: mapped, confirm,
     step_up: tool.step_up === true, transition, destructive, target: target as string | null,
+    // Absent stays absent, so a contract without refusals stores exactly as before.
+    ...(refusals ? { refusals } : {}),
   };
 }
 
